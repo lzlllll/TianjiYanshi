@@ -15,7 +15,7 @@ import type {
   CraftingContext,
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
-import { chatWithModel, type ChatMessage } from "@/lib/aiClient";
+import { chatWithModel, chatWithModelStream, type ChatMessage } from "@/lib/aiClient";
 import {
   buildDataSchema,
   buildFlashPrompt,
@@ -54,6 +54,7 @@ const INITIAL_CONVERSATION: ConversationState = {
   quickDecisions: [],
   pendingChatSummary: "",
   pendingCrafting: null,
+  streamingNarrative: "",
 };
 
 const INITIAL_NPC_CHAT: NPCChatState = {
@@ -143,6 +144,7 @@ export const useAIStore = create<AIStore>()(
             stage: "idle",
             errorMsg: "已取消生成。",
             pendingCrafting: null,
+            streamingNarrative: "",
           },
           isCraftingOpen: false,
           npcChat: {
@@ -204,7 +206,8 @@ export const useAIStore = create<AIStore>()(
 
         try {
           const proStart = Date.now();
-          const proRaw = await chatWithModel(
+          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          const proRaw = await chatWithModelStream(
             settings,
             settings.proModel,
             buildProPrompt({
@@ -217,7 +220,14 @@ export const useAIStore = create<AIStore>()(
               craftingResult: result,
               customPrompt: settings.customPrompt,
             }),
-            { timeoutMs: 300000, signal, retries: 2 },
+            {
+              timeoutMs: 300000,
+              signal,
+              onDelta: (_delta, full) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+            },
           );
           if (signal.aborted) return;
           const parsed = parseModelOutput(proRaw);
@@ -284,7 +294,8 @@ ${dataSchema}`,
             console.warn("[resumeCrafting] Pro模型失败，降级Flash...");
             try {
               const proStart = Date.now();
-              const proRaw = await chatWithModel(
+              set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+              const proRaw = await chatWithModelStream(
                 settings,
                 settings.flashModel,
                 buildProPrompt({
@@ -297,7 +308,14 @@ ${dataSchema}`,
                   craftingResult: result,
                   customPrompt: settings.customPrompt,
                 }),
-                { timeoutMs: 300000, signal, retries: 2 },
+                {
+                  timeoutMs: 300000,
+                  signal,
+                  onDelta: (_delta, full) => {
+                    if (signal.aborted) return;
+                    set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+                  },
+                },
               );
               const parsed = parseModelOutput(proRaw);
               narrative = parsed.narrative;
@@ -368,6 +386,7 @@ ${dataSchema}`,
             errorMsg: "",
             pendingChatSummary: "",
             pendingCrafting: null,
+            streamingNarrative: "",
           },
         }));
         abortController = null;
@@ -510,7 +529,8 @@ ${dataSchema}`,
         let opsRaw = "";
         try {
           const proStart = Date.now();
-          const proRaw = await chatWithModel(
+          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          const proRaw = await chatWithModelStream(
             settings,
             settings.proModel,
             buildProPrompt({
@@ -522,7 +542,14 @@ ${dataSchema}`,
               chatSummary,
               customPrompt: settings.customPrompt,
             }),
-            { timeoutMs: 120000, signal, retries: 2 },
+            {
+              timeoutMs: 120000,
+              signal,
+              onDelta: (_delta, full) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+            },
           );
           const parsed = parseModelOutput(proRaw);
           narrative = parsed.narrative;
@@ -591,7 +618,8 @@ ${dataSchema}`,
             console.warn("[runTurn] Pro模型网络请求失败，尝试降级到Flash模型...");
             try {
               const proStart = Date.now();
-              const proRaw = await chatWithModel(
+              set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+              const proRaw = await chatWithModelStream(
                 settings,
                 settings.flashModel,
                 buildProPrompt({
@@ -603,7 +631,14 @@ ${dataSchema}`,
                   chatSummary,
                   customPrompt: settings.customPrompt,
                 }),
-                { timeoutMs: 120000, signal, retries: 2 },
+                {
+                  timeoutMs: 120000,
+                  signal,
+                  onDelta: (_delta, full) => {
+                    if (signal.aborted) return;
+                    set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+                  },
+                },
               );
               const parsed = parseModelOutput(proRaw);
               narrative = parsed.narrative;
@@ -689,6 +724,7 @@ ${dataSchema}`,
             stage: "done",
             errorMsg: "",
             pendingChatSummary: "",
+            streamingNarrative: "",
           },
         }));
         abortController = null;
@@ -734,7 +770,8 @@ ${dataSchema}`,
         }));
 
         try {
-          const proRaw = await chatWithModel(
+          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          const proRaw = await chatWithModelStream(
             settings,
             settings.proModel,
             buildProPrompt({
@@ -745,7 +782,14 @@ ${dataSchema}`,
               relevantData: lastTurn.proRequest.relevantData,
               customPrompt: settings.customPrompt,
             }),
-            { timeoutMs: 120000, signal },
+            {
+              timeoutMs: 120000,
+              signal,
+              onDelta: (_delta, full) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+            },
           );
           if (signal.aborted) return;
           const parsed = parseModelOutput(proRaw);
@@ -770,6 +814,7 @@ ${dataSchema}`,
                 quickDecisions: parsed.quickDecisions,
                 stage: "done",
                 lastRawOutput: proRaw,
+                streamingNarrative: "",
               },
             };
           });
@@ -855,6 +900,7 @@ ${dataSchema}`,
             quickDecisions: [],
             pendingChatSummary: "",
             pendingCrafting: null,
+            streamingNarrative: "",
           },
         });
       },

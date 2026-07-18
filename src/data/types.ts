@@ -720,6 +720,8 @@ export interface ConversationState {
   pendingChatSummary: string;
   /** 暂停推演等待百艺制作时的上下文，制作完成后恢复推演 */
   pendingCrafting?: CraftingContext | null;
+  /** Pro 阶段流式输出的实时叙事文本，用于打字机效果展示 */
+  streamingNarrative: string;
 }
 
 export type NPCChatRole = "player" | "npc";

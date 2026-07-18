@@ -89,12 +89,18 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
   const turns = conversation.turns;
   const lastTurn = turns[turns.length - 1];
   const hasApiKey = !!settings.apiKey;
+  const streamingNarrative = conversation.streamingNarrative ?? "";
+  // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
+  const displayNarrative =
+    stage === "pro" && streamingNarrative
+      ? streamingNarrative
+      : lastTurn?.narrative ?? "";
 
   useEffect(() => {
     if (narrativeRef.current) {
       narrativeRef.current.scrollTop = narrativeRef.current.scrollHeight;
     }
-  }, [turns.length, lastTurn?.narrative]);
+  }, [turns.length, lastTurn?.narrative, streamingNarrative]);
 
   const handleSubmit = () => {
     const text = decision.trim();
@@ -158,11 +164,14 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
             ref={narrativeRef}
             className="flex-1 overflow-y-auto pr-2"
           >
-            {turns.length === 0 ? (
+            {turns.length === 0 && !streamingNarrative ? (
               <EmptyState />
             ) : (
               <article className="font-serif text-lg text-paper-100 leading-loose tracking-wide whitespace-pre-wrap">
-                <NarrativeText text={lastTurn?.narrative ?? ""} />
+                <NarrativeText text={displayNarrative} />
+                {stage === "pro" && streamingNarrative && (
+                  <span className="inline-block w-2 h-5 ml-0.5 bg-gold-400/80 animate-pulse align-middle" />
+                )}
               </article>
             )}
           </div>

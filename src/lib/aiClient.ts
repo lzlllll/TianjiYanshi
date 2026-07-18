@@ -7,7 +7,6 @@ export interface ChatMessage {
 
 const MAX_REQUEST_BODY_SIZE = 15 * 1024 * 1024;
 const DEFAULT_TIMEOUT = 300000;
-
 const PROXY_MAP: Record<string, string> = {
   "https://api.deepseek.com/v1": "/api/deepseek",
   "https://api.openai.com/v1": "/api/openai",
@@ -290,4 +289,166 @@ export async function chatWithModel(
   }
 
   throw new Error("请求失败，已达到最大重试次数。");
+}
+
+/**
+ * SSE 流式解析器：从 ReadableStream 中逐行解析 data: 字段，提取 delta.content
+ * 兼容 OpenAI 格式的 chat/completions 流式响应。
+ */
+async function parseSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  try {
+    while (true) {
+      if (signal?.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // 按行处理 SSE 事件
+      let lineEnd: number;
+      while ((lineEnd = buffer.indexOf("\n")) !== -1) {
+        const rawLine = buffer.slice(0, lineEnd);
+        buffer = buffer.slice(lineEnd + 1);
+        const line = rawLine.replace(/\r$/, "").trim();
+
+        if (!line || line.startsWith(":")) continue; // 空行或注释
+        if (!line.startsWith("data:")) continue;
+
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") return;
+
+        try {
+          const json = JSON.parse(data);
+          const delta: string =
+            json?.choices?.[0]?.delta?.content ??
+            json?.choices?.[0]?.text ??
+            "";
+          if (delta) onDelta(delta);
+        } catch {
+          // 单行 JSON 解析失败时跳过，不中断流
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+/** 流式调用 OpenAI 兼容接口，实时回调增量文本，返回完整文本 */
+export async function chatWithModelStream(
+  settings: AISettings,
+  model: string,
+  messages: ChatMessage[],
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onDelta?: (delta: string, full: string) => void;
+  } = {},
+): Promise<string> {
+  if (!settings.apiKey) {
+    throw new Error("尚未配置 API Key，请先在设置中填写。");
+  }
+  const endpoint = buildEndpoint(settings.baseUrl);
+  const controller = new AbortController();
+  const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT;
+  const timer = setTimeout(() => controller.abort(), timeout);
+  if (opts.signal) {
+    opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+
+  let full = "";
+  try {
+    const requestBody = {
+      model,
+      messages,
+      temperature: settings.temperature,
+      stream: true,
+      max_tokens: 8192,
+    };
+    const bodyStr = JSON.stringify(requestBody);
+    const bodySize = new Blob([bodyStr]).size;
+
+    logRequestInfo(model, messages, bodySize, endpoint);
+    checkRequestSize(bodySize);
+
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${settings.apiKey}`,
+        Accept: "text/event-stream",
+      },
+      body: bodyStr,
+      signal: controller.signal,
+    });
+
+    console.debug(`[aiClient][stream] Response status: ${resp.status}`);
+
+    // 连接已建立，清除超时计时器
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      const errorDetail = errText.slice(0, 300) || resp.statusText;
+      console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
+      throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
+    }
+
+    if (!resp.body) {
+      throw new Error("接口未返回流式响应体，可能不支持 stream 模式。");
+    }
+
+    await parseSSEStream(
+      resp.body.getReader(),
+      (delta) => {
+        full += delta;
+        if (full.length > 200000) {
+          // 防止超长输出撑爆内存
+          controller.abort();
+          return;
+        }
+        opts.onDelta?.(delta, full);
+      },
+      controller.signal,
+    );
+
+    if (!full) {
+      throw new Error("接口返回空内容，请检查模型名称与配额。");
+    }
+    if (full.length > 100000) {
+      console.warn(`[aiClient][stream] Response too large (${full.length} chars), truncating`);
+      return full.slice(0, 100000);
+    }
+    return full;
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      // 用户主动取消时，返回已收到的内容（若有）
+      if (full) {
+        console.warn("[aiClient][stream] Request aborted, returning partial content");
+        return full;
+      }
+      throw new Error("请求超时或已取消。");
+    }
+    if (e instanceof TypeError) {
+      console.error("[aiClient][stream] Network error:", e);
+      throw new Error(
+        `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. CORS 跨域限制\n2. 网络超时\n3. DNS 解析失败\n4. 防火墙/代理拦截`,
+      );
+    }
+    console.error("[aiClient][stream] Unexpected error:", e);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
