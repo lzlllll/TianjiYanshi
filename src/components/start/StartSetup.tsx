@@ -1,10 +1,22 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
-import { ScrollCard } from "@/components/ui/ScrollCard";
-import { SealButton } from "@/components/ui/SealButton";
+import { REALM_NAMES } from "@/data/mockData";
 import { cn } from "@/lib/utils";
-import { Settings, Upload, Download, RotateCcw, Eye, EyeOff } from "lucide-react";
+import { GAME_TITLE_BOOK, GAME_VERSION } from "@/lib/gameInfo";
+import { SealButton } from "@/components/ui/SealButton";
+import {
+  Eye,
+  EyeOff,
+  Upload,
+  Download,
+  RotateCcw,
+  MoreHorizontal,
+  Check,
+  Zap,
+  ClipboardPaste,
+  X,
+} from "lucide-react";
 import type { AISettings, GameSnapshot } from "@/data/types";
 
 interface PlayerSetup {
@@ -21,6 +33,19 @@ interface PlayerSetup {
 
 const SECT_POSITIONS = ["掌门", "副掌门", "长老", "内门弟子", "外门弟子", "散修"];
 const REALMS = ["引气", "炼气", "筑基", "金丹", "元婴", "化神", "合体", "渡劫", "大乘"];
+
+/** 每个境界配一句小注，让「择道」不是干巴巴的下拉 */
+const REALM_NOTES: Record<string, string> = {
+  引气: "灵气初感，尚在门外",
+  炼气: "气行周天，可入宗门",
+  筑基: "道基已立，寿元渐长",
+  金丹: "一粒金丹吞入腹，始知我命不由天",
+  元婴: "元神初显，可离体远游",
+  化神: "神游太虚，一念千里",
+  合体: "法与身合，几近于道",
+  渡劫: "天雷将至，成败在此一举",
+  大乘: "只差一步，登临仙界",
+};
 
 const API_PRESETS: { label: string; baseUrl: string; flash: string; pro: string; note: string }[] = [
   {
@@ -53,6 +78,163 @@ const API_PRESETS: { label: string; baseUrl: string; flash: string; pro: string;
   },
 ];
 
+type StepId = "api" | "name" | "realm" | "sect" | "self" | "seal";
+
+const STEP_DEFS: { id: StepId; label: string; hint: string }[] = [
+  { id: "api", label: "通灵", hint: "接通推演接口" },
+  { id: "name", label: "立名", hint: "姓名 · 称号 · 性别" },
+  { id: "realm", label: "择道", hint: "初始境界" },
+  { id: "sect", label: "归宗", hint: "宗门 · 职位" },
+  { id: "self", label: "述身", hint: "简介 · 性格 · 背景" },
+  { id: "seal", label: "落印", hint: "确认并开局" },
+];
+
+/** 快速开局用的随机池：随手拼一个人物，省去逐项填写 */
+const QUICK_SURNAMES = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "沈", "陆", "顾", "林", "苏", "萧", "叶", "江", "云", "楚", "慕容", "独孤"];
+const QUICK_GIVEN = ["尘", "青云", "无涯", "长风", "听雪", "怀安", "疏影", "孤鸿", "望川", "子墨", "惊蛰", "霜白", "野鹤", "拾光", "问水", "守拙"];
+const QUICK_TITLES = ["青衫客", "无名剑客", "游方郎中", "雪中孤鸿", "闲云野鹤", "市井闲人", "负笈书生", "落魄公子", "江湖游侠", "山野散人"];
+const QUICK_SECTS = ["散修", "青云宗", "太岳谷", "听雨岛", "栖霞洞", "白鹿院", "丹霞门", "凌霜阁"];
+const QUICK_DESC = [
+  "身负奇诡灵根、来历不明的散修。",
+  "自幼随师隐于山野的清修之人。",
+  "行走江湖、以剑会友的少年人。",
+  "出身没落世家、一心问道的读书人。",
+  "惯走南闯北、见多识广的游方客。",
+];
+const QUICK_PERSONALITY = [
+  "外冷内热，遇事先谋后动。",
+  "爽朗仗义，认死理。",
+  "谨小慎微，却重情义。",
+  "沉默寡言，心细如发。",
+  "放荡不羁，乐天知命。",
+];
+const QUICK_BACKGROUND = [
+  "父母早亡，被山中道观收留。",
+  "家中曾是行商大户，如今已败落。",
+  "说不清自己的来处，只记得一场大火。",
+  "曾在镖局做过几年杂役，学了一身武艺。",
+];
+
+const pickOne = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
+/** 随手掷一个人物：姓名、称号、宗门、境界、简介都从池子里现取 */
+function rollQuickPlayer(): PlayerSetup {
+  return {
+    name: pickOne(QUICK_SURNAMES) + pickOne(QUICK_GIVEN),
+    title: pickOne(QUICK_TITLES),
+    gender: Math.random() < 0.5 ? "male" : "female",
+    sectName: pickOne(QUICK_SECTS),
+    position: pickOne(SECT_POSITIONS),
+    realm: pickOne(REALMS),
+    description: pickOne(QUICK_DESC),
+    personality: pickOne(QUICK_PERSONALITY),
+    background: pickOne(QUICK_BACKGROUND),
+  };
+}
+
+/**
+ * 从一整段自述里认一个境界：先把「炼气后期」这样写全的找出来，
+ * 只写了大境界的（如「筑基」）再按那一道的初期算。
+ * 整段开局没有填表，角色卡上那两栏无从按表确立，就先由这里认下来；
+ * 免得推演没写出这一笔时，角色一直停在默认的引气初期。
+ */
+function parseRealmFromText(text: string): string | null {
+  const t = text || "";
+  let name = "";
+  let at = Number.POSITIVE_INFINITY;
+  for (const full of REALM_NAMES) {
+    const i = t.indexOf(full);
+    if (i !== -1 && i < at) {
+      name = full;
+      at = i;
+    }
+  }
+  if (name) return name;
+  for (const tier of REALMS) {
+    const i = t.indexOf(tier);
+    if (i === -1 || i >= at) continue;
+    const idx = REALM_NAMES.findIndex((n) => n.startsWith(tier));
+    if (idx >= 0) {
+      name = REALM_NAMES[idx];
+      at = i;
+    }
+  }
+  return name || null;
+}
+
+/** 开篇要交代的诸项；表单开局与整段开局共用这一段 */
+const OPENING_BRIEF = `请为这个故事写下开篇。开篇叙事需要把下面这些设定交代清楚，凡是涉及名目、数量与程度的地方都要给出明确内容，以便后续判定；请把它们自然地融进叙事，不要写成条目清单：
+ 1. 我的灵根资质，写明由哪几种五行或变异灵根构成，各自大概几成
+ 2. 我的经脉状况，写明主要经脉的名称、通畅程度，以及是否有损伤
+ 3. 我的年岁，以及体魄与气运
+ 4. 我已掌握的 2 至 4 门功法，逐一写明名称、类别、品阶与五行属性，其中须有一门是主修的心法
+ 5. 我随身携带的物品，逐一写明名称、类别、品阶与数量
+ 6. 我持有的灵石，分别写明下品、中品、上品的数量
+ 7. 我所在宗门的名称、规模、掌事者、驻地与当前境况
+ 8. 三四位与我相识之人，写明姓名、称号、与我的关系、修为境界与亲疏程度
+ 9. 今日听闻的江湖消息，官府公告、宗门布告、市井传言各一则
+10. 我身上几门讨生活的本事，写明名目与门道——是市井里的手艺与见识，如辨药、相玉、修器物、算账、认路看天，不要写成拳脚武功
+11. 眼下已经落在肩上的两三桩事，写明是谁交办的、要办成什么才算数、限到几时
+12. 开篇的场景与情节
+
+【境界须照旧】我如今的境界已定（若上文写明，即以此为准）。开篇与后续都要照这个境界来写，不得把我写成更低的境界，更不得编出「境界下跌」「修为倒退」这类由头。`;
+
+/** 开局推演期间翻动的几句闲话；纯为等得下去，不承载任何判定 */
+const OPENING_WAITS = [
+  "正在踏勘你的来路……",
+  "正在排布灵根与经脉……",
+  "正在挑选随身之物与功法……",
+  "正在落定宗门与相识之人……",
+  "正在打听今日的江湖消息……",
+  "正在写下开篇……",
+];
+
+/** 开局推演时的全屏等待页：遮住界面，免得中途误触 */
+function OpeningLoading() {
+  const stage = useAIStore((s) => s.conversation.stage);
+  const [idx, setIdx] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setIdx((n) => Math.min(n + 1, OPENING_WAITS.length - 1));
+    }, 2600);
+    return () => clearInterval(timer);
+  }, []);
+
+  const head = stage === "flash" ? "正在翻阅江湖档案" : stage === "error" ? "推演受阻" : "正在推演开篇";
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-950/95 backdrop-blur-sm">
+      <div className="paper-sheet rounded-lg w-full max-w-md px-8 py-10 flex flex-col items-center text-center gap-5">
+        {/* 一枚转着的印 */}
+        <div className="relative w-20 h-20">
+          <div className="absolute inset-0 rounded-full border border-[#a83232]/25" />
+          <div className="absolute inset-0 rounded-full border-t-2 border-r-2 border-[#a83232]/70 animate-spin" />
+          <div className="absolute inset-0 flex items-center justify-center font-brush text-2xl ps-strong tracking-widest">
+            道
+          </div>
+        </div>
+
+        <div>
+          <h3 className="font-brush text-xl ps-strong tracking-[0.3em]">{head}</h3>
+          <p className="font-serif text-xs ps-muted mt-2 leading-relaxed min-h-[1.2rem]">
+            {OPENING_WAITS[idx]}
+          </p>
+        </div>
+
+        {/* 一条来回走动的进度：具体到哪一步说不准，就不报数 */}
+        <div className="w-full h-1 rounded-full bg-[#8a6a3a]/15 overflow-hidden">
+          <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-transparent via-[#a83232]/70 to-transparent animate-pulse" />
+        </div>
+
+        <p className="font-serif text-[11px] ps-faint leading-relaxed">
+          推演须静候片刻，请勿关闭此页。
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function StartSetup() {
   const [setup, setSetup] = useState<PlayerSetup>({
     name: "",
@@ -66,22 +248,94 @@ export function StartSetup() {
     background: "",
   });
 
-  const [showApiSettings, setShowApiSettings] = useState(false);
+  const settings = useAIStore((s) => s.settings);
+  const configured = !!settings.apiKey.trim();
+
+  const [stepId, setStepId] = useState<StepId>(() => (configured ? "name" : "api"));
+  const [reached, setReached] = useState(0);
   const [showApiKey, setShowApiKey] = useState(false);
-  const [apiDraft, setApiDraft] = useState<AISettings>(useAIStore.getState().settings);
-  
+  const [apiDraft, setApiDraft] = useState<AISettings>(settings);
+  // 从后头几步点「通灵」折回来改配置时，记下原先停在哪一步，存过便送回去，不必自己再点回去
+  const [apiReturn, setApiReturn] = useState<StepId | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
+  // 整段开局那一扇：贴一大段文字，直接交出去作开篇的依据
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const resetGame = useGameStore((s) => s.resetGame);
   const runTurn = useAIStore((s) => s.runTurn);
   const updateSettings = useAIStore((s) => s.updateSettings);
-  const settings = useAIStore((s) => s.settings);
   const turns = useAIStore((s) => s.conversation.turns);
 
-  const handleInputChange = (field: keyof PlayerSetup, value: string) => {
+  useEffect(() => {
+    if (!showMenu) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [showMenu]);
+
+  // 草稿只在挂载时取过一次；若那会儿还没取到已存的设置，或别处改过通灵设置，
+  // 这里补对齐一回——否则密钥栏空着、按钮锁着，人也不知究竟为何
+  useEffect(() => {
+    if (apiDraft.apiKey.trim() || !settings.apiKey.trim()) return;
+    setApiDraft(settings);
+  }, [settings, apiDraft.apiKey]);
+
+  // 「通灵」这一步始终留着：接口配好后仍旧能点回来改——换密钥、换模型、换 Base URL。
+  // 从前配好便把它藏起来，反倒没处可改。
+  const steps = STEP_DEFS;
+  const foundIndex = steps.findIndex((s) => s.id === stepId);
+  const activeIndex = foundIndex === -1 ? 0 : foundIndex;
+  const activeStep = steps[activeIndex];
+  const isLast = activeIndex === steps.length - 1;
+
+  const stepValid = (id: StepId): boolean => {
+    // 以草稿为准，别让首帧没取到的旧值把这一步锁死
+    if (id === "api") return apiDraft.apiKey.trim() !== "";
+    if (id === "name") return setup.name.trim() !== "";
+    if (id === "self") return setup.description.trim() !== "";
+    return true;
+  };
+
+  /** 底部右侧的提示语，按当前步骤给出对应的未完成原因 */
+  const footerNote = (): string | null => {
+    if (activeStep.id === "api") return "填好后点上方「保存并继续」";
+    // 落印这一步也可能因快速开局直接跳来，姓名与简介仍要补齐
+    if (activeStep.id === "seal") {
+      if (!setup.name.trim()) return "请先补上姓名";
+      if (!setup.description.trim()) return "请先补上人物简介";
+      return null;
+    }
+    if (!stepValid(activeStep.id)) {
+      return activeStep.id === "name" ? "请先填写姓名" : "请先填写人物简介";
+    }
+    return null;
+  };
+
+  const change = (field: keyof PlayerSetup, value: string) => {
     setSetup((prev) => ({ ...prev, [field]: value }));
     setError("");
+  };
+
+  const goTo = (index: number) => {
+    if (index < 0 || index >= steps.length) return;
+    const next = steps[index];
+    // 由别处折回「通灵」去改配置的，记下来处，存过好送回去
+    if (next.id === "api" && activeStep.id !== "api" && configured) setApiReturn(activeStep.id);
+    setStepId(next.id);
+    setError("");
+  };
+
+  const goNext = () => {
+    if (!stepValid(activeStep.id)) return;
+    const ni = Math.min(activeIndex + 1, steps.length - 1);
+    goTo(ni);
+    setReached((r) => Math.max(r, ni));
   };
 
   const applyApiPreset = (preset: (typeof API_PRESETS)[number]) => {
@@ -94,64 +348,148 @@ export function StartSetup() {
   };
 
   const saveApiSettings = () => {
-    updateSettings(apiDraft);
-    setShowApiSettings(false);
-  };
-
-  const isValid = setup.name.trim() !== "" && setup.description.trim() !== "" && settings.apiKey.trim() !== "";
-
-  const handleStart = async () => {
-    if (!isValid) {
-      if (!settings.apiKey.trim()) {
-        setError("请先配置API密钥");
-        setShowApiSettings(true);
-      } else {
-        setError("请至少填写姓名和人物简介");
-      }
+    if (!apiDraft.apiKey.trim()) {
+      setError("请先填入接口密钥，再保存。");
       return;
     }
+    updateSettings(apiDraft);
+    setError("");
+    // 由后头几步折回来改配置的，存过送回原处；余下情形顺着往下走一步，
+    // 「保存并继续」四个字才对得上——从前已配置的存过原地不动，点了跟没点一样
+    if (apiReturn) {
+      setStepId(apiReturn);
+      setApiReturn(null);
+      return;
+    }
+    const ni = Math.min(activeIndex + 1, steps.length - 1);
+    setStepId(steps[ni].id);
+    setReached((r) => Math.max(r, ni));
+  };
 
+  /**
+   * 开一局：重入轮回、另起推演账，再照这一整段自述写下开篇。
+   * 表单那条路会先把定好的几项写进角色卡；整段开局那条路不写，全交推演。
+   * seedRealm 是整段开局时从自述里认下的境界：先落在角色卡上，免得推演没写出这一笔，
+   * 角色便一直停在默认的引气初期。
+   */
+  const beginGame = async (firstInput: string, config?: PlayerSetup, seedRealm?: string | null) => {
     setIsGenerating(true);
     setError("");
 
     try {
       resetGame();
+      // 开新一局，推演账也另起一册：否则开篇正文会接着上一局的话头往下走
+      useAIStore.getState().resetLedger();
 
-      const gameState = useGameStore.getState();
-      const newPlayer = {
-        ...gameState.player,
-        name: setup.name.trim(),
-        title: setup.title.trim() || "无名之辈",
-        gender: setup.gender,
-        sectName: setup.sectName.trim() || "散修",
-        position: setup.position,
-        realmIndex: REALMS.indexOf(setup.realm) * 4,
-        realmStage: 0,
-        cultivation: 100,
-        description: setup.description.trim(),
-        personality: setup.personality.trim(),
-        background: setup.background.trim(),
-      };
-
-      useGameStore.getState().setPlayer(newPlayer);
-
-      const firstInput = `我是${setup.name}，${setup.title || "一名修士"}，${setup.description}。${setup.personality ? "性格" + setup.personality + "。" : ""}${setup.background || ""}\n\n请为我生成完整的开局游戏数据，包括：\n1. 我的详细属性（灵根、经脉、体魄、气运、寿元、HP、MP等）\n2. 1-2个初始功法/技能\n3. 几件初始物品（武器、丹药、材料等）\n4. 一些灵石\n5. 宗门信息（如果我属于宗门）\n6. 几位初始关系人物\n7. 今日的江湖新闻（官府公告、宗门布告、市井传言各一条）\n8. 开篇叙事\n请以游戏数据操作的方式返回所有内容。`;
+      if (config) {
+        const gameState = useGameStore.getState();
+        const newPlayer = {
+          ...gameState.player,
+          name: config.name.trim(),
+          title: config.title.trim() || "无名之辈",
+          gender: config.gender,
+          sectName: config.sectName.trim() || "散修",
+          position: config.position,
+          realmIndex: REALMS.indexOf(config.realm) * 4,
+          realmStage: 0,
+          cultivation: 100,
+          description: config.description.trim(),
+          personality: config.personality.trim(),
+          background: config.background.trim(),
+        };
+        useGameStore.getState().setPlayer(newPlayer);
+      } else if (seedRealm) {
+        // 整段开局没填表：境界先从自述里认一个落上，推演照此写，
+        // 角色卡与正文才不致一个引气初期、一个炼气后期
+        const idx = REALM_NAMES.indexOf(seedRealm);
+        if (idx >= 0) {
+          const gameState = useGameStore.getState();
+          useGameStore.getState().setPlayer({ ...gameState.player, realmIndex: idx, realmStage: 0 });
+        }
+      }
 
       await runTurn(firstInput);
+
+      // runTurn 内部会把所有异常吞掉并写进 conversation.stage，自己不抛错，
+      // 所以这里必须回读状态；否则界面会一直停在「正在推演开篇…」且不给任何失败原因。
+      const conv = useAIStore.getState().conversation;
+      if (conv.stage !== "done") {
+        setError(conv.errorMsg || "开篇推演未完成，请检查通灵接口后重试。");
+        setIsGenerating(false);
+        return;
+      }
+      // 开局另赠一处奇遇：落在这一带的空位上，往后可自行前往
+      void useAIStore.getState().spawnAdventure("开局奇遇");
     } catch (e) {
       setError(`开局失败：${(e as Error).message}`);
-    } finally {
       setIsGenerating(false);
     }
   };
 
+  /** 照一份人物设定开局：落印、推演开篇 */
+  const startGame = async (config: PlayerSetup) => {
+    const blankFields: string[] = [];
+    if (!config.title.trim()) blankFields.push("称号");
+    if (!config.personality.trim()) blankFields.push("性格特点");
+    if (!config.background.trim()) blankFields.push("身世背景");
+
+    const firstInput = `我是${config.name}，${config.title || "一名修士"}，${config.description}。${config.personality ? "性格" + config.personality + "。" : ""}${config.background || ""}宗门归属：${config.sectName.trim() || "散修"}，身份：${config.position}，境界：${config.realm}初期。
+
+【我没有指定的部分】${blankFields.length ? blankFields.join("、") + "，" : ""}以及年岁、外貌、修炼历程、心性评分，我都没有填写。请你依据我已给出的信息合理补全并确立，不要留空，也不必反问我。
+
+${OPENING_BRIEF}`;
+
+    await beginGame(firstInput, config);
+  };
+
+  const handleStart = () => startGame(setup);
+
+  /**
+   * 快速开局：随手掷一个人物填进表单，展开到「落印」一步，
+   * 供你逐项过目、随手改过某一项之后再落印开局；不再掷完即走。
+   * 没接通灵的，先进「通灵」一步。
+   */
+  const quickStart = () => {
+    const rolled = rollQuickPlayer();
+    setSetup(rolled);
+    setError("");
+    setReached(steps.length - 1);
+    setStepId(configured ? "seal" : "api");
+  };
+
+  /** 打开「整段开局」那一扇 */
+  const openPaste = () => {
+    setShowPaste(true);
+    setError("");
+  };
+
+  /** 整段开局：不拆栏，直接把这一整段交出去作开篇的依据 */
+  const startWithPaste = async () => {
+    const text = pasteText.trim();
+    if (!text || isGenerating) return;
+    if (!configured) {
+      setError("尚未接通推演接口——开篇也得靠它。请先到「通灵」一步把接口填好。");
+      setShowPaste(false);
+      return;
+    }
+    setShowPaste(false);
+    // 自述里报过的境界，先由代码认下来落在角色卡上，推演再据此写正文
+    const seedRealm = parseRealmFromText(text);
+    await beginGame(
+      `${text}
+
+【补白】以上自述里已写明的姓名、称号、性别、境界、宗门归属与身份，即为我已定之数，开篇正文与后续建档都要照此为准——不得另拟称号、不得另取宗门名号，也不得把境界写低。凡未写到的（灵根、经脉、功法、随身之物、灵石、宗门境况、相识之人、江湖消息、身上的本事与担子、开篇场景等），请你依据已给出的信息合理补全并确立，不要留空，也不必反问我。
+
+${OPENING_BRIEF}`,
+      undefined,
+      seedRealm,
+    );
+  };
+
   const exportSave = () => {
+    setShowMenu(false);
     const snapshot = useGameStore.getState().getSnapshot();
-    const saveData = {
-      game: snapshot,
-      ai: useAIStore.getState(),
-      timestamp: Date.now(),
-    };
+    const saveData = { game: snapshot, ai: useAIStore.getState(), timestamp: Date.now() };
     const blob = new Blob([JSON.stringify(saveData, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -162,343 +500,704 @@ export function StartSetup() {
   };
 
   const importSave = () => {
+    setShowMenu(false);
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-
       try {
         const text = await file.text();
         const saveData = JSON.parse(text);
-        
-        if (saveData.game) {
-          useGameStore.getState().restoreSnapshot(saveData.game as GameSnapshot);
-        }
-        
-        if (saveData.ai?.settings) {
-          updateSettings(saveData.ai.settings);
-        }
-        
+        if (saveData.game) useGameStore.getState().restoreSnapshot(saveData.game as GameSnapshot);
+        if (saveData.ai?.settings) updateSettings(saveData.ai.settings);
         if (saveData.ai?.conversation) {
           useAIStore.getState().restoreConversation(saveData.ai.conversation);
         }
-        
         window.location.reload();
-      } catch (e) {
-        setError(`导入存档失败：${(e as Error).message}`);
+      } catch (err) {
+        setError(`导入存档失败：${(err as Error).message}`);
       }
     };
     input.click();
   };
 
   const startNewGame = () => {
-    resetGame();
-    useAIStore.getState().clearConversation();
-    useGameStore.getState().setPanel("profile");
-    window.location.reload();
+    setShowMenu(false);
+    if (confirm("确定要开启新游戏吗？当前进度将丢失。")) {
+      resetGame();
+      useAIStore.getState().resetLedger();
+      window.location.reload();
+    }
   };
 
+  const sealBase = "w-9 h-9 rounded-sm flex items-center justify-center font-brush text-sm";
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-8 ink-bg">
-      <div className="max-w-4xl w-full">
-        <ScrollCard className="p-8">
-          <div className="text-center mb-8">
-            <h1 className="font-brush text-3xl text-gold-400 text-shadow-ink tracking-widest mb-2">江湖：人情世故模拟器</h1>
-            <p className="font-serif text-paper-400/60">开启你的修真之路</p>
+    <div className="start-screen h-screen w-screen overflow-y-auto ink-bg py-10 px-6">
+      <div className="w-full max-w-6xl mx-auto">
+        {/* 顶部：题名与菜单 */}
+        <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+          <div>
+            <h1 className="font-brush text-3xl text-gold-400 text-shadow-ink tracking-widest">
+              {GAME_TITLE_BOOK}
+            </h1>
+            <p className="font-serif text-sm text-paper-400/60 mt-1">
+              落笔成身，一念入江湖
+              <span className="ml-3 font-number text-xs text-paper-400/40">{GAME_VERSION}</span>
+            </p>
           </div>
 
-          <div className="flex justify-center gap-3 mb-8">
-            <SealButton
-              onClick={() => setShowApiSettings(!showApiSettings)}
-              variant="ghost"
-              className="px-4 py-2 text-sm flex items-center gap-2"
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={openPaste}
+              disabled={isGenerating}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-full border font-serif text-xs transition",
+                isGenerating
+                  ? "border-gold-500/20 text-paper-400/40 cursor-not-allowed"
+                  : "border-gold-500/40 bg-gold-500/10 text-gold-400 hover:border-gold-400/70 hover:bg-gold-500/20",
+              )}
+              title="粘贴一整段开局文字，直接把这一段交给推演开局"
             >
-              <Settings size={16} />
-              {showApiSettings ? "收起设置" : "API设置"}
-            </SealButton>
-            <SealButton
-              onClick={exportSave}
-              variant="ghost"
-              className="px-4 py-2 text-sm flex items-center gap-2"
+              <ClipboardPaste size={13} /> 整段开局
+            </button>
+            <button
+              onClick={quickStart}
+              disabled={isGenerating}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-full border font-serif text-xs transition",
+                isGenerating
+                  ? "border-gold-500/20 text-paper-400/40 cursor-not-allowed"
+                  : "border-cinnabar-500/50 bg-[rgba(168,50,50,0.10)] text-cinnabar-400 hover:border-cinnabar-400/80 hover:bg-[rgba(168,50,50,0.18)]",
+              )}
+              title="随机填一份人物设定，落在「落印」一步，可逐项改过再开局"
             >
-              <Download size={16} />
-              导出存档
-            </SealButton>
-            <SealButton
-              onClick={importSave}
-              variant="ghost"
-              className="px-4 py-2 text-sm flex items-center gap-2"
+              <Zap size={13} /> 快速开局
+            </button>
+            <button
+              type="button"
+              onClick={() => goTo(steps.findIndex((s) => s.id === "api"))}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-ink-800 border-2 border-gold-500 transition hover:border-gold-400 hover:bg-gold-500/10"
+              title="通灵设置：修改接口密钥、模型与 Base URL"
             >
-              <Upload size={16} />
-              导入存档
-            </SealButton>
-            {turns.length > 0 && (
-              <SealButton
-                onClick={startNewGame}
-                variant="seal"
-                className="px-4 py-2 text-sm flex items-center gap-2"
+              <span
+                className={cn("w-2 h-2 rounded-full", configured ? "bg-jade-400" : "bg-cinnabar-500")}
+              />
+              <span className="font-serif text-xs text-paper-400/70">
+                {configured ? "通灵已接 · 修改" : "尚未通灵 · 配置"}
+              </span>
+            </button>
+
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setShowMenu((v) => !v)}
+                className={cn(
+                  "w-9 h-9 rounded flex items-center justify-center border-2 transition",
+                  showMenu
+                    ? "border-gold-400 bg-gold-400 text-gold-400"
+                    : "border-gold-500 text-paper-300 hover:border-gold-400 hover:bg-gold-400 hover:text-gold-400",
+                )}
+                title="存档管理"
               >
-                <RotateCcw size={16} />
-                新游戏
-              </SealButton>
-            )}
-          </div>
-
-          {showApiSettings && (
-            <div className="mb-8 p-4 bg-ink-900/50 border border-paper-400/15 rounded">
-              <h3 className="font-brush text-lg text-gold-400 mb-4">通灵设置</h3>
-              
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
-                {API_PRESETS.map((p) => {
-                  const active = apiDraft.baseUrl === p.baseUrl;
-                  return (
-                    <button
-                      key={p.label}
-                      onClick={() => applyApiPreset(p)}
-                      className={cn(
-                        "px-3 py-2 rounded text-left border transition-all",
-                        active
-                          ? "border-gold-400/60 bg-gold-400/10"
-                          : "border-paper-400/15 hover:border-gold-500/40 hover:bg-paper-400/5",
-                      )}
-                      title={p.note}
-                    >
-                      <div className={cn("font-brush text-sm tracking-wider", active ? "text-gold-400" : "text-paper-200")}>
-                        {p.label}
-                      </div>
-                      <div className="font-serif text-[9px] text-paper-400/60 mt-0.5 leading-tight">
-                        {p.note}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block font-serif text-xs text-paper-300 mb-1">Base URL</label>
-                  <input
-                    type="text"
-                    value={apiDraft.baseUrl}
-                    onChange={(e) => setApiDraft((d) => ({ ...d, baseUrl: e.target.value }))}
-                    placeholder="https://api.deepseek.com/v1"
-                    className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  />
-                </div>
-                <div>
-                  <label className="block font-serif text-xs text-paper-300 mb-1">API Key</label>
-                  <div className="relative">
-                    <input
-                      type={showApiKey ? "text" : "password"}
-                      value={apiDraft.apiKey}
-                      onChange={(e) => setApiDraft((d) => ({ ...d, apiKey: e.target.value }))}
-                      placeholder="sk-..."
-                      className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40 pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((v) => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center text-paper-400/60 hover:text-paper-100 transition"
-                    >
-                      {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block font-serif text-xs text-paper-300 mb-1">Flash 模型</label>
-                  <input
-                    type="text"
-                    value={apiDraft.flashModel}
-                    onChange={(e) => setApiDraft((d) => ({ ...d, flashModel: e.target.value }))}
-                    placeholder="deepseek-chat"
-                    className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  />
-                </div>
-                <div>
-                  <label className="block font-serif text-xs text-paper-300 mb-1">Pro 模型</label>
-                  <input
-                    type="text"
-                    value={apiDraft.proModel}
-                    onChange={(e) => setApiDraft((d) => ({ ...d, proModel: e.target.value }))}
-                    placeholder="deepseek-reasoner"
-                    className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  />
-                </div>
-              </div>
-
-              <SealButton onClick={saveApiSettings} className="w-full">
-                保存设置
-              </SealButton>
-            </div>
-          )}
-
-          {!settings.apiKey.trim() && !showApiSettings && (
-            <div className="mb-6 p-4 bg-cinnabar-500/10 border border-cinnabar-500/30 rounded">
-              <p className="font-serif text-sm text-cinnabar-400 text-center">
-                请先点击「API设置」配置您的AI接口密钥
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block font-serif text-sm text-paper-300 mb-1">性别</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleInputChange("gender", "male")}
-                    className={cn(
-                      "flex-1 px-3 py-2 rounded font-serif text-sm border transition-colors",
-                      setup.gender === "male"
-                        ? "border-gold-400/50 bg-gold-400/10 text-gold-400"
-                        : "border-paper-400/20 bg-ink-900/30 text-paper-400/60 hover:border-paper-400/40"
-                    )}
-                  >
-                    男
-                  </button>
-                  <button
-                    onClick={() => handleInputChange("gender", "female")}
-                    className={cn(
-                      "flex-1 px-3 py-2 rounded font-serif text-sm border transition-colors",
-                      setup.gender === "female"
-                        ? "border-gold-400/50 bg-gold-400/10 text-gold-400"
-                        : "border-paper-400/20 bg-ink-900/30 text-paper-400/60 hover:border-paper-400/40"
-                    )}
-                  >
-                    女
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block font-serif text-sm text-paper-300 mb-1">姓名 *</label>
-                <input
-                  type="text"
-                  value={setup.name}
-                  onChange={(e) => handleInputChange("name", e.target.value)}
-                  placeholder="请输入姓名"
-                  className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  maxLength={20}
-                />
-              </div>
-              <div>
-                <label className="block font-serif text-sm text-paper-300 mb-1">称号</label>
-                <input
-                  type="text"
-                  value={setup.title}
-                  onChange={(e) => handleInputChange("title", e.target.value)}
-                  placeholder="请输入称号"
-                  className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  maxLength={20}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block font-serif text-sm text-paper-300 mb-1">宗门</label>
-                <input
-                  type="text"
-                  value={setup.sectName}
-                  onChange={(e) => handleInputChange("sectName", e.target.value)}
-                  placeholder="请输入宗门"
-                  className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40"
-                  maxLength={20}
-                />
-              </div>
-              <div>
-                <label className="block font-serif text-sm text-paper-300 mb-1">职位</label>
-                <select
-                  value={setup.position}
-                  onChange={(e) => handleInputChange("position", e.target.value)}
-                  className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 focus:outline-none focus:border-gold-400/40"
+                <MoreHorizontal size={16} />
+              </button>
+              {showMenu && (
+                <div
+                  className="absolute top-full right-0 mt-2 w-40 rounded-lg border border-gold-500/20 bg-ink-900/95 backdrop-blur-sm shadow-xl z-50 overflow-hidden"
+                  style={{ animation: "inkSpread 0.2s ease-out" }}
                 >
-                  {SECT_POSITIONS.map((pos) => (
-                    <option key={pos} value={pos}>{pos}</option>
-                  ))}
-                </select>
+                  <button
+                    onClick={exportSave}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-paper-200 hover:bg-gold-500/10 transition-colors"
+                  >
+                    <Download size={14} className="text-paper-400" /> 导出存档
+                  </button>
+                  <button
+                    onClick={importSave}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-paper-200 hover:bg-gold-500/10 transition-colors"
+                  >
+                    <Upload size={14} className="text-paper-400/70" /> 导入存档
+                  </button>
+                  {turns.length > 0 && (
+                    <>
+                      <div className="h-px bg-gold-500" />
+                      <button
+                        onClick={startNewGame}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-cinnabar-400 hover:bg-cinnabar-500/10 transition-colors"
+                      >
+                        <RotateCcw size={14} /> 新游戏
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr] gap-6 items-start">
+          {/* 左：玉牌，实时显示角色卡与步骤进度 */}
+          <aside className="jade-tablet rounded-lg p-5 sticky top-10">
+            <div className="flex items-center gap-3">
+              <div className={cn(sealBase, "bg-cinnabar-500 text-paper-50 w-12 h-12 text-lg")}>
+                {setup.name.trim().charAt(0) || "道"}
+              </div>
+              <div className="min-w-0">
+                <div className="font-brush text-lg text-paper-50 tracking-wider truncate">
+                  {setup.name.trim() || "无名之辈"}
+                </div>
+                <div className="font-serif text-xs text-gold-400/80 truncate">
+                  「{setup.title.trim() || "尚未取号"}」
+                </div>
               </div>
             </div>
 
-            <div>
-              <label className="block font-serif text-sm text-paper-300 mb-1">境界</label>
-              <div className="flex flex-wrap gap-2">
-                {REALMS.map((r) => (
+            <div className="mt-4 space-y-1.5">
+              <div className="font-serif text-xs text-cinnabar-400">
+                {setup.realm}
+                <span className="text-gold-400 ml-1">初期</span>
+              </div>
+              <div className="font-serif text-xs text-paper-400 truncate">
+                {setup.sectName.trim() || "散修"} · {setup.position}
+              </div>
+              <div className="font-serif text-xs text-paper-500">
+                {setup.gender === "male" ? "男" : "女"}
+              </div>
+            </div>
+
+            <div className="cloud-divider my-4" />
+
+            <div className="space-y-1">
+              {steps.map((s, i) => {
+                const done = i < activeIndex;
+                const current = i === activeIndex;
+                const clickable = i <= reached || done;
+                return (
                   <button
-                    key={r}
-                    onClick={() => handleInputChange("realm", r)}
+                    key={s.id}
+                    onClick={() => clickable && goTo(i)}
+                    disabled={!clickable}
                     className={cn(
-                      "px-3 py-1.5 rounded font-serif text-xs border transition-colors",
-                      setup.realm === r
-                        ? "border-gold-400/50 bg-gold-400/10 text-gold-400"
-                        : "border-paper-400/20 bg-ink-900/30 text-paper-400/60 hover:border-paper-400/40"
+                      "w-full flex items-center gap-2.5 px-2 py-1.5 rounded text-left transition-colors",
+                      current && "bg-gold-400/10",
+                      clickable ? "cursor-pointer hover:bg-paper-400/5" : "cursor-default",
                     )}
                   >
-                    {r}
+                    <span
+                      className={cn(
+                        "w-5 h-5 rounded-sm flex items-center justify-center text-xs shrink-0 border-2 font-brush",
+                        done && "bg-cinnabar-500 border-cinnabar-400 text-paper-50",
+                        current && "border-gold-400 text-gold-400",
+                        !done && !current && "border-paper-400 text-paper-400",
+                      )}
+                    >
+                      {done ? <Check size={11} /> : i + 1}
+                    </span>
+                    <span className="min-w-0">
+                      <span
+                        className={cn(
+                          "block font-brush text-sm tracking-wider",
+                          current ? "text-gold-400" : done ? "text-paper-200" : "text-paper-400/40",
+                        )}
+                      >
+                        {s.label}
+                      </span>
+                      <span className="block font-serif text-xs text-paper-500/45 truncate">
+                        {s.hint}
+                      </span>
+                    </span>
                   </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          {/* 右：宣纸卷面 */}
+          <section className="paper-sheet rounded-lg p-7">
+            {/* 已完成步骤：收成一行，落一枚印 */}
+            {steps.slice(0, activeIndex).map((s) => (
+              <div
+                key={s.id}
+                className="flex items-center gap-4 py-2.5 border-b ps-rule"
+              >
+                <span className="font-brush text-sm ps-accent tracking-wider shrink-0 w-12">{s.label}</span>
+                <span className="font-serif text-sm ps-body truncate flex-1 text-right">{renderSummary(s.id)}</span>
+                <span className="w-5 h-5 rounded-sm bg-[#a83232] text-[#f5ecd6] text-xs flex items-center justify-center shrink-0 font-brush">
+                  印
+                </span>
+              </div>
+            ))}
+
+            {/* 当前步骤 */}
+            <div className="pt-6">
+              <div className="flex items-baseline gap-3 mb-1">
+                <span className="font-brush text-xs ps-accent tracking-widest">
+                  第 {activeIndex + 1} 步
+                </span>
+                <h2 className="font-brush text-2xl ps-strong tracking-widest">{activeStep.label}</h2>
+              </div>
+              <p className="font-serif text-xs ps-muted mb-6">{activeStep.hint}</p>
+
+              {activeStep.id === "api" && renderApiStep()}
+              {activeStep.id === "name" && renderNameStep()}
+              {activeStep.id === "realm" && renderRealmStep()}
+              {activeStep.id === "sect" && renderSectStep()}
+              {activeStep.id === "self" && renderSelfStep()}
+              {activeStep.id === "seal" && renderSealStep()}
+
+              {error && (
+                <div className="mt-5 px-4 py-3 rounded border border-[#a83232]/40 bg-[rgba(168,50,50,0.08)] font-serif text-sm ps-accent">
+                  {error}
+                </div>
+              )}
+            </div>
+
+            {/* 未展开的后续步骤 */}
+            {activeIndex < steps.length - 1 && (
+              <div className="mt-7 space-y-2">
+                {steps.slice(activeIndex + 1).map((s) => (
+                  <div key={s.id} className="flex items-center gap-3">
+                    <span className="flex-1 h-px bg-gradient-to-r from-[rgba(36,31,26,0.16)] to-transparent" />
+                    <span className="font-serif text-xs ps-faint whitespace-nowrap">
+                      {s.label} · 尚未展开
+                    </span>
+                    <span className="flex-1 h-px bg-gradient-to-l from-[rgba(36,31,26,0.16)] to-transparent" />
+                  </div>
                 ))}
               </div>
-            </div>
+            )}
 
-            <div>
-              <label className="block font-serif text-sm text-paper-300 mb-1">人物简介 *</label>
-              <textarea
-                value={setup.description}
-                onChange={(e) => handleInputChange("description", e.target.value)}
-                placeholder="简述你的人物设定，如：拥有冰火双灵根的散修，性格孤傲..."
-                rows={3}
-                className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40 resize-none"
-                maxLength={200}
-              />
-            </div>
+            {/* 底部导航 */}
+            <div className="mt-8 pt-5 border-t ps-rule flex items-center justify-between">
+              <button
+                onClick={() => goTo(activeIndex - 1)}
+                disabled={activeIndex === 0}
+                className="btn-paper px-4 py-2 rounded font-serif text-sm"
+              >
+                ← 上一步
+              </button>
 
-            <div>
-              <label className="block font-serif text-sm text-paper-300 mb-1">性格特点</label>
-              <textarea
-                value={setup.personality}
-                onChange={(e) => handleInputChange("personality", e.target.value)}
-                placeholder="如：沉稳内敛，心思缜密..."
-                rows={2}
-                className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40 resize-none"
-                maxLength={100}
-              />
+              <div className="flex items-center gap-3">
+                {footerNote() && (
+                  <span className="font-serif text-xs ps-faint">{footerNote()}</span>
+                )}
+                {activeStep.id === "api" ? null : isLast ? (
+                  <SealButton
+                    onClick={handleStart}
+                    disabled={isGenerating || !setup.name.trim() || !setup.description.trim()}
+                    className="px-8 py-3 text-base font-brush tracking-widest"
+                  >
+                    {isGenerating ? "正在推演开篇…" : "踏入江湖"}
+                  </SealButton>
+                ) : (
+                  <SealButton
+                    onClick={goNext}
+                    disabled={!stepValid(activeStep.id)}
+                    className="px-6 py-2.5 font-brush tracking-widest"
+                  >
+                    下一步 →
+                  </SealButton>
+                )}
+              </div>
             </div>
-
-            <div>
-              <label className="block font-serif text-sm text-paper-300 mb-1">背景故事</label>
-              <textarea
-                value={setup.background}
-                onChange={(e) => handleInputChange("background", e.target.value)}
-                placeholder="简述你的出身和经历..."
-                rows={4}
-                className="w-full bg-ink-900/50 border border-paper-400/20 rounded px-3 py-2 font-serif text-paper-100 placeholder-paper-400/30 focus:outline-none focus:border-gold-400/40 resize-none"
-                maxLength={500}
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="mt-4 p-3 bg-cinnabar-500/10 border border-cinnabar-500/30 rounded font-serif text-sm text-cinnabar-400">
-              {error}
-            </div>
-          )}
-
-          <div className="mt-8 text-center">
-            <SealButton
-              onClick={handleStart}
-              disabled={!isValid || isGenerating}
-              variant="seal"
-              className="px-8 py-3 text-base"
-            >
-              {isGenerating ? "正在开启修真之路..." : "踏入江湖"}
-            </SealButton>
-          </div>
-        </ScrollCard>
+          </section>
+        </div>
       </div>
+
+      {/* 整段开局：贴一大段自述，直接交给推演写下开篇 */}
+      {showPaste && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-ink-900/80 backdrop-blur-sm">
+          <div className="paper-sheet rounded-lg p-5 sm:p-6 w-full max-w-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-brush text-xl ps-strong tracking-widest">整段开局</h3>
+                <p className="font-serif text-xs ps-muted mt-1 leading-relaxed">
+                  把你想好的开局整段贴进来——姓名、境界、宗门、身世、灵根、随身之物，写多写少都无妨。
+                  这一段会原样作为开篇的依据，不加拆解；凡未写到的，由推演自行补白。
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPaste(false)}
+                className="shrink-0 w-7 h-7 flex items-center justify-center rounded ps-faint hover:ps-accent transition"
+                title="合上"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              rows={11}
+              placeholder={
+                "例如：\n我叫沈听雪，江湖上唤作雪中孤鸿，是个女子。\n出身江南听雨岛，拜在外门，如今炼气后期。\n生性外冷内热，遇事先谋后动。\n随身只带一柄旧剑与半枚残玉，剑是师父留下的……"
+              }
+              className="input-paper px-3 py-2 resize-none w-full font-serif text-sm leading-relaxed"
+              style={{ fontFamily: '"Noto Serif SC", serif' }}
+            />
+
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-serif text-xs ps-faint">
+                这一段会原样交给推演，不再拆栏；凡未写到的，由它补白。
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowPaste(false)}
+                  className="btn-paper px-4 py-2 rounded font-serif text-sm"
+                >
+                  取消
+                </button>
+                <SealButton
+                  onClick={startWithPaste}
+                  disabled={!pasteText.trim() || isGenerating}
+                  className="px-6 py-2.5 font-brush tracking-widest"
+                >
+                  {isGenerating ? "正在推演…" : "以此开局"}
+                </SealButton>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 开局推演时的等待页 */}
+      {isGenerating && <OpeningLoading />}
     </div>
   );
+
+  /** 已完成步骤在卷面上显示的一行摘要 */
+  function renderSummary(id: StepId): string {
+    if (id === "api") return "接口已接通";
+    if (id === "name") {
+      return `${setup.name.trim()} · ${setup.title.trim() || "无名之辈"} · ${
+        setup.gender === "male" ? "男" : "女"
+      }`;
+    }
+    if (id === "realm") return setup.realm;
+    if (id === "sect") return `${setup.sectName.trim() || "散修"} · ${setup.position}`;
+    if (id === "self") return setup.description.trim();
+    return "";
+  }
+
+  function renderApiStep() {
+    return (
+      <div className="space-y-4">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          本作的推演依赖大语言模型。请先填入接口密钥，之后的所有剧情都由它与你共同推演。
+        </p>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {API_PRESETS.map((p) => {
+            const active = apiDraft.baseUrl === p.baseUrl;
+            return (
+              <button
+                key={p.label}
+                onClick={() => applyApiPreset(p)}
+                className={cn(
+                  "px-3 py-2 rounded text-left border-2 transition-all",
+                  active
+                    ? "border-cinnabar bg-cinnabar"
+                    : "border-ink-medium hover:border-cinnabar",
+                )}
+                title={p.note}
+              >
+                <div className={cn("font-brush text-sm tracking-wider", active ? "ps-accent" : "ps-body")}>
+                  {p.label}
+                </div>
+                <div className="font-serif text-xs ps-muted mt-0.5 leading-tight">{p.note}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">Base URL</span>
+            <input
+              type="text"
+              value={apiDraft.baseUrl}
+              onChange={(e) => setApiDraft((d) => ({ ...d, baseUrl: e.target.value }))}
+              placeholder="https://api.deepseek.com/v1"
+              className="input-paper px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">API Key</span>
+            <span className="relative block">
+              <input
+                type={showApiKey ? "text" : "password"}
+                value={apiDraft.apiKey}
+                onChange={(e) => setApiDraft((d) => ({ ...d, apiKey: e.target.value }))}
+                placeholder="sk-..."
+                className="input-paper px-3 py-2 text-sm pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center ps-muted hover:ps-accent transition"
+              >
+                {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </span>
+          </label>
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">Flash 模型（判定与压缩）</span>
+            <input
+              type="text"
+              value={apiDraft.flashModel}
+              onChange={(e) => setApiDraft((d) => ({ ...d, flashModel: e.target.value }))}
+              placeholder="deepseek-chat"
+              className="input-paper px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">Pro 模型（叙事生成）</span>
+            <input
+              type="text"
+              value={apiDraft.proModel}
+              onChange={(e) => setApiDraft((d) => ({ ...d, proModel: e.target.value }))}
+              placeholder="deepseek-reasoner"
+              className="input-paper px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+
+        <button
+          type="button"
+          onClick={saveApiSettings}
+          className="btn-paper px-5 py-2 rounded font-serif text-sm"
+        >
+          保存并继续
+        </button>
+      </div>
+    );
+  }
+
+  function renderNameStep() {
+    return (
+      <div className="space-y-5">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          名者，身之始也。先定下你的姓名与称号，这将是江湖中人称呼你的方式。
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">姓名 *</span>
+            <input
+              type="text"
+              value={setup.name}
+              onChange={(e) => change("name", e.target.value)}
+              placeholder="如：墨尘"
+              maxLength={20}
+              className="input-paper px-3 py-2"
+            />
+          </label>
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">称号</span>
+            <input
+              type="text"
+              value={setup.title}
+              onChange={(e) => change("title", e.target.value)}
+              placeholder="如：青衫客"
+              maxLength={20}
+              className="input-paper px-3 py-2"
+            />
+          </label>
+        </div>
+
+        <div>
+          <span className="block font-serif text-xs ps-muted mb-2">性别</span>
+          <div className="flex gap-2">
+            {([
+              { value: "male", label: "男" },
+              { value: "female", label: "女" },
+            ] as const).map((g) => (
+              <button
+                key={g.value}
+                onClick={() => change("gender", g.value)}
+                className={cn(
+                  "px-6 py-2 rounded font-serif text-sm border-2 transition-colors",
+                  setup.gender === g.value
+                    ? "border-cinnabar bg-cinnabar ps-accent"
+                    : "border-ink-medium ps-body hover:border-cinnabar",
+                )}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRealmStep() {
+    return (
+      <div className="space-y-5">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          境者，器之量也。你从何处起步，决定了这一路要走多远。
+        </p>
+
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+          {REALMS.map((r) => {
+            const active = setup.realm === r;
+            return (
+              <button
+                key={r}
+                onClick={() => change("realm", r)}
+                className={cn(
+                  "py-2.5 rounded font-brush text-sm tracking-wider border transition-colors",
+                  active
+                    ? "border-[#a83232]/60 bg-[rgba(168,50,50,0.08)] ps-accent"
+                    : "border-[rgba(70,52,28,0.25)] ps-body hover:border-[#a83232]/40",
+                )}
+              >
+                {r}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-4 py-3 rounded bg-[rgba(36,31,26,0.05)] border border-[rgba(36,31,26,0.1)]">
+          <span className="font-serif text-sm ps-body">
+            <span className="ps-accent font-brush tracking-wider">{setup.realm}初期</span>
+            <span className="ps-muted"> — {REALM_NOTES[setup.realm]}</span>
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  function renderSectStep() {
+    return (
+      <div className="space-y-5">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          宗者，道之枢也。留下宗门与职位，若一时未有归属，填「散修」即可。
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">宗门</span>
+            <input
+              type="text"
+              value={setup.sectName}
+              onChange={(e) => change("sectName", e.target.value)}
+              placeholder="如：青云宗，留空则为散修"
+              maxLength={20}
+              className="input-paper px-3 py-2"
+            />
+          </label>
+          <label className="block">
+            <span className="block font-serif text-xs ps-muted mb-1">职位</span>
+            <select
+              value={setup.position}
+              onChange={(e) => change("position", e.target.value)}
+              className="input-paper px-3 py-2"
+            >
+              {SECT_POSITIONS.map((pos) => (
+                <option key={pos} value={pos}>
+                  {pos}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+    );
+  }
+
+  function renderSelfStep() {
+    return (
+      <div className="space-y-5">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          这一段会直接交给推演引擎，用来决定你的灵根、经脉、初始功法与随身之物。写得越具体，开篇越贴合你的设想。
+        </p>
+
+        <label className="block">
+          <span className="block font-serif text-xs ps-muted mb-1">人物简介 *</span>
+          <textarea
+            value={setup.description}
+            onChange={(e) => change("description", e.target.value)}
+            placeholder="如：身负冰火双灵根的散修，左眉有一道旧疤，随身只带半枚残玉。"
+            rows={3}
+            maxLength={200}
+            className="input-paper px-3 py-2 resize-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="block font-serif text-xs ps-muted mb-1">性格特点</span>
+          <textarea
+            value={setup.personality}
+            onChange={(e) => change("personality", e.target.value)}
+            placeholder="如：外冷内热，遇事先谋后动，重诺。"
+            rows={2}
+            maxLength={100}
+            className="input-paper px-3 py-2 resize-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="block font-serif text-xs ps-muted mb-1">背景故事</span>
+          <textarea
+            value={setup.background}
+            onChange={(e) => change("background", e.target.value)}
+            placeholder="如：自幼被青云宗收养，不知父母来历。"
+            rows={3}
+            maxLength={500}
+            className="input-paper px-3 py-2 resize-none"
+          />
+        </label>
+      </div>
+    );
+  }
+
+  function renderSealStep() {
+    // 每一行都标出它归哪一步，点「改」便跳去那一步单独修改
+    const rows: { k: string; v: string; step: StepId }[] = [
+      { k: "姓名", v: setup.name.trim(), step: "name" },
+      { k: "称号", v: setup.title.trim() || "无名之辈", step: "name" },
+      { k: "性别", v: setup.gender === "male" ? "男" : "女", step: "name" },
+      { k: "境界", v: `${setup.realm}初期`, step: "realm" },
+      { k: "宗门", v: `${setup.sectName.trim() || "散修"} · ${setup.position}`, step: "sect" },
+      { k: "人物简介", v: setup.description.trim(), step: "self" },
+    ];
+    if (setup.personality.trim()) rows.push({ k: "性格特点", v: setup.personality.trim(), step: "self" });
+    if (setup.background.trim()) rows.push({ k: "背景故事", v: setup.background.trim(), step: "self" });
+
+    return (
+      <div className="space-y-5">
+        <p className="font-serif text-sm ps-body leading-relaxed">
+          确认无误后落印。推演引擎将据此为你生成开篇：灵根、经脉、功法、随身之物、师门与相识之人都会一并成形。
+          <span className="ps-muted">　哪一项要改，点它右侧的「改」跳到那一步便是。</span>
+        </p>
+
+        <div className="rounded border border-[rgba(36,31,26,0.16)] divide-y divide-[rgba(36,31,26,0.1)]">
+          {rows.map((r) => {
+            const at = steps.findIndex((s) => s.id === r.step);
+            return (
+              <div key={r.k} className="grid grid-cols-[4.5rem_1fr_2rem] gap-4 px-4 py-2.5 items-center">
+                <span className="font-serif text-xs ps-muted pt-0.5">{r.k}</span>
+                <span className="font-serif text-sm ps-strong">{r.v}</span>
+                {at >= 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => goTo(at)}
+                    title={`去「${steps[at].label}」改这一项`}
+                    className="font-serif text-xs justify-self-end ps-faint hover:ps-accent transition"
+                  >
+                    改
+                  </button>
+                ) : (
+                  <span />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 }

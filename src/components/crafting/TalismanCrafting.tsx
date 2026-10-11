@@ -207,7 +207,7 @@ export function TalismanCrafting() {
                 ))}
               </div>
               {element && (
-                <p className="font-serif text-[10px] text-paper-400/50 mt-1">
+                <p className="font-serif text-xs text-paper-400/50 mt-1">
                   {ELEMENTS.find(e => e.value === element)?.desc}
                 </p>
               )}
@@ -232,7 +232,7 @@ export function TalismanCrafting() {
                 ))}
               </div>
               {action && (
-                <p className="font-serif text-[10px] text-paper-400/50 mt-1">
+                <p className="font-serif text-xs text-paper-400/50 mt-1">
                   {ACTIONS.find(a => a.value === action)?.desc}
                 </p>
               )}
@@ -247,7 +247,7 @@ export function TalismanCrafting() {
                     onClick={() => handleToggleModifier(mod.id)}
                     disabled={isModifierDisabled(mod.id)}
                     className={cn(
-                      "w-full px-3 py-1.5 rounded text-[11px] font-serif border transition-all flex items-center justify-between",
+                      "w-full px-3 py-1.5 rounded text-xs font-serif border transition-all flex items-center justify-between",
                       modifiers.includes(mod.id)
                         ? "bg-jade-500/10 border-jade-400/30 text-jade-300"
                         : isModifierDisabled(mod.id)
@@ -258,7 +258,7 @@ export function TalismanCrafting() {
                     <span>{mod.name} · {mod.effect}</span>
                     {mod.mpCost !== 0 && (
                       <span className={cn(
-                        "text-[9px]",
+                        "text-xs",
                         mod.mpCost > 0 ? "text-cinnabar-400" : "text-jade-400"
                       )}>
                         {mod.mpCost > 0 ? `+${mod.mpCost}灵力` : `${mod.mpCost}灵力`}
@@ -267,7 +267,7 @@ export function TalismanCrafting() {
                   </button>
                 ))}
               </div>
-              <p className="font-serif text-[10px] text-paper-400/40 mt-1">
+              <p className="font-serif text-xs text-paper-400/40 mt-1">
                 已选 {modifiers.length}/2 个词条
               </p>
             </div>
@@ -287,9 +287,9 @@ export function TalismanCrafting() {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-brush text-sm text-paper-200">{preset.name}</span>
-                  <span className="font-number text-[10px] text-paper-400/60">{preset.grade}</span>
+                  <span className="font-number text-xs text-paper-400/60">{preset.grade}</span>
                 </div>
-                <p className="font-serif text-[10px] text-paper-400/50 line-clamp-2">{preset.desc}</p>
+                <p className="font-serif text-xs text-paper-400/50 line-clamp-2">{preset.desc}</p>
               </button>
             ))}
           </div>
@@ -308,12 +308,12 @@ export function TalismanCrafting() {
       <div className="col-span-7">
         <ScrollCard title="画符台" subtitle="凝神静气，笔走龙蛇">
           <div className="flex justify-center mb-4">
-            <div className="relative w-32 h-40 bg-gradient-to-b from-paper-200 to-paper-300 rounded shadow-lg flex items-center justify-center transform rotate-1">
+            <div className="relative w-32 h-40 bg-gradient-to-b from-paper-aged to-paper-old rounded shadow-lg flex items-center justify-center transform rotate-1">
               <div className="absolute inset-2 border border-cinnabar-500/30 rounded" />
               <span className="font-brush text-5xl text-cinnabar-500">
                 {element || "符"}
               </span>
-              <div className="absolute -top-2 -right-2 w-6 h-6 red-seal rounded-sm text-[10px]">
+              <div className="absolute -top-2 -right-2 w-6 h-6 red-seal rounded-sm text-xs">
                 符
               </div>
             </div>
@@ -376,7 +376,7 @@ export function TalismanCrafting() {
               {selectedModifiers.map((mod) => (
                 <span
                   key={mod.id}
-                  className="px-2 py-0.5 rounded text-[10px] font-serif bg-jade-500/10 border border-jade-400/20 text-jade-300"
+                  className="px-2 py-0.5 rounded text-xs font-serif bg-jade-500/10 border border-jade-400/20 text-jade-300"
                 >
                   {mod.name} · {mod.effect}
                 </span>

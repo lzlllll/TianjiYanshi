@@ -5,6 +5,12 @@
 @tailwind utilities;
 
 :root {
+  /* 仙灵三色：青蓝灵气 / 紫府法阵 / 流金仙韵 */
+  --aura-cyan: 130, 195, 210;
+  --aura-purple: 168, 135, 205;
+  --aura-gold: 230, 185, 115;
+  --cinnabar-bright: 220, 85, 85;
+
   font-family: "Noto Serif SC", "STSong", serif;
   line-height: 1.6;
   font-weight: 400;
@@ -30,11 +36,37 @@ body {
   background-color: #0f0d0a;
 }
 
-/* 水墨远山背景层 */
+/* 主屏四件套：顶栏 / 书脊导航 / 底部状态栏 / 地图，
+   非数字文字统一为黑色；数值走 .font-number、图标保留原色 */
+.mainui-black :not(.font-number):not([class*="lucide"]) {
+  color: #000;
+}
+
+/* 所有按钮的文字统一为黑色；按钮内的图标保留原色。
+   开局界面是深底朱墨屏，自成一套配色，不在此列 */
+button:not(.start-screen *),
+button *:not([class*="lucide"]):not(.start-screen *) {
+  color: #000 !important;
+}
+
+/* 地图上的图标与地名文字：黑字配白色描边，压在任意底图上都读得清 */
+.map-labels * {
+  text-shadow:
+    -1px -1px 0 #fff,
+    1px -1px 0 #fff,
+    -1px 1px 0 #fff,
+    1px 1px 0 #fff,
+    0 0 3px rgba(255, 255, 255, 0.9),
+    0 2px 3px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* 水墨远山背景层，叠上幽幽灵气 */
 .ink-bg {
   background:
+    radial-gradient(ellipse 140% 100% at 50% 118%, rgba(var(--aura-purple), 0.1) 0%, transparent 55%),
+    radial-gradient(ellipse 120% 90% at 14% 8%, rgba(var(--aura-cyan), 0.07) 0%, transparent 50%),
+    radial-gradient(ellipse 110% 80% at 86% 14%, rgba(var(--cinnabar-bright), 0.05) 0%, transparent 45%),
     radial-gradient(ellipse at 20% 110%, rgba(58, 74, 74, 0.25) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 0%, rgba(168, 50, 50, 0.08) 0%, transparent 45%),
     radial-gradient(ellipse at 50% 50%, rgba(40, 32, 24, 0.6) 0%, #0f0d0a 70%),
     #0f0d0a;
 }
@@ -46,26 +78,27 @@ body {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.91 0 0 0 0 0.86 0 0 0 0 0.75 0 0 0 0.04 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* 卷轴卡片样式 */
+/* 卷轴卡片样式：弹窗沿用它作容器，统一为线装古籍的浅色书页 */
 .scroll-card {
-  background:
-    linear-gradient(180deg, rgba(245, 236, 214, 0.04) 0%, rgba(20, 16, 12, 0.5) 100%),
-    rgba(26, 22, 18, 0.7);
-  border: 1px solid rgba(196, 176, 136, 0.18);
+  background: var(--paper-fresh);
+  border: 1px solid rgba(139, 115, 85, 0.35);
   box-shadow:
-    0 0 0 1px rgba(60, 40, 20, 0.3),
-    0 8px 32px rgba(0, 0, 0, 0.5),
-    inset 0 0 60px rgba(120, 90, 50, 0.08);
-  backdrop-filter: blur(2px);
+    0 2px 8px rgba(42, 31, 18, 0.12),
+    0 8px 32px rgba(42, 31, 18, 0.14);
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
 }
 
 .scroll-card:hover {
-  border-color: rgba(201, 169, 97, 0.4);
+  border-color: rgba(139, 115, 85, 0.55);
+  box-shadow:
+    0 4px 16px rgba(42, 31, 18, 0.16),
+    0 12px 40px rgba(42, 31, 18, 0.16);
 }
 
 /* 印章按钮 */
 .seal-btn {
   position: relative;
+  overflow: hidden;
   background: linear-gradient(180deg, #b83838 0%, #8a2828 100%);
   border: 1px solid rgba(232, 220, 192, 0.3);
   color: #f5ecd6;
@@ -74,8 +107,22 @@ body {
   box-shadow:
     0 2px 0 rgba(0, 0, 0, 0.4),
     0 4px 12px rgba(168, 50, 50, 0.35),
+    0 0 20px rgba(var(--cinnabar-bright), 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  transition: all 0.2s ease;
+  transition: all 0.25s ease;
+}
+
+.seal-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 55%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  transform: translateX(-170%) skewX(-18deg);
+  transition: transform 0.6s ease;
+  pointer-events: none;
 }
 
 .seal-btn:hover:not(:disabled) {
@@ -83,7 +130,12 @@ body {
   box-shadow:
     0 4px 0 rgba(0, 0, 0, 0.4),
     0 8px 20px rgba(168, 50, 50, 0.5),
+    0 0 26px rgba(var(--cinnabar-bright), 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.seal-btn:hover:not(:disabled)::after {
+  transform: translateX(280%) skewX(-18deg);
 }
 
 .seal-btn:active:not(:disabled) {
@@ -102,17 +154,18 @@ body {
 
 /* 副按钮 - 描边款 */
 .ghost-btn {
-  background: rgba(232, 220, 192, 0.05);
-  border: 1px solid rgba(196, 176, 136, 0.3);
-  color: #d9c9a3;
+  background: rgba(232, 220, 192, 0.15);
+  border: 2px solid rgba(196, 176, 136, 0.6);
+  color: #e8dcc0;
   font-family: "Noto Serif SC", serif;
-  transition: all 0.2s ease;
+  transition: all 0.25s ease;
 }
 
 .ghost-btn:hover:not(:disabled) {
-  background: rgba(201, 169, 97, 0.12);
-  border-color: rgba(201, 169, 97, 0.6);
-  color: #e8dcc0;
+  background: rgba(var(--aura-cyan), 0.25);
+  border-color: rgba(var(--aura-cyan), 0.8);
+  color: #fefbf2;
+  box-shadow: 0 0 18px rgba(var(--aura-cyan), 0.3);
 }
 
 .ghost-btn:disabled {
@@ -131,12 +184,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(201, 169, 97, 0.25);
+  background: linear-gradient(180deg, rgba(201, 169, 97, 0.35), rgba(var(--aura-cyan), 0.3));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(201, 169, 97, 0.45);
+  background: linear-gradient(180deg, rgba(201, 169, 97, 0.6), rgba(var(--aura-cyan), 0.5));
 }
 
 /* 印章红章效果 */
@@ -144,13 +197,26 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #a83232;
+  background: radial-gradient(circle at 30% 25%, #c84545 0%, #a83232 60%, #6e1f1f 100%);
   color: #f5ecd6;
   font-family: "Ma Shan Zheng", serif;
   border: 2px solid #6e1f1f;
-  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3);
+  box-shadow:
+    inset 0 0 4px rgba(0, 0, 0, 0.3),
+    0 0 16px rgba(var(--cinnabar-bright), 0.35);
   text-align: center;
   line-height: 1;
+  animation: redSealPulse 4s ease-in-out infinite;
+}
+
+@keyframes redSealPulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3), 0 0 14px rgba(var(--cinnabar-bright), 0.3);
+  }
+  50% {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.3), 0 0 24px rgba(var(--cinnabar-bright), 0.55);
+  }
 }
 
 /* 云纹分割线 */
@@ -164,12 +230,24 @@ body {
     rgba(201, 169, 97, 0.3) 80%,
     transparent 100%
   );
+  background-size: 200% 100%;
+  animation: cloudFlow 6s linear infinite;
+}
+
+@keyframes cloudFlow {
+  0% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
 }
 
 /* 选中态高亮 */
 .nav-active {
   background: linear-gradient(90deg, rgba(168, 50, 50, 0.25) 0%, transparent 100%);
   border-left: 3px solid #c9a961;
+  box-shadow: inset 0 0 24px rgba(var(--aura-cyan), 0.1);
 }
 
 /* 墨色输入框 */
@@ -192,8 +270,8 @@ body {
 
 .input-ink:focus {
   border-color: rgba(201, 169, 97, 0.6);
-  background: rgba(15, 13, 10, 0.8);
-  box-shadow: 0 0 0 2px rgba(201, 169, 97, 0.1);
+  background: rgba(15, 13, 10, 0.85);
+  box-shadow: 0 0 0 2px rgba(201, 169, 97, 0.1), 0 0 18px rgba(var(--aura-cyan), 0.12);
 }
 
 /* 输入与滑块 */
@@ -224,13 +302,227 @@ input[type="range"].fire-slider::-webkit-slider-thumb {
   color: #f5ecd6;
 }
 
+/* ============ 修仙主题增强 ============ */
+
 /* 通用工具类 */
 .text-shadow-ink {
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+
+.text-glow-spiritual {
+  text-shadow:
+    0 0 10px rgba(var(--aura-cyan), 0.5),
+    0 0 20px rgba(var(--aura-cyan), 0.3),
+    0 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.text-glow-formation {
+  text-shadow:
+    0 0 10px rgba(var(--aura-purple), 0.6),
+    0 0 20px rgba(var(--aura-purple), 0.3),
+    0 2px 4px rgba(0, 0, 0, 0.8);
 }
 
 .vertical-text {
   writing-mode: vertical-rl;
   text-orientation: upright;
   letter-spacing: 0.2em;
+}
+
+/* 灵气描边 */
+.spiritual-border {
+  border: 1px solid rgba(var(--aura-cyan), 0.25);
+  box-shadow:
+    0 0 20px rgba(var(--aura-cyan), 0.1),
+    inset 0 0 20px rgba(var(--aura-cyan), 0.05);
+}
+
+/* 法阵光晕 */
+.formation-glow {
+  box-shadow:
+    0 0 30px rgba(var(--aura-purple), 0.3),
+    0 0 50px rgba(var(--aura-cyan), 0.2),
+    inset 0 0 30px rgba(var(--aura-purple), 0.1);
+}
+
+/* 玉牌面板 */
+.jade-tablet {
+  background:
+    linear-gradient(160deg, rgba(63, 107, 88, 0.18) 0%, rgba(26, 22, 18, 0.85) 60%),
+    rgba(26, 22, 18, 0.75);
+  border: 1px solid rgba(90, 138, 114, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(63, 107, 88, 0.2),
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 0 60px rgba(90, 138, 114, 0.1);
+  backdrop-filter: blur(2px);
+}
+
+/* 灵气粒子效果层 */
+.spiritual-particles {
+  position: relative;
+}
+
+.spiritual-particles::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 15% 25%, rgba(var(--aura-cyan), 0.5) 0%, transparent 2%),
+    radial-gradient(circle at 85% 65%, rgba(var(--aura-purple), 0.45) 0%, transparent 2%),
+    radial-gradient(circle at 45% 85%, rgba(var(--aura-gold), 0.4) 0%, transparent 1.5%),
+    radial-gradient(circle at 70% 15%, rgba(var(--aura-cyan), 0.4) 0%, transparent 2%),
+    radial-gradient(circle at 30% 60%, rgba(var(--aura-gold), 0.35) 0%, transparent 1.5%);
+  background-size: 100% 100%;
+  animation: particleFloat 18s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.24;
+  z-index: 0;
+}
+
+@keyframes particleFloat {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(6px, -12px) scale(1.05);
+  }
+  50% {
+    transform: translate(-6px, 6px) scale(0.98);
+  }
+  75% {
+    transform: translate(12px, -6px) scale(1.03);
+  }
+}
+
+/* 法阵流动边框 */
+.formation-border {
+  position: relative;
+}
+
+.formation-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    45deg,
+    rgba(var(--aura-cyan), 0.35),
+    rgba(var(--aura-purple), 0.45),
+    rgba(var(--aura-gold), 0.35),
+    rgba(var(--aura-cyan), 0.35)
+  );
+  background-size: 300% 300%;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: formationBorder 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes formationBorder {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* 符文微光 */
+.rune-shimmer {
+  animation: runeShimmer 3s ease-in-out infinite;
+}
+
+@keyframes runeShimmer {
+  0%,
+  100% {
+    opacity: 0.7;
+    filter: brightness(1) drop-shadow(0 0 8px rgba(var(--aura-cyan), 0.3));
+  }
+  50% {
+    opacity: 1;
+    filter: brightness(1.3) drop-shadow(0 0 15px rgba(var(--aura-cyan), 0.6));
+  }
+}
+
+/* 尊重系统的减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .spiritual-particles::before,
+  .formation-border::before,
+  .rune-shimmer,
+  .red-seal,
+  .cloud-divider {
+    animation: none;
+  }
+}
+
+/* ===== 开局卷面：立名那一屏的纸面主题 ===== */
+.paper-sheet {
+  background: #FEFBF2;
+  border: 1px solid rgba(139, 115, 85, 0.28);
+  box-shadow:
+    0 2px 10px rgba(42, 31, 18, 0.1),
+    0 10px 34px rgba(42, 31, 18, 0.12);
+  color: #2A1F12;
+}
+
+/* 卷面里的分隔线颜色 */
+.ps-rule {
+  border-color: rgba(36, 31, 26, 0.16);
+}
+
+/* 卷面上的文字层次 */
+.ps-accent {
+  color: #A8261F;
+}
+.ps-body {
+  color: #2A1F12;
+}
+.ps-strong {
+  color: #1A1410;
+  font-weight: 600;
+}
+.ps-muted {
+  color: #6B5644;
+}
+.ps-faint {
+  color: #8B7355;
+}
+
+/* 纸上输入框 */
+.input-paper {
+  width: 100%;
+  background: #F8F3E8;
+  border: 2px solid rgba(139, 115, 85, 0.38);
+  border-radius: 0.375rem;
+  color: #2A1F12;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.input-paper:focus {
+  border-color: #C9A227;
+  box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.18);
+}
+.input-paper::placeholder {
+  color: #A9977A;
+}
+
+/* 纸面次要按钮 */
+.btn-paper {
+  background: #F8F3E8;
+  border: 2px solid rgba(139, 115, 85, 0.38);
+  color: #2A1F12;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.btn-paper:hover {
+  background: #F0E5D1;
+  border-color: rgba(139, 115, 85, 0.6);
+}
+.btn-paper:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

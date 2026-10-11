@@ -1,57 +1,93 @@
 import type {
   Player,
-  Technique,
-  InventoryItem,
-  SpiritStones,
-  TalismanRecipe,
-  AlchemyRecipe,
-  Sect,
-  Relation,
   RealmTier,
-  HeartScore,
   HeartModifier,
   BuffTargetStat,
 } from "./types";
 
+/**
+ * 境界表。表上某一档的 cultivationNeeded，是「由上一档跨到这一档」所需的修为，
+ * 即涨到这一档的数额便算突破，多出来的修为带进下一档。
+ *
+ * 数额的底子：修炼每时辰得 1 点进度，每日专心四个时辰，一昼夜四点。
+ * 以此为准，炼气初期到炼气圆满合计 4320 点，正是一千零八十日、三年整；
+ * 引气期是凡人起步的短程，合 760 点；筑基之后每上一层，总量约为此前的四倍。
+ * 后续各境（金丹、元婴、化神、合体、渡劫、大乘）都照这个倍数排下来。
+ */
 export const REALMS: RealmTier[] = [
+  // 引气：合计 760
   { name: "引气", stage: "初期", cultivationNeeded: 100 },
-  { name: "引气", stage: "中期", cultivationNeeded: 300 },
-  { name: "引气", stage: "后期", cultivationNeeded: 600 },
-  { name: "引气", stage: "圆满", cultivationNeeded: 1000 },
-  { name: "炼气", stage: "初期", cultivationNeeded: 3000 },
-  { name: "炼气", stage: "中期", cultivationNeeded: 8000 },
-  { name: "炼气", stage: "后期", cultivationNeeded: 15000 },
-  { name: "炼气", stage: "圆满", cultivationNeeded: 25000 },
-  { name: "筑基", stage: "初期", cultivationNeeded: 60000 },
-  { name: "筑基", stage: "中期", cultivationNeeded: 150000 },
-  { name: "筑基", stage: "后期", cultivationNeeded: 350000 },
-  { name: "筑基", stage: "圆满", cultivationNeeded: 600000 },
-  { name: "金丹", stage: "初期", cultivationNeeded: 1500000 },
-  { name: "金丹", stage: "中期", cultivationNeeded: 4000000 },
-  { name: "金丹", stage: "后期", cultivationNeeded: 8000000 },
-  { name: "金丹", stage: "圆满", cultivationNeeded: 15000000 },
-  { name: "元婴", stage: "初期", cultivationNeeded: 40000000 },
-  { name: "元婴", stage: "中期", cultivationNeeded: 100000000 },
-  { name: "元婴", stage: "后期", cultivationNeeded: 250000000 },
-  { name: "元婴", stage: "圆满", cultivationNeeded: 500000000 },
-  { name: "化神", stage: "初期", cultivationNeeded: 1200000000 },
-  { name: "化神", stage: "中期", cultivationNeeded: 3000000000 },
-  { name: "化神", stage: "后期", cultivationNeeded: 8000000000 },
-  { name: "化神", stage: "圆满", cultivationNeeded: 20000000000 },
-  { name: "合体", stage: "初期", cultivationNeeded: 50000000000 },
-  { name: "合体", stage: "中期", cultivationNeeded: 150000000000 },
-  { name: "合体", stage: "后期", cultivationNeeded: 500000000000 },
-  { name: "合体", stage: "圆满", cultivationNeeded: 1500000000000 },
-  { name: "渡劫", stage: "初期", cultivationNeeded: 5000000000000 },
-  { name: "渡劫", stage: "中期", cultivationNeeded: 20000000000000 },
-  { name: "渡劫", stage: "后期", cultivationNeeded: 100000000000000 },
-  { name: "渡劫", stage: "圆满", cultivationNeeded: 500000000000000 },
-  { name: "大乘", stage: "初期", cultivationNeeded: 2000000000000000 },
-  { name: "大乘", stage: "中期", cultivationNeeded: 10000000000000000 },
-  { name: "大乘", stage: "后期", cultivationNeeded: 50000000000000000 },
-  { name: "大乘", stage: "圆满", cultivationNeeded: 200000000000000000 },
+  { name: "引气", stage: "中期", cultivationNeeded: 120 },
+  { name: "引气", stage: "后期", cultivationNeeded: 240 },
+  { name: "引气", stage: "圆满", cultivationNeeded: 400 },
+  // 炼气：合计 4320，三年
+  { name: "炼气", stage: "初期", cultivationNeeded: 700 },
+  { name: "炼气", stage: "中期", cultivationNeeded: 1000 },
+  { name: "炼气", stage: "后期", cultivationNeeded: 1400 },
+  { name: "炼气", stage: "圆满", cultivationNeeded: 1920 },
+  // 筑基：合计 18000
+  { name: "筑基", stage: "初期", cultivationNeeded: 3000 },
+  { name: "筑基", stage: "中期", cultivationNeeded: 4500 },
+  { name: "筑基", stage: "后期", cultivationNeeded: 5900 },
+  { name: "筑基", stage: "圆满", cultivationNeeded: 7600 },
+  // 金丹：合计 75000
+  { name: "金丹", stage: "初期", cultivationNeeded: 12000 },
+  { name: "金丹", stage: "中期", cultivationNeeded: 18000 },
+  { name: "金丹", stage: "后期", cultivationNeeded: 25000 },
+  { name: "金丹", stage: "圆满", cultivationNeeded: 32000 },
+  // 元婴：合计 313000
+  { name: "元婴", stage: "初期", cultivationNeeded: 50000 },
+  { name: "元婴", stage: "中期", cultivationNeeded: 78000 },
+  { name: "元婴", stage: "后期", cultivationNeeded: 103000 },
+  { name: "元婴", stage: "圆满", cultivationNeeded: 132000 },
+  // 化神：合计 1300000
+  { name: "化神", stage: "初期", cultivationNeeded: 200000 },
+  { name: "化神", stage: "中期", cultivationNeeded: 325000 },
+  { name: "化神", stage: "后期", cultivationNeeded: 429000 },
+  { name: "化神", stage: "圆满", cultivationNeeded: 546000 },
+  // 合体：合计 5400000
+  { name: "合体", stage: "初期", cultivationNeeded: 800000 },
+  { name: "合体", stage: "中期", cultivationNeeded: 1350000 },
+  { name: "合体", stage: "后期", cultivationNeeded: 1780000 },
+  { name: "合体", stage: "圆满", cultivationNeeded: 2270000 },
+  // 渡劫：合计 22500000
+  { name: "渡劫", stage: "初期", cultivationNeeded: 3300000 },
+  { name: "渡劫", stage: "中期", cultivationNeeded: 5600000 },
+  { name: "渡劫", stage: "后期", cultivationNeeded: 7400000 },
+  { name: "渡劫", stage: "圆满", cultivationNeeded: 9500000 },
+  // 大乘：合计 94000000
+  { name: "大乘", stage: "初期", cultivationNeeded: 13000000 },
+  { name: "大乘", stage: "中期", cultivationNeeded: 23500000 },
+  { name: "大乘", stage: "后期", cultivationNeeded: 31000000 },
+  { name: "大乘", stage: "圆满", cultivationNeeded: 39500000 },
   { name: "真仙", stage: "飞升", cultivationNeeded: 0 },
 ];
+
+/**
+ * 境界扁平表：大境界名 + 阶段，索引即 player.realmIndex。
+ * 提示词与数据解析都必须以此为准，否则高境界角色会被判成「未知」。
+ */
+export const REALM_NAMES: string[] = REALMS.map((r) => `${r.name}${r.stage}`);
+
+/**
+ * 神念传音的门槛：金丹期。
+ * 到了金丹，神识撑得起远距离的交谈，天各一方也能说得上话。
+ */
+export const TALK_MIN_REALM_INDEX = Math.max(0, REALMS.findIndex((r) => r.name === "金丹"));
+
+/** 到金丹了没有；到了便可不在一处交谈 */
+export function canConverse(realmIndex: number | undefined): boolean {
+  return Number(realmIndex) >= TALK_MIN_REALM_INDEX;
+}
+
+/**
+ * 能不能与这人交谈。
+ * 人在一处，随时可谈，不必讲境界；
+ * 不在一处，须到金丹以上，方能以神念传音。
+ */
+export function canTalkTo(realmIndex: number | undefined, samePlace: boolean): boolean {
+  return samePlace || canConverse(realmIndex);
+}
 
 export const DAO_PATHS: Record<string, { name: string; description: string }> = {
   sword: { name: "剑道真意", description: "剑修之道，以剑入道，一剑破万法" },
@@ -95,14 +131,14 @@ export const initialPlayer: Player = {
   realmIndex: 0,
   realmStage: 0,
   cultivation: 0,
-  lifespanCurrent: 0,
-  lifespanMax: 0,
-  hp: 0,
-  hpMax: 0,
-  mp: 0,
-  mpMax: 0,
-  spirit: 0,
-  spiritMax: 0,
+  lifespanCurrent: 100,
+  lifespanMax: 100,
+  hp: 100,
+  hpMax: 100,
+  mp: 50,
+  mpMax: 50,
+  spirit: 100,
+  spiritMax: 100,
   spiritRoots: [],
   stats: {
     vitality: 0,
@@ -134,7 +170,6 @@ export const HEART_STAT_DISPLAY: Record<string, string> = {
 
 export function generateHeartModifiers(trait: string, score: number): HeartModifier[] {
   if (!trait) return [];
-  const seed = trait.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
   const allStats: BuffTargetStat[] = [
     "vitality", "soul", "wisdom", "agility", "cultivation",
     "damage", "action", "karma", "attack", "defense",
@@ -142,10 +177,11 @@ export function generateHeartModifiers(trait: string, score: number): HeartModif
     "comprehension", "meridianRepair", "trading",
   ];
 
-  const rng = (n: number): number => ((seed * 1103515245 + 12345) >>> 0) % n;
-  const signedRng = (n: number): number => {
-    const v = rng(n * 2);
-    return v < n ? v - n : v - n;
+  // 线性同余，每次调用都推进种子并取高位，保证同一性格能掷出不同属性
+  let seed = trait.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) || 1;
+  const rng = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) >>> 0;
+    return (seed >>> 16) % n;
   };
 
   const count = 2 + rng(3);
@@ -162,63 +198,15 @@ export function generateHeartModifiers(trait: string, score: number): HeartModif
     const stat = allStats[statIndex];
     used.add(stat);
 
-    const value = Math.round((score / 100) * ((rng(26) - 5)));
+    // 心性只带来正向加成，强弱由评分决定；不匹配造成的减益在功法与修炼效率里单独结算
+    const value = Math.max(1, Math.round((score / 100) * (2 + rng(12))));
     const displayName = HEART_STAT_DISPLAY[stat] || stat;
     modifiers.push({
       stat,
-      value: value === 0 ? 3 : value,
-      description: value >= 0 ? `${displayName}加成` : `${displayName}降低`,
+      value,
+      description: `${displayName}加成`,
     });
   }
 
   return modifiers;
 }
-
-export const initialTechniques: Technique[] = [];
-
-export const initialInventory: InventoryItem[] = [];
-
-export const initialSpiritStones: SpiritStones = {
-  low: 0,
-  mid: 0,
-  high: 0,
-  supreme: 0,
-};
-
-export const initialTalismanRecipes: TalismanRecipe[] = [];
-
-export const initialAlchemyRecipes: AlchemyRecipe[] = [];
-
-export const initialSect: Sect = {
-  name: "",
-  level: 1,
-  reputation: 0,
-  leader: "",
-  elders: 0,
-  disciples: 0,
-  territory: "",
-  contribution: 0,
-  appearance: "",
-  reputationDesc: "",
-  surroundings: "",
-  positions: [],
-  tasks: [],
-  shop: [],
-  heritage: [],
-  resources: [],
-  management: {
-    industries: [],
-    activities: [],
-    halls: [],
-    treasury: {
-      spiritStones: 0,
-      materials: [],
-    },
-    consumption: {
-      dailyCost: 0,
-      recentConsumption: [],
-    },
-  },
-};
-
-export const initialRelations: Relation[] = [];

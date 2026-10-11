@@ -21,21 +21,21 @@ export function ProgressBar({
   return (
     <div
       className={cn(
-        "relative w-full bg-ink-900/80 rounded-sm border border-ink-600/50 overflow-hidden",
+        "relative w-full bg-paper-dark rounded-sm border-2 border-ink-lightest overflow-hidden",
         className,
       )}
       style={{ height }}
     >
       <div
         className={cn(
-          "h-full bg-gradient-to-r from-gold-600 to-gold-400 transition-all duration-500",
+          "h-full bg-gradient-to-r from-gold-dark to-gold transition-smooth",
           barClassName,
         )}
         style={{ width: `${pct}%` }}
       />
       {showText && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className="font-number text-[9px] text-paper-50 text-shadow-ink">
+          <span className="font-number text-xs text-ink-dark drop-shadow-sm">
             {value} / {max}
           </span>
         </div>

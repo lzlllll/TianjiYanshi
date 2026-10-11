@@ -1,0 +1,38 @@
+{
+  "id": "11",
+  "tiles": [
+    4, 2, 0, 0, 6, 1, 6, 6, 4, 4,
+    4, 2, 2, 0, 5, 1, 5, 6, 6, 4,
+    6, 2, 2, 2, 5, 1, 5, 5, 6, 6,
+    6, 2, 5, 2, 1, 5, 5, 5, 0, 0,
+    6, 2, 5, 1, 2, 2, 2, 2, 2, 2,
+    6, 2, 5, 1, 5, 5, 5, 5, 5, 2,
+    6, 2, 2, 1, 5, 5, 5, 5, 5, 2,
+    6, 6, 2, 1, 2, 2, 2, 2, 2, 2,
+    4, 6, 6, 6, 1, 0, 0, 0, 2, 2,
+    4, 6, 6, 6, 6, 1, 0, 0, 0, 0
+  ],
+  "districts": [
+    { "id": 1, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 2, "name": "", "nature": "大户住宅", "slots": 2 },
+    { "id": 3, "name": "", "nature": "坊市", "slots": 5 },
+    { "id": 4, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 5, "name": "", "nature": "大户住宅", "slots": 3 },
+    { "id": 6, "name": "", "nature": "匠人区", "slots": 4 },
+    { "id": 7, "name": "", "nature": "坊市", "slots": 6 },
+    { "id": 8, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 9, "name": "", "nature": "宗教场所", "slots": 2 },
+    { "id": 10, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 11, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 12, "name": "", "nature": "政府部门", "slots": 2 },
+    { "id": 13, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 14, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 15, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 16, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 17, "name": "", "nature": "坊市", "slots": 5 },
+    { "id": 18, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 19, "name": "", "nature": "平民住宅", "slots": 4 },
+    { "id": 20, "name": "", "nature": "平民住宅", "slots": 5 },
+    { "id": 21, "name": "", "nature": "匠人区", "slots": 5 }
+  ]
+}

@@ -5,6 +5,7 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
+import { ChangeNotice } from "@/components/ui/ChangeNotice";
 import { BattlePanel } from "@/components/battle/BattlePanel";
 import {
   Sparkles,
@@ -13,13 +14,28 @@ import {
   Settings as SettingsIcon,
   Loader2,
   Database,
-  Code,
   Copy,
   Check,
+  X,
 } from "lucide-react";
 
 interface StoryPanelProps {
   onOpenSettings: () => void;
+  /** 提供了就渲染关闭按钮；问道窗口用它关窗 */
+  onClose?: () => void;
+}
+
+function CloseButton({ onClose }: { onClose: () => void }) {
+  return (
+    <button
+      onClick={onClose}
+      aria-label="关闭问道窗口"
+      title="关闭（Esc）"
+      className="absolute top-4 right-4 z-20 w-8 h-8 rounded flex items-center justify-center bg-ink-900 border-2 border-paper-400 text-paper-200 hover:text-gold-400 hover:border-gold-500 transition"
+    >
+      <X size={16} />
+    </button>
+  );
 }
 
 const QUICK_DECISIONS = [
@@ -29,7 +45,7 @@ const QUICK_DECISIONS = [
   "探索后山秘境，寻找机缘",
 ];
 
-export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
+export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const conversation = useAIStore((s) => s.conversation);
   const settings = useAIStore((s) => s.settings);
   const runTurn = useAIStore((s) => s.runTurn);
@@ -38,7 +54,7 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
   const clearConversation = useAIStore((s) => s.clearConversation);
   const battle = useAIStore((s) => s.battle);
   const startBattle = useAIStore((s) => s.startBattle);
-  const log = useGameStore((s) => s.log);
+  const startSectWar = useAIStore((s) => s.startSectWar);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
 
   const quickDecisions = conversation.quickDecisions?.length
@@ -50,7 +66,10 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
 
   const [decision, setDecision] = useState("");
   const narrativeRef = useRef<HTMLDivElement>(null);
+  const decisionRef = useRef<HTMLTextAreaElement>(null);
   const isMountedRef = useRef(true);
+  /** 记录已经据此开过战的回合，避免压缩/重渲染时重复 startBattle 把战斗重置回第一回合 */
+  const battleTurnRef = useRef<string | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -60,29 +79,64 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
   }, []);
 
   useEffect(() => {
-    if (conversation.stage === "done") {
-      const lastTurn = conversation.turns[conversation.turns.length - 1];
-      if (lastTurn?.mode === "battle") {
-        const player = useGameStore.getState().player;
-        startBattle({
-          width: 10,
-          height: 10,
-          entities: [
-            {
-              id: "player",
-              name: player.name || "玩家",
-              type: "player",
-              position: { x: 5, y: 5 },
-              hp: player.hp,
-              maxHp: player.hpMax,
-              mp: player.mp,
-              maxMp: player.mpMax,
-            },
-          ],
-        });
-      }
+    if (conversation.stage !== "done") return;
+    const lastTurn = conversation.turns[conversation.turns.length - 1];
+    if (!lastTurn) return;
+    // 叙事挑起的宗门战另算一路：照对手宗门摆开阵势，攻方还要破它的护山大阵
+    const isSectWar = !!lastTurn.sectWar;
+    if (!isSectWar && lastTurn.mode !== "battle") return;
+    if (battleTurnRef.current === lastTurn.id) return;
+    battleTurnRef.current = lastTurn.id;
+
+    if (isSectWar && lastTurn.sectWar) {
+      startSectWar(lastTurn.sectWar);
+      return;
     }
-  }, [conversation.stage, startBattle]);
+
+    const player = useGameStore.getState().player;
+    // 同行的几位一并入阵，站在玩家左手边
+    const companions = useGameStore.getState().relations.filter((r) => r.traveling);
+    // 随身的灵兽也在阵中，贴着玩家站
+    const beast = useGameStore.getState().beast;
+    startBattle({
+      width: 10,
+      height: 10,
+      entities: [
+        {
+          id: "player",
+          name: player.name || "玩家",
+          type: "player",
+          position: { x: 5, y: 5 },
+          hp: player.hp,
+          maxHp: player.hpMax,
+          mp: player.mp,
+          maxMp: player.mpMax,
+        },
+        ...(beast
+          ? [
+              {
+                id: "beast",
+                name: beast.name,
+                type: "ally" as const,
+                position: { x: 6, y: 6 },
+                hp: beast.hp,
+                maxHp: beast.hpMax,
+              },
+            ]
+          : []),
+        ...companions.map((c, i) => ({
+          id: `ally-${c.id}`,
+          name: c.name,
+          type: "ally" as const,
+          position: { x: 4, y: 4 + i },
+          hp: c.stats?.hp,
+          maxHp: c.stats?.hpMax,
+          mp: c.stats?.mp,
+          maxMp: c.stats?.mpMax,
+        })),
+      ],
+    });
+  }, [conversation.stage, conversation.turns, startBattle, startSectWar]);
 
   const stage = conversation.stage;
   const isGenerating = stage === "flash" || stage === "pro";
@@ -91,10 +145,8 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
   const hasApiKey = !!settings.apiKey;
   const streamingNarrative = conversation.streamingNarrative ?? "";
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
-  const displayNarrative =
-    stage === "pro" && streamingNarrative
-      ? streamingNarrative
-      : lastTurn?.narrative ?? "";
+  const streaming = stage === "pro" && !!streamingNarrative;
+  const displayNarrative = streaming ? streamingNarrative : lastTurn?.narrative ?? "";
 
   useEffect(() => {
     if (narrativeRef.current) {
@@ -109,6 +161,12 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
     setDecision("");
   };
 
+  /** 选项只把文字填进输入栏，由玩家确认后再手动演化 */
+  const fillDecision = (text: string) => {
+    setDecision(text);
+    decisionRef.current?.focus();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -116,12 +174,19 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
     }
   };
 
-  if (battle.isActive) {
-    return <BattlePanel />;
+  // 分出胜负后战斗界面转为收尾，这一段也挂在问道窗里
+  if (battle.isActive || battle.aftermath) {
+    return (
+      <div className="relative h-full min-h-0">
+        {onClose && <CloseButton onClose={onClose} />}
+        <BattlePanel />
+      </div>
+    );
   }
 
   return (
-    <div className="paper-texture">
+    <div className="paper-texture spiritual-particles relative h-full flex flex-col min-h-0 p-6">
+      {onClose && <CloseButton onClose={onClose} />}
       <PanelTitle
         title="问道"
         poem="道可道，非常道；名可名，非常名。以心问天，以言演命。"
@@ -139,13 +204,13 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
         </div>
       )}
 
-      <div className="flex flex-col gap-4 h-[calc(100vh-120px)]">
+      <div className="flex flex-col gap-3 flex-1 min-h-0">
         {/* 叙事正文 */}
         <ScrollCard
           title="天机"
           subtitle="演万象，定一念"
           ornament={
-            <div className="flex items-center gap-2 text-[10px] font-serif text-paper-400/50">
+            <div className="flex items-center gap-2 text-xs font-serif text-paper-400">
               {turns.length > 0 && (
                 <>
                   <span className="flex items-center gap-1">
@@ -158,21 +223,28 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
               )}
             </div>
           }
-          className="flex-[3] min-h-0 flex flex-col"
+          className="flex-1 min-h-[45vh] overflow-hidden flex flex-col jade-tablet"
+          contentClassName="flex-1 min-h-0 flex flex-col"
         >
           <div
             ref={narrativeRef}
-            className="flex-1 overflow-y-auto pr-2"
+            className="flex-1 overflow-y-auto pr-2 min-h-0"
           >
             {turns.length === 0 && !streamingNarrative ? (
               <EmptyState />
             ) : (
-              <article className="font-serif text-lg text-paper-100 leading-loose tracking-wide whitespace-pre-wrap">
-                <NarrativeText text={displayNarrative} />
-                {stage === "pro" && streamingNarrative && (
-                  <span className="inline-block w-2 h-5 ml-0.5 bg-gold-400/80 animate-pulse align-middle" />
-                )}
-              </article>
+              <>
+                <article className="font-serif text-lg text-paper-100 leading-loose tracking-wide whitespace-pre-wrap">
+                  <NarrativeText text={displayNarrative} />
+                  {streaming && (
+                    <span className="inline-block w-2 h-5 ml-0.5 bg-gold-400/80 animate-pulse align-middle" />
+                  )}
+                </article>
+
+                {/* 叙事之后列一笔这一回合落到账上的变化：得着的写绿，折了的写红。
+                    开篇那一段只立人物、铺世界，不列变化 */}
+                {!streaming && !lastTurn?.opening && <ChangeNotice ops={lastTurn?.ops} className="mt-6" />}
+              </>
             )}
           </div>
 
@@ -182,16 +254,17 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
         <ScrollCard
           title="心念"
           subtitle="一念既起，万法随之"
-          className="shrink-0 max-h-[350px]"
+          className="shrink min-h-0 overflow-y-auto flex flex-col p-4"
         >
-          {/* 快捷决断 */}
-          <div className="flex flex-wrap gap-1.5 mb-3">
+          {/* 快捷决断：极矮屏下让位，保证输入框与按钮完整可见 */}
+          <div className="flex flex-wrap gap-1.5 mb-3 shrink-0 [@media(max-height:760px)]:hidden">
             {quickDecisions.map((q) => (
               <button
                 key={q}
-                onClick={() => setDecision(q)}
+                onClick={() => fillDecision(q)}
                 disabled={isGenerating}
-                className="px-2.5 py-1 rounded text-[11px] font-serif border border-paper-400/15 text-paper-300/80 hover:border-gold-500/40 hover:text-gold-400 hover:bg-gold-400/5 transition disabled:opacity-40"
+                title="填入输入栏，可再修改后演化"
+                className="px-2.5 py-1 rounded text-xs font-serif border-2 border-paper-400 bg-ink-900 text-paper-200 hover:border-gold-500 hover:text-gold-400 hover:bg-gold-500 transition disabled:opacity-40"
               >
                 {q}
               </button>
@@ -199,23 +272,24 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
           </div>
 
           <textarea
+            ref={decisionRef}
             value={decision}
             onChange={(e) => setDecision(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={isGenerating}
-            placeholder="此处书写你的决断与行动……&#10;（Ctrl/Cmd + Enter 发送）"
+            placeholder="此处书写你的决断与行动……&#10;（点上方选项可填入此栏，Ctrl/Cmd + Enter 发送）"
             rows={5}
-            className="input-ink resize-none leading-relaxed"
+            className="input-ink resize-none leading-relaxed flex-1 min-h-[64px]"
             style={{ fontFamily: '"Noto Serif SC", serif' }}
           />
 
-          {/* 阶段指示器 */}
-          <div className="mt-3">
+          {/* 阶段指示器：矮屏下让位给输入与按钮，保证主操作不被挤出 */}
+          <div className="mt-3 shrink-0 [@media(max-height:860px)]:hidden">
             <StageIndicator stage={stage} />
           </div>
 
           {/* 操作按钮 */}
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex gap-2 shrink-0">
             {isGenerating ? (
               <SealButton variant="ghost" onClick={cancel} className="flex-1">
                 <span className="flex items-center justify-center gap-1.5">
@@ -251,7 +325,7 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
                 }
               }}
               disabled={turns.length === 0 || isGenerating}
-              className="font-serif text-[11px] text-paper-400/50 hover:text-cinnabar-400 disabled:opacity-30 px-3 py-2 rounded border border-paper-400/10 hover:border-cinnabar-500/30 transition"
+              className="font-serif text-xs text-paper-300 hover:text-cinnabar-400 disabled:opacity-30 px-3 py-2 rounded border-2 border-paper-400 hover:border-cinnabar-500 transition"
             >
               清除
             </button>
@@ -314,10 +388,10 @@ export function StoryPanel({ onOpenSettings }: StoryPanelProps) {
 function EmptyState() {
   return (
     <div className="py-16 text-center">
-      <div className="inline-flex w-20 h-20 rounded-full bg-gold-400/10 border border-gold-400/30 items-center justify-center mb-6">
-        <Sparkles size={36} className="text-gold-400/70" />
+      <div className="inline-flex w-20 h-20 rounded-full bg-gold-400/10 border border-gold-400/30 items-center justify-center mb-6 rune-shimmer formation-border">
+        <Sparkles size={36} className="text-gold-400/70 animate-runeGlow" />
       </div>
-      <p className="font-brush text-xl text-paper-300 tracking-widest mb-2">
+      <p className="font-brush text-xl text-paper-300 tracking-widest mb-2 text-glow-spiritual">
         道心未动
       </p>
       <p className="font-serif text-sm text-paper-400/50 leading-relaxed max-w-md mx-auto">
@@ -349,10 +423,10 @@ function StageIndicator({ stage }: { stage: string }) {
             <div className="flex flex-col items-center flex-1">
               <div
                 className={cn(
-                  "w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-brush border transition",
-                  isActive && "bg-gold-400/20 border-gold-400/60 text-gold-400 shadow-glow",
-                  isDone && "bg-jade-500/15 border-jade-500/40 text-jade-400",
-                  isError && "bg-cinnabar-500/20 border-cinnabar-500/50 text-cinnabar-400",
+                  "w-7 h-7 rounded-full flex items-center justify-center text-xs font-brush border transition",
+                  isActive && "bg-gold-400/20 border-gold-400/60 text-gold-400 shadow-glow rune-shimmer",
+                  isDone && "bg-jade-500/15 border-jade-500/40 text-jade-400 shadow-spiritual-glow",
+                  isError && "bg-cinnabar-500/20 border-cinnabar-500/50 text-cinnabar-400 shadow-formation-glow",
                   !isActive && !isDone && !isError && "bg-ink-900/40 border-paper-400/15 text-paper-400/40",
                 )}
               >
@@ -366,13 +440,13 @@ function StageIndicator({ stage }: { stage: string }) {
               </div>
               <div
                 className={cn(
-                  "font-brush text-[10px] mt-1 tracking-wider",
+                  "font-brush text-xs mt-1 tracking-wider",
                   isActive ? "text-gold-400" : isDone ? "text-jade-400/80" : "text-paper-400/40",
                 )}
               >
                 {s.label}
               </div>
-              <div className="font-serif text-[8px] text-paper-400/40">{s.desc}</div>
+              <div className="font-serif text-xs text-paper-400/40">{s.desc}</div>
             </div>
             {i < stages.length - 1 && (
               <div

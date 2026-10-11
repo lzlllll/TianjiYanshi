@@ -5,14 +5,17 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { CloudDivider } from "@/components/ui/CloudDivider";
 import { cn } from "@/lib/utils";
+import { formatTimeShort, shiftGameTime } from "@/lib/gameTime";
+import { aliveBuffs } from "@/lib/buffTime";
+import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
 import type { Buff, ShieldData } from "@/data/types";
-import { Shield, Sparkles, Clock, AlertTriangle, X, Plus } from "lucide-react";
+import { Shield, Sparkles, Clock, X, Plus } from "lucide-react";
 
 export function StatusPanel() {
   const buffs = useGameStore((s) => s.player.buffs ?? []);
   const shields = useGameStore((s) => s.player.shields ?? []);
+  const currentTime = useGameStore((s) => s.currentTime);
   const removeBuff = useGameStore((s) => s.removeBuff);
-  const consumeShield = useGameStore((s) => s.consumeShield);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
   const addBuff = useGameStore((s) => s.addBuff);
   const addShield = useGameStore((s) => s.addShield);
@@ -20,7 +23,8 @@ export function StatusPanel() {
   const [showAddBuff, setShowAddBuff] = useState(false);
   const [showAddShield, setShowAddShield] = useState(false);
 
-  const activeBuffs = buffs.filter((b) => b.durationType !== "instant");
+  // 按时辰算的那些，走到点上就不该再摆在这里
+  const activeBuffs = aliveBuffs(buffs, currentTime).filter((b) => b.durationType !== "instant");
   const activeShields = shields.filter((s) => s.value > 0);
 
   const hasAnyEffect = activeBuffs.length > 0 || activeShields.length > 0;
@@ -110,7 +114,7 @@ export function StatusPanel() {
                   <div>
                     <div className="font-brush text-sm text-paper-200">{shield.name}</div>
                     {shield.source && (
-                      <div className="font-number text-[10px] text-paper-400/50">{shield.source}</div>
+                      <div className="font-number text-xs text-paper-400/50">{shield.source}</div>
                     )}
                   </div>
                 </div>
@@ -155,8 +159,13 @@ function BuffCard({
 }) {
   const durationLabel = () => {
     if (buff.durationType === "permanent") return "永久";
+    if (buff.durationType === "until") {
+      return buff.until ? `持续到 ${formatTimeShort(buff.until)}` : "持续到另行交代";
+    }
     if (buff.durationType === "conditional") return buff.condition ?? "条件触发";
-    if (buff.durationType === "round" && buff.duration !== undefined) return `剩余 ${buff.duration} 回合`;
+    if (buff.durationType === "incense" && buff.duration !== undefined) {
+      return `余 ${buff.duration} 柱香`;
+    }
     return "";
   };
 
@@ -197,10 +206,10 @@ function BuffCard({
         <div className="flex items-center gap-2">
           <span className="font-brush text-sm text-paper-100">{buff.name}</span>
           {buff.stacks > 1 && (
-            <span className="font-number text-[10px] text-gold-400/70">×{buff.stacks}</span>
+            <span className="font-number text-xs text-gold-400/70">×{buff.stacks}</span>
           )}
           <span className={cn(
-            "font-number text-[10px] px-1 py-0.5 rounded",
+            "font-number text-xs px-1 py-0.5 rounded",
             buff.isDebuff ? "bg-cinnabar-500/10 text-cinnabar-400" : "bg-jade-500/10 text-jade-400",
           )}>
             {buff.isDebuff ? "减益" : "增益"}
@@ -215,7 +224,7 @@ function BuffCard({
 
         <div className="flex flex-wrap items-center gap-2 mt-1.5">
           {buff.effects.map((effect, i) => (
-            <span key={i} className="font-number text-[10px] text-paper-400/60">
+            <span key={i} className="font-number text-xs text-paper-400/60">
               {getStatLabel(effect.stat)}
               {effect.valueType === "percentage"
                 ? ` ${effect.value > 0 ? "+" : ""}${effect.value}%`
@@ -227,11 +236,11 @@ function BuffCard({
         </div>
 
         <div className="flex items-center gap-3 mt-1">
-          <span className="flex items-center gap-1 font-number text-[10px] text-paper-400/50">
+          <span className="flex items-center gap-1 font-number text-xs text-paper-400/50">
             <Clock size={10} /> {durationLabel()}
           </span>
           {buff.source && (
-            <span className="font-number text-[10px] text-paper-400/40">
+            <span className="font-number text-xs text-paper-400/40">
               来自: {buff.source}
             </span>
           )}
@@ -251,6 +260,7 @@ function BuffCard({
   );
 }
 
+/** 开发者用的加效果：名目只能从名录里挑，效力由名录定，顶多久自己说 */
 function AddBuffMini({
   onAdd,
   onCancel,
@@ -258,79 +268,54 @@ function AddBuffMini({
   onAdd: (b: Buff) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [icon, setIcon] = useState("⚡");
-  const [isDebuff, setIsDebuff] = useState(false);
-  const [durationType, setDurationType] = useState<Buff["durationType"]>("round");
-  const [duration, setDuration] = useState(3);
+  const currentTime = useGameStore((s) => s.currentTime);
+  const [tplId, setTplId] = useState(BUFF_TEMPLATES[0]?.id ?? "");
+  const [hours, setHours] = useState(BUFF_TEMPLATES[0]?.hours ?? 6);
+
+  const tpl = BUFF_TEMPLATES.find((x) => x.id === tplId) ?? BUFF_TEMPLATES[0];
 
   const handleAdd = () => {
-    if (!name.trim()) return;
-    onAdd({
-      id: `buff-${Date.now()}`,
-      name: name.trim(),
-      category: "status",
-      icon,
-      durationType,
-      duration: durationType === "round" ? duration : undefined,
-      stacks: 1,
-      maxStacks: 5,
-      effects: [],
-      isDebuff,
-      description: desc.trim() || undefined,
-    });
+    if (!tpl) return;
+    onAdd(buffFromTemplate(tpl, { until: shiftGameTime(currentTime, hours) }));
   };
+
+  if (!tpl) return null;
 
   return (
     <div className="p-3 rounded border border-gold-400/30 bg-ink-900/40 space-y-2">
       <div className="flex gap-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="效果名称（如：疲劳）"
-          className="flex-1 px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-serif outline-none focus:border-gold-400/40"
-        />
-        <input
-          value={icon}
-          onChange={(e) => setIcon(e.target.value)}
-          placeholder="图标"
-          className="w-16 px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-serif outline-none focus:border-gold-400/40"
-        />
-      </div>
-      <input
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-        placeholder="效果描述（如：战斗后积攒，降低行动力）"
-        className="w-full px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-serif outline-none focus:border-gold-400/40"
-      />
-      <div className="flex items-center gap-3">
-        <label className="flex items-center gap-1 text-xs text-paper-400/70">
-          <input
-            type="checkbox"
-            checked={isDebuff}
-            onChange={(e) => setIsDebuff(e.target.checked)}
-          /> 减益
-        </label>
         <select
-          value={durationType}
-          onChange={(e) => setDurationType(e.target.value as Buff["durationType"])}
-          className="px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-serif outline-none"
+          value={tplId}
+          onChange={(e) => {
+            setTplId(e.target.value);
+            const picked = BUFF_TEMPLATES.find((x) => x.id === e.target.value);
+            if (picked) setHours(picked.hours);
+          }}
+          className="flex-1 px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-serif outline-none"
         >
-          <option value="round">回合制</option>
-          <option value="permanent">永久</option>
-          <option value="conditional">条件式</option>
+          {BUFF_TEMPLATES.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.isDebuff ? "减" : "增"}·{x.name}（{
+                x.effects.map((e) => `${e.stat} ${e.value > 0 ? "+" : ""}${e.value}`).join("，")
+              }）
+            </option>
+          ))}
         </select>
-        {durationType === "round" && (
-          <input
-            type="number"
-            value={duration}
-            onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))}
-            className="w-16 px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-number outline-none"
-            min={1}
-          />
-        )}
+        <input
+          type="number"
+          value={hours}
+          onChange={(e) => setHours(Math.max(1, Number(e.target.value)))}
+          className="w-20 px-2 py-1 rounded bg-ink-900/60 border border-paper-400/10 text-paper-100 text-xs font-number outline-none"
+          min={1}
+          title="还能顶几个时辰"
+        />
+        <span className="self-center font-serif text-xs text-paper-400/50">时辰</span>
       </div>
+
+      <p className="font-serif text-[11px] text-paper-400/50 leading-relaxed">
+        {tpl.icon} {tpl.desc}（最多叠 {tpl.maxStacks} 层）
+      </p>
+
       <div className="flex gap-2">
         <button
           onClick={handleAdd}

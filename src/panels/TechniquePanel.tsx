@@ -5,7 +5,9 @@ import { PanelTitle } from "@/components/ui/PanelTitle";
 import { GradeTag } from "@/components/ui/GradeTag";
 import { ProficiencyRing } from "@/components/ui/ProficiencyRing";
 import { cn } from "@/lib/utils";
-import type { Technique, TechniqueCategory, ElementType, HeartCompatibility } from "@/data/types";
+import { techniqueLevelOf } from "@/lib/skillCalc";
+import type { Technique, TechniqueCategory, ElementType } from "@/data/types";
+import { REALM_NAMES } from "@/data/mockData";
 
 const CATEGORY_INFO: Record<string, { name: string; subtitle: string; color: string }> = {
   心法: { name: "心法", subtitle: "修炼根基，灵力循环", color: "gold" },
@@ -28,12 +30,7 @@ export function TechniquePanel() {
   const filteredTechniques = useMemo(() => {
     let result = techniques.filter((t) => t.category === activeTab);
     if (levelFilter !== null) {
-      result = result.filter((t) => {
-        const currentLevel = t.levels && t.levels.length > 0
-          ? Math.max(1, t.levels.findIndex((l) => t.proficiency < l.proficiencyNeeded))
-          : 1;
-        return currentLevel >= levelFilter;
-      });
+      result = result.filter((t) => techniqueLevelOf(t) >= levelFilter);
     }
     return result;
   }, [techniques, activeTab, levelFilter]);
@@ -43,22 +40,15 @@ export function TechniquePanel() {
   const canPractice = (tech: Technique): boolean => {
     for (const req of tech.prerequisites || []) {
       if (req.type === "realm") {
-        const reqIndex = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36].findIndex((idx) =>
-          req.value === "引气" || req.value === "炼气" || req.value === "筑基" ||
-          req.value === "金丹" || req.value === "元婴" || req.value === "化神" ||
-          req.value === "炼虚" || req.value === "合体" || req.value === "大乘" ||
-          req.value === "渡劫"
-        );
-        if (currentRealm < (reqIndex >= 0 ? reqIndex : 0)) return false;
+        // req.value 是大境界名（如「炼气」），按境界扁平表找到它的起始索引再比大小
+        const reqStart = REALM_NAMES.findIndex((name) => name.startsWith(String(req.value ?? "")));
+        if (reqStart >= 0 && currentRealm < reqStart) return false;
       }
       if (req.type === "technique") {
         const requiredTech = techniques.find((t) => t.id === req.value);
         if (!requiredTech) return false;
         const reqLevel = req.minLevel || 1;
-        const currentLevel = requiredTech.levels && requiredTech.levels.length > 0
-          ? Math.max(1, requiredTech.levels.findIndex((l) => requiredTech.proficiency < l.proficiencyNeeded))
-          : 1;
-        if (currentLevel < reqLevel) return false;
+        if (techniqueLevelOf(requiredTech) < reqLevel) return false;
       }
       if (req.type === "spiritRoot") {
         const root = player.spiritRoots.find((r) => r.element === req.value);
@@ -158,7 +148,7 @@ export function TechniquePanel() {
     const meridians = Array.isArray(player.meridians) ? player.meridians : [];
     const avgMeridianClarity =
       meridians.length > 0 ? meridians.reduce((sum, m) => sum + m.clarity, 0) / meridians.length : 0;
-    if (avgMeridianClarity < 50) {
+    if (meridians.length > 0 && avgMeridianClarity < 50) {
       list.push({ label: "经脉滞塞", value: "×0.5", impact: "negative" });
     }
 
@@ -233,9 +223,7 @@ export function TechniquePanel() {
         {filteredTechniques.map((tech) => {
           const info = CATEGORY_INFO[tech.category];
           const hasLevels = tech.levels && tech.levels.length > 0;
-          const currentLevel = hasLevels
-            ? Math.max(1, tech.levels.findIndex((l) => tech.proficiency < l.proficiencyNeeded))
-            : 1;
+          const currentLevel = techniqueLevelOf(tech);
           const nextLevel = hasLevels ? tech.levels[currentLevel] : undefined;
           const matchScore = getMatchScore(tech);
           const isActiveHeart = tech.category === "心法" && player.activeHeartTechnique === tech.id;
@@ -292,10 +280,10 @@ export function TechniquePanel() {
                     <ProficiencyRing value={tech.proficiency} max={tech.proficiencyMax} size={72} />
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-brush text-[10px] text-cinnabar-400/80 px-1.5 py-0.5 border border-cinnabar-500/30 rounded">
+                        <span className="font-brush text-xs text-cinnabar-400/80 px-1.5 py-0.5 border border-cinnabar-500/30 rounded">
                           {tech.element}系
                         </span>
-                        <span className="font-brush text-[10px] text-paper-400/60 px-1.5 py-0.5 border border-paper-400/20 rounded">
+                        <span className="font-brush text-xs text-paper-400/60 px-1.5 py-0.5 border border-paper-400/20 rounded">
                           {tech.nature}性
                         </span>
                       </div>
@@ -353,9 +341,9 @@ export function TechniquePanel() {
                     </div>
 
                     <div className="bg-ink-900/40 rounded border border-paper-400/10 p-2 space-y-1.5">
-                      <span className="font-brush text-[10px] text-paper-400/50">匹配度来源</span>
+                      <span className="font-brush text-xs text-paper-400/50">匹配度来源</span>
                       {matchBreakdown.map((src, idx) => (
-                        <div key={idx} className="flex items-center justify-between text-[11px]">
+                        <div key={idx} className="flex items-center justify-between text-xs">
                           <span className="font-serif text-paper-300/80">{src.label}</span>
                           <span className={cn(
                             "font-number",
@@ -366,9 +354,9 @@ export function TechniquePanel() {
                         </div>
                       ))}
                       {matchBreakdown.length === 0 && (
-                        <span className="font-serif text-[11px] text-paper-400/40">无额外匹配修正</span>
+                        <span className="font-serif text-xs text-paper-400/40">无额外匹配修正</span>
                       )}
-                      <div className="border-t border-paper-400/10 pt-1 flex items-center justify-between text-[11px]">
+                      <div className="border-t border-paper-400/10 pt-1 flex items-center justify-between text-xs">
                         <span className="font-serif text-paper-400/50">基础分</span>
                         <span className="font-number text-paper-400">50%</span>
                       </div>
@@ -376,9 +364,9 @@ export function TechniquePanel() {
 
                     {cultivationModifiers.length > 0 && (
                       <div className="bg-ink-900/40 rounded border border-paper-400/10 p-2 space-y-1.5">
-                        <span className="font-brush text-[10px] text-paper-400/50">修炼效率修正</span>
+                        <span className="font-brush text-xs text-paper-400/50">修炼效率修正</span>
                         {cultivationModifiers.map((mod, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-[11px]">
+                          <div key={idx} className="flex items-center justify-between text-xs">
                             <span className="font-serif text-paper-300/80">{mod.label}</span>
                             <span className={cn(
                               "font-number",
@@ -422,13 +410,13 @@ export function TechniquePanel() {
                           {[3, 6, 10].includes(level.level) && (
                             <span className="absolute -top-1 -right-1 w-3 h-3 bg-cinnabar-500 rounded-full border border-gold-400" />
                           )}
-                          <div className="font-brush text-[9px] text-paper-400/60 mt-0.5 truncate">
+                          <div className="font-brush text-xs text-paper-400/60 mt-0.5 truncate">
                             {isUnlocked ? level.name : "未解锁"}
                           </div>
                           {isCurrent && level.stats && Object.keys(level.stats).length > 0 && (
                             <div className="mt-1 space-y-0.5">
                               {Object.entries(level.stats || {}).map(([stat, value]) => (
-                                <div key={stat} className="font-number text-[9px] text-jade-400/80">
+                                <div key={stat} className="font-number text-xs text-jade-400/80">
                                   {stat === "mpMax" && "灵力+"}
                                   {stat === "hpMax" && "气血+"}
                                   {stat === "vitality" && "体魄+"}
@@ -470,18 +458,18 @@ export function TechniquePanel() {
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-brush text-sm text-gold-300">{skill.name}</span>
-                          <span className="font-number text-[10px] text-cinnabar-400/80">
+                          <span className="font-number text-xs text-cinnabar-400/80">
                             Lv.{skill.levelRequired}
                           </span>
                         </div>
                         <p className="font-serif text-xs text-paper-400/70 mt-1">{skill.description}</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="font-number text-[10px] text-paper-400/50">灵力:{skill.mpCost}</span>
+                          <span className="font-number text-xs text-paper-400/50">灵力:{skill.mpCost}</span>
                           {skill.damage > 0 && (
-                            <span className="font-number text-[10px] text-cinnabar-400/80">伤害:{skill.damage}</span>
+                            <span className="font-number text-xs text-cinnabar-400/80">伤害:{skill.damage}</span>
                           )}
                           {skill.cooldown > 0 && (
-                            <span className="font-number text-[10px] text-paper-400/50">冷却:{skill.cooldown}</span>
+                            <span className="font-number text-xs text-paper-400/50">冷却:{skill.cooldown}</span>
                           )}
                         </div>
                       </div>
@@ -493,7 +481,7 @@ export function TechniquePanel() {
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-brush text-sm text-paper-400/50">{skill.name}</span>
-                          <span className="font-number text-[10px] text-paper-400/40">
+                          <span className="font-number text-xs text-paper-400/40">
                             Lv.{skill.levelRequired}解锁
                           </span>
                         </div>

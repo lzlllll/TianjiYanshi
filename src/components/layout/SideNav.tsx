@@ -1,153 +1,169 @@
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
+import { REALMS } from "@/data/mockData";
+import { aliveRumors } from "@/data/rumors";
+import { aliveBuffs } from "@/lib/buffTime";
 import type { PanelId } from "@/data/types";
 import { cn } from "@/lib/utils";
 import {
   User,
   BookOpen,
   Gem,
-  FlaskConical,
   Landmark,
   Users,
   Sparkles,
   Activity,
+  Scroll,
+  ScrollText,
+  Wrench,
+  Receipt,
+  Home,
 } from "lucide-react";
 
+/** 导航里的侧拉面板入口；问道与百艺各自走独立窗口，不在导航面板内 */
+type NavId = PanelId;
+
 interface NavItem {
-  id: PanelId;
+  id: NavId;
   label: string;
-  subtitle: string;
   icon: typeof User;
-  accent?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "profile", label: "本命", subtitle: "个人信息", icon: User },
-  { id: "technique", label: "功法", subtitle: "修炼之法", icon: BookOpen },
-  { id: "treasure", label: "财宝", subtitle: "财产宝物", icon: Gem },
-  { id: "sect", label: "宗门", subtitle: "门派经营", icon: Landmark },
-  { id: "social", label: "尘缘", subtitle: "社交往来", icon: Users },
-  { id: "status", label: "状态", subtitle: "当前效果", icon: Activity },
-  { id: "story", label: "问道", subtitle: "天机演化", icon: Sparkles, accent: true },
+  { id: "profile", label: "本命", icon: User },
+  { id: "technique", label: "功法", icon: BookOpen },
+  { id: "treasure", label: "财宝", icon: Gem },
+  { id: "sect", label: "宗门", icon: Landmark },
+  { id: "social", label: "尘缘", icon: Users },
+  { id: "skill", label: "本事", icon: Wrench },
+  { id: "fate", label: "机缘", icon: ScrollText },
+  { id: "news", label: "快报", icon: Scroll },
+  { id: "estate", label: "地产", icon: Home },
+  { id: "status", label: "状态", icon: Activity },
+  { id: "tokens", label: "推演账", icon: Receipt },
 ];
 
-export function SideNav() {
+interface SideNavProps {
+  storyOpen: boolean;
+  onOpenStory: () => void;
+}
+
+export function SideNav({ storyOpen, onOpenStory }: SideNavProps) {
   const currentPanel = useGameStore((s) => s.currentPanel);
   const setPanel = useGameStore((s) => s.setPanel);
+  const player = useGameStore((s) => s.player);
+  const techniques = useGameStore((s) => s.techniques);
+  const inventory = useGameStore((s) => s.inventory);
+  const sect = useGameStore((s) => s.sect);
+  const relations = useGameStore((s) => s.relations);
+  const skills = useGameStore((s) => s.skills);
+  const rumors = useGameStore((s) => s.rumors);
+  const quests = useGameStore((s) => s.quests);
+  const currentTime = useGameStore((s) => s.currentTime);
+  const newsCount = useGameStore((s) => (Array.isArray(s.news?.items) ? s.news.items.length : 0));
+  const estateCount = useGameStore((s) => (s.estates ?? []).length);
+
   const aiStage = useAIStore((s) => s.conversation.stage);
   const hasApiKey = useAIStore((s) => !!s.settings.apiKey);
   const turnCount = useAIStore((s) => s.conversation.turns.length);
 
   const aiBusy = aiStage === "flash" || aiStage === "pro";
 
+  const realm = REALMS[player.realmIndex];
+  const activeHeart = techniques.find((t) => t.id === player.activeHeartTechnique);
+  const buffCount =
+    aliveBuffs(player.buffs, currentTime).filter((b) => b.durationType !== "instant").length +
+    (Array.isArray(player.shields) ? player.shields : []).filter((s) => s.value > 0).length;
+
+  const rumorCount = aliveRumors(rumors, currentTime).length;
+  const openQuestCount = quests.filter((q) => q.status === "open").length;
+
+  // 每项直接显示当前状态，取代原先与主标题语义重复的副标题
+  const hints: Record<NavId, string> = {
+    profile: realm ? `${realm.name}${realm.stage}` : "境界未定",
+    technique: activeHeart ? `心法 · ${activeHeart.name}` : "未定心法",
+    treasure: `${inventory.length} 件物品`,
+    sect: `贡献 ${(sect.contribution ?? 0).toLocaleString()}`,
+    social: `${relations.length} 位相识`,
+    skill: skills.length > 0 ? `${skills.length} 门本事` : "未立一技",
+    fate:
+      openQuestCount > 0
+        ? `${openQuestCount} 桩在办`
+        : rumorCount > 0
+          ? `${rumorCount} 条传闻`
+          : "无甚可听",
+    status: buffCount > 0 ? `${buffCount} 项生效` : "无生效效果",
+    news: newsCount > 0 ? `${newsCount} 条快报` : "尚无快报",
+    estate: estateCount > 0 ? `${estateCount} 处房产` : "名下无房产",
+    tokens: "查看推演消耗",
+  };
+
+  const storyHint = turnCount > 0 ? `第 ${turnCount} 回` : "尚未演算";
+
   return (
-    <nav className="w-56 shrink-0 border-r border-gold-500/20 ink-bg flex flex-col py-6 relative">
-      {/* 竖排题字 */}
-      <div className="absolute top-4 right-2 vertical-text font-brush text-gold-400/30 text-sm">
-        云栖修真录
-      </div>
+    <nav className="mainui-black w-20 shrink-0 spine-texture flex flex-col py-4 relative shadow-spine-depth">
+      {/* 书脊装饰线 */}
+      <div className="absolute inset-y-0 left-0 w-px bg-gold-light" />
+      <div className="absolute inset-y-0 right-0 w-px bg-ink-darkest" />
 
-      <div className="px-4 mb-6">
-        <div className="font-brush text-paper-400/60 text-xs tracking-widest">六道轮回</div>
-      </div>
-
-      <div className="flex-1 flex flex-col gap-1 px-2">
-        {NAV_ITEMS.map((item, idx) => {
+      {/* 标签区可滚动：个子矮的屏上，标签不至于把「问道」挤出视野 */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 px-1">
+        {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const active = currentPanel === item.id;
-          const isStory = item.id === "story";
           return (
             <button
               key={item.id}
-              onClick={() => setPanel(item.id)}
+              onClick={() => setPanel(currentPanel === item.id ? null : item.id)}
+              title={`${item.label} - ${hints[item.id]}`}
               className={cn(
-                "group relative flex items-center gap-3 px-3 py-3 rounded-r transition-all duration-200 text-left",
-                active
-                  ? "nav-active"
-                  : "hover:bg-paper-400/5 border-l-3 border-l-transparent",
-                isStory && "mt-2",
+                "spine-tab text-vertical group shrink-0",
+                active && "active",
               )}
             >
-              {isStory && (
-                <div className="absolute -top-2 left-2 right-2 h-px cloud-divider opacity-50" />
-              )}
-              <div
-                className={cn(
-                  "w-9 h-9 rounded flex items-center justify-center shrink-0 transition-colors",
-                  active
-                    ? "bg-cinnabar-500/20 text-gold-400 border border-gold-400/40"
-                    : isStory
-                      ? "bg-cinnabar-500/10 text-cinnabar-400/80 border border-cinnabar-500/30 group-hover:text-cinnabar-300 group-hover:border-cinnabar-400/50"
-                      : "bg-ink-700/50 text-paper-400/60 border border-paper-400/10 group-hover:text-paper-200",
-                  isStory && aiBusy && "animate-shimmer",
-                )}
-              >
-                <Icon
-                  size={18}
-                  strokeWidth={1.5}
-                  className={isStory && aiBusy ? "animate-spin" : ""}
-                />
+              <div className="flex flex-col items-center gap-1">
+                <Icon size={14} strokeWidth={2} />
+                <span className="text-xs">{item.label}</span>
               </div>
-              <div className="flex-1 min-w-0">
-                <div
-                  className={cn(
-                    "font-brush text-base tracking-wider flex items-center gap-1.5",
-                    active
-                      ? "text-gold-400"
-                      : isStory
-                        ? "text-cinnabar-300/90 group-hover:text-cinnabar-300"
-                        : "text-paper-300 group-hover:text-paper-100",
-                  )}
-                >
-                  {item.label}
-                  {isStory && turnCount > 0 && (
-                    <span className="font-number text-[9px] text-gold-400/70 bg-gold-400/10 px-1 rounded">
-                      {turnCount}
-                    </span>
-                  )}
-                </div>
-                <div className="font-serif text-[10px] text-paper-400/50 truncate">
-                  {item.subtitle}
-                </div>
-              </div>
-              {isStory ? (
-                <span
-                  className={cn(
-                    "w-2 h-2 rounded-full",
-                    aiBusy
-                      ? "bg-gold-400 animate-shimmer"
-                      : hasApiKey
-                        ? "bg-jade-400/70"
-                        : "bg-cinnabar-500",
-                  )}
-                  title={
-                    aiBusy ? "演化中" : hasApiKey ? "已配置" : "未配置"
-                  }
-                />
-              ) : (
-                <span
-                  className={cn(
-                    "font-number text-xs",
-                    active ? "text-gold-400/60" : "text-paper-500/30",
-                  )}
-                >
-                  {String(idx + 1).padStart(2, "0")}
-                </span>
-              )}
             </button>
           );
         })}
       </div>
 
-      {/* 底部印章 */}
-      <div className="px-4 pt-6 mt-auto">
-        <div className="cloud-divider mb-4" />
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 red-seal rounded-sm text-xs">修</div>
-          <div>
-            <div className="font-brush text-paper-400/70 text-xs">道法自然</div>
-            <div className="font-serif text-[9px] text-paper-500/40">v1.0 · 修真版</div>
+      {/* 问道按钮 - 使用朱砂色突出显示，固定在书脊底部，始终可见 */}
+      <div className="px-1 mt-3 shrink-0">
+        <div className="h-px bg-gold mb-3" />
+        <button
+          onClick={onOpenStory}
+          title={`问道 - ${storyHint}`}
+          className={cn(
+            "spine-tab text-vertical group shrink-0",
+            storyOpen && "active",
+            !storyOpen && "bg-gradient-to-r from-cinnabar-dark via-cinnabar to-cinnabar-dark",
+            aiBusy && "animate-pulse",
+          )}
+        >
+          <div className="flex flex-col items-center gap-1">
+            <Sparkles 
+              size={14} 
+              strokeWidth={2} 
+              className={aiBusy ? "animate-spin" : ""} 
+            />
+            <span className="text-xs">问道</span>
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                aiBusy ? "bg-gold animate-shimmer" : hasApiKey ? "bg-jade-400" : "bg-cinnabar",
+              )}
+            />
           </div>
+        </button>
+      </div>
+
+      {/* 底部印章标识 */}
+      <div className="px-1 pt-4 mt-auto flex justify-center shrink-0">
+        <div className="w-10 h-10 seal-button flex items-center justify-center text-xs font-kai ribbon-sway">
+          修
         </div>
       </div>
     </nav>

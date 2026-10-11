@@ -1,0 +1,160 @@
+/* 古籍纸张纹理系统 */
+
+/* 宣纸基础纹理 - SVG 滤镜实现 */
+.paper-texture {
+  position: relative;
+  background-color: var(--paper-fresh, #FEFBF2);
+}
+
+.paper-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='paper-grain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='4' seed='2' /%3E%3CfeColorMatrix type='saturate' values='0' /%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.7' intercept='0.3' /%3E%3CfeFuncG type='linear' slope='0.65' intercept='0.3' /%3E%3CfeFuncB type='linear' slope='0.5' intercept='0.3' /%3E%3CfeFuncA type='discrete' tableValues='1 1' /%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23paper-grain)' /%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  mix-blend-mode: multiply;
+}
+
+/* 泛黄效果 - 径向渐变模拟纸张老化 */
+.paper-aged {
+  background: radial-gradient(
+    ellipse at center,
+    var(--paper-aged, #F8F3E8) 0%,
+    var(--paper-old, #F0E5D1) 70%,
+    var(--paper-dark, #E8DCC0) 100%
+  );
+}
+
+/* 虫蛀斑点效果 */
+.paper-foxing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.15;
+  pointer-events: none;
+  background-image: 
+    radial-gradient(circle at 15% 25%, rgba(139, 115, 85, 0.3) 0%, transparent 2px),
+    radial-gradient(circle at 78% 42%, rgba(139, 115, 85, 0.25) 0%, transparent 3px),
+    radial-gradient(circle at 35% 68%, rgba(139, 115, 85, 0.2) 0%, transparent 2.5px),
+    radial-gradient(circle at 88% 73%, rgba(139, 115, 85, 0.28) 0%, transparent 2px),
+    radial-gradient(circle at 52% 15%, rgba(139, 115, 85, 0.22) 0%, transparent 2.8px),
+    radial-gradient(circle at 23% 85%, rgba(139, 115, 85, 0.26) 0%, transparent 2.2px);
+}
+
+/* 不规则纸张边缘 - clip-path 实现 */
+.paper-edge-rough {
+  clip-path: polygon(
+    0.5% 1.2%, 2.3% 0.3%, 5.1% 0.8%, 8.6% 0.2%, 12.4% 0.6%,
+    16.8% 0.4%, 21.2% 1.1%, 25.7% 0.5%, 30.3% 0.9%, 35.1% 0.3%,
+    40.2% 0.7%, 45.4% 0.4%, 50.6% 0.8%, 55.8% 0.3%, 60.9% 0.6%,
+    66.1% 0.9%, 71.3% 0.5%, 76.4% 1.0%, 81.5% 0.4%, 86.6% 0.7%,
+    91.7% 0.3%, 95.2% 0.8%, 97.8% 0.5%, 99.1% 1.2%,
+    99.4% 5.3%, 99.8% 10.2%, 99.6% 15.4%, 99.9% 20.8%,
+    99.5% 26.1%, 99.7% 31.5%, 99.3% 36.9%, 99.8% 42.3%,
+    99.4% 47.7%, 99.6% 53.1%, 99.2% 58.5%, 99.7% 63.9%,
+    99.5% 69.3%, 99.8% 74.7%, 99.4% 80.1%, 99.6% 85.5%,
+    99.3% 90.9%, 99.7% 94.8%, 99.2% 97.6%, 98.8% 99.2%,
+    95.3% 99.5%, 90.1% 99.2%, 85.0% 99.6%, 79.9% 99.3%,
+    74.8% 99.7%, 69.7% 99.4%, 64.6% 99.8%, 59.5% 99.2%,
+    54.4% 99.6%, 49.3% 99.3%, 44.2% 99.7%, 39.1% 99.4%,
+    34.0% 99.8%, 28.9% 99.5%, 23.8% 99.2%, 18.7% 99.6%,
+    13.6% 99.3%, 8.5% 99.7%, 3.4% 99.4%, 1.2% 98.7%,
+    0.6% 94.2%, 0.3% 89.1%, 0.7% 84.0%, 0.4% 78.9%,
+    0.8% 73.8%, 0.5% 68.7%, 0.9% 63.6%, 0.3% 58.5%,
+    0.7% 53.4%, 0.4% 48.3%, 0.8% 43.2%, 0.5% 38.1%,
+    0.9% 33.0%, 0.3% 27.9%, 0.7% 22.8%, 0.4% 17.7%,
+    0.8% 12.6%, 0.5% 7.5%, 0.9% 3.8%
+  );
+}
+
+/* 竖栏分割线 - 传统古籍版式 */
+.paper-columns {
+  position: relative;
+}
+
+.paper-columns::before {
+  content: '';
+  position: absolute;
+  top: 24px;
+  bottom: 24px;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--ink-lightest, #8B7355) 8%,
+    var(--ink-lightest, #8B7355) 92%,
+    transparent 100%
+  );
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* 界栏装饰线 */
+.paper-border-lines {
+  position: relative;
+  padding: 16px;
+}
+
+.paper-border-lines::before,
+.paper-border-lines::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-light, #6B5644) 5%,
+    var(--ink-light, #6B5644) 95%,
+    transparent 100%
+  );
+  opacity: 0.25;
+}
+
+.paper-border-lines::before {
+  top: 8px;
+}
+
+.paper-border-lines::after {
+  bottom: 8px;
+}
+
+/* 书脊质感 */
+.spine-texture {
+  position: relative;
+  background: linear-gradient(
+    to right,
+    #1A1410 0%,
+    #2C2416 15%,
+    #2C2416 85%,
+    #1A1410 100%
+  );
+}
+
+.spine-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='100'%3E%3Cline x1='2' y1='0' x2='2' y2='100' stroke='%23FFE4A0' stroke-width='0.5' stroke-dasharray='3,2' opacity='0.4' /%3E%3C/svg%3E");
+  background-repeat: repeat-y;
+  background-position: center;
+}
+
+/* CSS 变量定义 */
+:root {
+  --paper-fresh: #FEFBF2;
+  --paper-aged: #F8F3E8;
+  --paper-old: #F0E5D1;
+  --paper-dark: #E8DCC0;
+  --paper-spine: #2C2416;
+  --ink-lightest: #8B7355;
+  --ink-light: #6B5644;
+  --ink-medium: #4A3C28;
+  --ink-dark: #2A1F12;
+  --ink-darkest: #1A1410;
+}

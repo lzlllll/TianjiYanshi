@@ -432,12 +432,12 @@ export function updateBuffDuration(player: Player): Player {
   return {
     ...player,
     buffs: player.buffs.filter((buff) => {
-      if (buff.durationType !== "round") return true;
+      if (buff.durationType !== "incense") return true;
       if (buff.duration === undefined) return true;
 
       return buff.duration > 0;
     }).map((buff) => {
-      if (buff.durationType !== "round" || buff.duration === undefined) return buff;
+      if (buff.durationType !== "incense" || buff.duration === undefined) return buff;
 
       return { ...buff, duration: buff.duration - 1 };
     }),
@@ -492,7 +492,7 @@ export function consumeShield(player: Player, amount: number): { player: Player;
 
 export function getActiveBuffs(buffs: Buff[]): Buff[] {
   return buffs.filter((buff) => {
-    if (buff.durationType === "round" && buff.duration !== undefined) {
+    if (buff.durationType === "incense" && buff.duration !== undefined) {
       return buff.duration > 0;
     }
     if (buff.durationType === "conditional" && buff.condition) {

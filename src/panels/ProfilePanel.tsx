@@ -5,6 +5,7 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { CloudDivider } from "@/components/ui/CloudDivider";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 
 const ELEMENT_COLORS: Record<string, string> = {
@@ -30,12 +31,10 @@ const STAT_LABELS: Record<string, { name: string; desc: string; icon: string }> 
 export function ProfilePanel() {
   const [activeTab, setActiveTab] = useState<"heart" | "body">("heart");
   const player = useGameStore((s) => s.player);
+  const breakthrough = useGameStore((s) => s.breakthrough);
 
   const currentRealm = REALMS[player.realmIndex];
   const nextRealm = REALMS[player.realmIndex + 1];
-  const realmProgress = nextRealm
-    ? (player.cultivation / nextRealm.cultivationNeeded) * 100
-    : 100;
 
   const meridians = Array.isArray(player.meridians) ? player.meridians : [];
   const groupedMeridians = meridians.reduce((acc, m) => {
@@ -245,7 +244,7 @@ export function ProfilePanel() {
                         className={cn(
                           "w-9 h-9 rounded flex items-center justify-center font-brush text-lg shrink-0",
                           isCurrent
-                            ? "bg-gold-400 text-ink-900"
+                            ? "bg-gold-400 text-ink-darkest"
                             : isPast
                               ? "bg-pine-600/40 text-paper-400"
                               : "bg-ink-700/60 text-paper-500/50",
@@ -299,6 +298,23 @@ export function ProfilePanel() {
                   showText
                   height={16}
                 />
+
+                <div className="flex gap-2 pt-1">
+                  <SealButton
+                    onClick={breakthrough}
+                    disabled={!nextRealm || player.cultivation < nextRealm.cultivationNeeded}
+                    variant="ghost"
+                    className="flex-1 px-3 py-2 text-xs"
+                  >
+                    冲击境界
+                  </SealButton>
+                </div>
+                <p className="font-serif text-xs text-paper-400/50 leading-relaxed">
+                  修为随修炼与际遇自然增长，由叙事推进：闭关、服食丹药、参悟机缘，都会在推演里体现。
+                  {nextRealm
+                    ? `冲击境界需修为 ${nextRealm.cultivationNeeded.toLocaleString()}，失败会受创并损伤经脉。`
+                    : "已臻当前体系顶点。"}
+                </p>
               </div>
             </ScrollCard>
 

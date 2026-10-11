@@ -1,7 +1,9 @@
 import { useGameStore } from "@/store/useGameStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
+import { PanelTitle } from "@/components/ui/PanelTitle";
 import { cn } from "@/lib/utils";
-import type { NewsItem, NewsCategory } from "@/data/types";
+import { formatDateKey } from "@/lib/gameTime";
+import type { NewsItem } from "@/data/types";
 import { Scroll, Bell, Users, ScrollText, Clock } from "lucide-react";
 
 const CATEGORY_CONFIG: Record<string, { icon: React.ReactNode; color: string; bg: string }> = {
@@ -24,10 +26,13 @@ const CATEGORY_CONFIG: Record<string, { icon: React.ReactNode; color: string; bg
 
 const DEFAULT_CONFIG = {
   icon: <Scroll size={14} />,
-  color: "text-paper-400",
-  bg: "border-paper-500/30 bg-paper-500/10",
+  color: "text-ink-lightest",
+  bg: "border-ink-lightest/40 bg-paper-old/60",
 };
 
+/**
+ * 江湖快报：一册独立的快报，随日子推移自行更新。
+ */
 export function NewsPanel() {
   const news = useGameStore((s) => s.news);
 
@@ -40,59 +45,66 @@ export function NewsPanel() {
 
   const categories = Object.keys(groupedNews);
 
-  // 将 lastUpdate "1-3-15" 转为可读格式
-  const lastUpdateKey = news?.lastUpdate || "";
-  const lastUpdateDisplay = lastUpdateKey
-    ? `第${lastUpdateKey.replace(/-/g, "年").replace(/年(\d+)$/, "月$1日")}`
-    : "";
+  // lastUpdate 存的是日期键「514-1-14」，展示时还原成修真历的写法
+  const lastUpdateDisplay = news?.lastUpdate ? formatDateKey(news.lastUpdate) : "";
 
   return (
-    <ScrollCard title="江湖快报" subtitle="天下事，尽皆知">
-      {lastUpdateDisplay && (
-        <div className="flex items-center gap-2 mb-4 text-paper-400/60">
-          <Clock size={14} />
-          <span className="font-serif text-xs">{lastUpdateDisplay}</span>
-        </div>
-      )}
-      <div className="space-y-6">
-        {categories.map((category) => {
-          const config = CATEGORY_CONFIG[category] || DEFAULT_CONFIG;
-          return (
-            <div key={category}>
-              <div className={cn("flex items-center gap-2 mb-3", config.color)}>
-                {config.icon}
-                <span className="font-brush text-sm">{category}</span>
-              </div>
-              <div className="space-y-2">
-                {groupedNews[category].map((item) => (
-                  <div
-                    key={item.id}
-                    className={cn("p-3 rounded border", config.bg)}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-brush text-base text-paper-100">{item.title}</span>
-                      <span className="font-serif text-[10px] text-paper-400/50">{item.date}</span>
-                    </div>
-                    <p className="font-serif text-xs text-paper-400/70 leading-relaxed">
-                      {item.content}
-                    </p>
-                    <div className="mt-1.5 flex items-center justify-between">
-                      <span className="font-serif text-[10px] text-paper-400/40">来源：{item.source}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
+    <div className="paper-texture">
+      <PanelTitle
+        title="江湖快报"
+        poem="天下事，尽皆知。四方风起，先到有心人耳里。"
+      />
 
-        {newsItems.length === 0 && (
-          <div className="text-center py-8">
-            <Scroll size={32} className="mx-auto text-paper-500/30 mb-2" />
-            <p className="font-serif text-sm text-paper-400/50">暂无新闻</p>
+      <ScrollCard
+        title="快报"
+        subtitle={lastUpdateDisplay ? `上次更新 ${lastUpdateDisplay}` : "尚未有报"}
+      >
+        {lastUpdateDisplay && (
+          <div className="flex items-center gap-2 mb-4 text-ink-light">
+            <Clock size={14} />
+            <span className="font-serif text-xs">{lastUpdateDisplay}</span>
           </div>
         )}
-      </div>
-    </ScrollCard>
+        <div className="space-y-6">
+          {categories.map((category) => {
+            const config = CATEGORY_CONFIG[category] || DEFAULT_CONFIG;
+            return (
+              <div key={category}>
+                <div className={cn("flex items-center gap-2 mb-3", config.color)}>
+                  {config.icon}
+                  <span className="font-brush text-sm">{category}</span>
+                </div>
+                <div className="space-y-2">
+                  {groupedNews[category].map((item) => (
+                    <div key={item.id} className={cn("p-3 rounded border", config.bg)}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-brush text-base text-ink-dark">{item.title}</span>
+                        <span className="font-serif text-xs text-ink-lightest">{item.date}</span>
+                      </div>
+                      <p className="font-serif text-xs text-ink-medium leading-relaxed">
+                        {item.content}
+                      </p>
+                      <div className="mt-1.5 flex items-center justify-between">
+                        <span className="font-serif text-xs text-ink-lightest">来源：{item.source}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {newsItems.length === 0 && (
+            <div className="text-center py-8">
+              <Scroll size={32} className="mx-auto text-ink-lightest/50 mb-2" />
+              <p className="font-serif text-sm text-ink-light">尚无快报</p>
+              <p className="font-serif text-xs text-ink-lightest mt-1">
+                江湖上的消息会随日子推移自行传到这里。
+              </p>
+            </div>
+          )}
+        </div>
+      </ScrollCard>
+    </div>
   );
 }

@@ -1,0 +1,401 @@
+/* 古籍装饰元素系统 */
+
+/* 书脊侧签 - 导航标签 */
+.spine-tab {
+  position: relative;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  /* 压窄标签，让九项与「问道」在常见高度里都放得下 */
+  padding: 8px 6px;
+  min-height: 52px;
+  background: linear-gradient(
+    to right,
+    var(--paper-dark, #E8DCC0) 0%,
+    var(--paper-aged, #F8F3E8) 20%,
+    var(--paper-aged, #F8F3E8) 80%,
+    var(--paper-dark, #E8DCC0) 100%
+  );
+  border-left: 2px solid var(--ink-medium, #4A3C28);
+  border-right: 1px solid var(--ink-lightest, #8B7355);
+  color: var(--ink-dark, #2A1F12);
+  font-family: var(--font-kai, "KaiTi", serif);
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.spine-tab:hover {
+  background: linear-gradient(
+    to right,
+    var(--paper-old, #F0E5D1) 0%,
+    var(--paper-fresh, #FEFBF2) 20%,
+    var(--paper-fresh, #FEFBF2) 80%,
+    var(--paper-old, #F0E5D1) 100%
+  );
+  transform: translateX(4px);
+  box-shadow: 2px 0 8px rgba(42, 31, 18, 0.15);
+}
+
+.spine-tab.active {
+  background: var(--paper-fresh, #FEFBF2);
+  border-left-color: var(--cinnabar, #C1432E);
+  border-left-width: 3px;
+  color: var(--ink-darkest, #1A1410);
+  font-weight: 500;
+  transform: translateX(6px);
+  box-shadow: 3px 0 12px rgba(193, 67, 46, 0.2);
+}
+
+/* 印章按钮样式 */
+.seal-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  min-width: 80px;
+  background: var(--cinnabar, #C1432E);
+  color: var(--paper-fresh, #FEFBF2);
+  font-family: var(--font-kai, "KaiTi", serif);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 
+    inset 0 1px 2px rgba(255, 255, 255, 0.15),
+    0 2px 6px rgba(193, 67, 46, 0.4);
+}
+
+.seal-button::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.seal-button:hover {
+  background: var(--cinnabar-light, #D94F3D);
+  transform: translateY(-1px);
+  box-shadow: 
+    inset 0 1px 2px rgba(255, 255, 255, 0.2),
+    0 4px 12px rgba(193, 67, 46, 0.5);
+}
+
+.seal-button:active {
+  transform: translateY(1px);
+  box-shadow: 
+    inset 0 2px 4px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(193, 67, 46, 0.3);
+}
+
+/* 白文印 - 反色印章 */
+.seal-button-inverse {
+  background: var(--paper-fresh, #FEFBF2);
+  color: var(--cinnabar, #C1432E);
+  border: 2px solid var(--cinnabar, #C1432E);
+  box-shadow: 0 2px 6px rgba(193, 67, 46, 0.25);
+}
+
+.seal-button-inverse::before {
+  border-color: var(--cinnabar-dark, #A8261F);
+  opacity: 0.3;
+}
+
+.seal-button-inverse:hover {
+  background: var(--paper-aged, #F8F3E8);
+  border-color: var(--cinnabar-light, #D94F3D);
+  color: var(--cinnabar-light, #D94F3D);
+}
+
+/* 墨线描边印 */
+.seal-button-outline {
+  background: rgba(232, 220, 192, 0.1);
+  color: #e8dcc0;
+  border: 2px solid #6B5644;
+  box-shadow: none;
+}
+
+.seal-button-outline::before {
+  display: none;
+}
+
+.seal-button-outline:hover {
+  background: rgba(232, 220, 192, 0.2);
+  border-color: #8B7454;
+  color: #fefbf2;
+  box-shadow: 0 2px 8px rgba(107, 86, 68, 0.3);
+}
+
+/* 标题装饰 - 金色点缀 */
+.title-ornament {
+  position: relative;
+  display: inline-block;
+  padding: 0 24px;
+}
+
+.title-ornament::before,
+.title-ornament::after {
+  content: '◆';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gold, #D4AF37);
+  font-size: 0.6em;
+  opacity: 0.7;
+}
+
+.title-ornament::before {
+  left: 0;
+}
+
+.title-ornament::after {
+  right: 0;
+}
+
+/* 回纹装饰边框 */
+.pattern-border {
+  position: relative;
+  padding: 16px;
+}
+
+.pattern-border::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--ink-lightest, #8B7355);
+  border-image: repeating-linear-gradient(
+    90deg,
+    var(--ink-lightest, #8B7355) 0,
+    var(--ink-lightest, #8B7355) 6px,
+    transparent 6px,
+    transparent 12px
+  ) 1;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* 鱼尾装饰 - 页脚分隔符 */
+.fishtail-divider {
+  position: relative;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 24px 0;
+}
+
+.fishtail-divider::before {
+  content: '';
+  width: 80px;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-light, #6B5644) 30%,
+    var(--ink-medium, #4A3C28) 50%,
+    var(--ink-light, #6B5644) 70%,
+    transparent 100%
+  );
+}
+
+.fishtail-divider::after {
+  content: '◈';
+  position: absolute;
+  color: var(--ink-medium, #4A3C28);
+  font-size: 1.2rem;
+  background: var(--paper-fresh, #FEFBF2);
+  padding: 0 8px;
+}
+
+/* 书签丝带 */
+.ribbon-bookmark {
+  position: absolute;
+  top: 0;
+  right: 24px;
+  width: 3px;
+  height: 60px;
+  background: linear-gradient(
+    to bottom,
+    var(--cinnabar, #C1432E) 0%,
+    var(--cinnabar-dark, #A8261F) 100%
+  );
+  box-shadow: 0 2px 4px rgba(193, 67, 46, 0.3);
+}
+
+.ribbon-bookmark::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 6px solid var(--cinnabar-dark, #A8261F);
+}
+
+/* 四角装饰 - 面板边角 */
+.corner-ornament {
+  position: relative;
+}
+
+.corner-ornament::before,
+.corner-ornament::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--gold, #D4AF37);
+  opacity: 0.6;
+}
+
+.corner-ornament::before {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+}
+
+.corner-ornament::after {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+}
+
+/* 印章印记装饰 */
+.seal-mark {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 48px;
+  background: var(--cinnabar, #C1432E);
+  border-radius: 4px;
+  box-shadow: 
+    inset 0 1px 2px rgba(255, 255, 255, 0.15),
+    0 2px 6px rgba(193, 67, 46, 0.4);
+}
+
+.seal-mark::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+}
+
+.seal-mark-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper-fresh, #FEFBF2);
+  font-family: var(--font-kai, "KaiTi", serif);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+}
+
+/* 云纹装饰边 */
+.cloud-border {
+  position: relative;
+  padding: 20px;
+}
+
+.cloud-border::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-light, #6B5644) 20%,
+    var(--ink-medium, #4A3C28) 50%,
+    var(--ink-light, #6B5644) 80%,
+    transparent 100%
+  );
+  opacity: 0.5;
+}
+
+.cloud-border::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80%;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-light, #6B5644) 20%,
+    var(--ink-medium, #4A3C28) 50%,
+    var(--ink-light, #6B5644) 80%,
+    transparent 100%
+  );
+  opacity: 0.5;
+}
+
+/* 竖排标题装饰 */
+.vertical-title {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.2em;
+  font-family: var(--font-kai, "KaiTi", serif);
+  color: var(--ink-darkest, #1A1410);
+  padding: 8px 12px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--paper-aged, #F8F3E8) 30%,
+    var(--paper-aged, #F8F3E8) 70%,
+    transparent 100%
+  );
+  border-left: 2px solid var(--cinnabar, #C1432E);
+  border-right: 2px solid var(--cinnabar, #C1432E);
+}
+
+/* 金粉点缀效果 */
+.gold-dust {
+  position: relative;
+  overflow: hidden;
+}
+
+.gold-dust::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: 
+    radial-gradient(circle at 20% 30%, var(--gold-light, #FFE4A0) 1px, transparent 1px),
+    radial-gradient(circle at 60% 70%, var(--gold, #D4AF37) 1px, transparent 1px),
+    radial-gradient(circle at 80% 20%, var(--gold-light, #FFE4A0) 1px, transparent 1px),
+    radial-gradient(circle at 30% 80%, var(--gold, #D4AF37) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, var(--gold-light, #FFE4A0) 1px, transparent 1px);
+  background-size: 100% 100%;
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+/* CSS 变量定义 */
+:root {
+  --cinnabar: #C1432E;
+  --cinnabar-light: #D94F3D;
+  --cinnabar-dark: #A8261F;
+  --gold: #D4AF37;
+  --gold-light: #FFE4A0;
+  --font-kai: "KaiTi", "STKaiti", serif;
+}

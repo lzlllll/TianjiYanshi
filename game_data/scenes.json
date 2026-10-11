@@ -1,0 +1,11 @@
+[
+  {
+    "id": "world",
+    "name": "九州舆图",
+    "kind": "world",
+    "image": "武侠地图.png",
+    "parentId": null,
+    "width": 1536,
+    "height": 1024
+  }
+]

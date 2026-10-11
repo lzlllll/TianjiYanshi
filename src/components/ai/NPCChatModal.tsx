@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { useAIStore } from "@/store/useAIStore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MAX_PARTY_SIZE, useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
+import { isAroundHere } from "@/data/npcGen";
+import type { Relation } from "@/data/types";
 import { cn } from "@/lib/utils";
-import { X, Loader2, Send, Trash2, RefreshCw } from "lucide-react";
+import { migrateRelation } from "@/data/npcGen";
+import { X, Loader2, Send, Trash2, UserPlus } from "lucide-react";
 
 export function NPCChatModal() {
   const npcChat = useAIStore((s) => s.npcChat);
@@ -11,7 +14,11 @@ export function NPCChatModal() {
   const closeNPCChat = useAIStore((s) => s.closeNPCChat);
   const clearNPCChat = useAIStore((s) => s.clearNPCChat);
   const getOrCreateNPCProfile = useAIStore((s) => s.getOrCreateNPCProfile);
+  const inviteToParty = useAIStore((s) => s.inviteToParty);
+  const removeFromParty = useAIStore((s) => s.removeFromParty);
+  const sendPartyMessage = useAIStore((s) => s.sendPartyMessage);
   const relations = useGameStore((s) => s.relations);
+  const currentPlaceId = useGameStore((s) => s.currentPlaceId);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -24,6 +31,36 @@ export function NPCChatModal() {
   const relation = relations.find((r) => r.id === activeNpcId);
   const isTyping = npcChat.isTyping;
 
+  // 同席的几个人；旧档或还没点过人时兜一个空
+  const partyIds = useMemo(
+    () => (Array.isArray(npcChat.partyIds) ? npcChat.partyIds : []),
+    [npcChat.partyIds],
+  );
+  const members = useMemo(
+    () => partyIds.map((id) => relations.find((r) => r.id === id)).filter((r): r is Relation => !!r),
+    [partyIds, relations],
+  );
+  const group = members.length > 1;
+  const partyMessages = Array.isArray(npcChat.partyMessages) ? npcChat.partyMessages : [];
+  const isPartyTyping = !!npcChat.isPartyTyping;
+
+  /** 能与这一席同坐的人：和最先开口的那位在同一处，且不是仇敌 */
+  const anchor = members[0];
+  const seat = anchor?.cityId
+    ? { cityId: anchor.cityId, districtId: anchor.districtId ?? -1 }
+    : { cityId: currentPlaceId, districtId: -1 };
+  const candidates = useMemo(
+    () =>
+      relations.filter(
+        (r) =>
+          r.id !== activeNpcId &&
+          r.type !== "enemy" &&
+          !partyIds.includes(r.id) &&
+          isAroundHere(r, seat.cityId, seat.districtId),
+      ),
+    [relations, activeNpcId, partyIds, seat.cityId, seat.districtId],
+  );
+
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -31,28 +68,38 @@ export function NPCChatModal() {
     };
   }, []);
 
+  // 同席的每一位都要有自己那一份人设，谁缺就现推一份
   useEffect(() => {
-    if (activeNpcId && relation && !profile) {
-      setLoading(true);
-      setError("");
-      getOrCreateNPCProfile(activeNpcId, relation.name, relation.title)
-        .then(() => {
-          if (isMountedRef.current) setLoading(false);
-        })
-        .catch((e) => {
-          if (isMountedRef.current) {
-            setError(e.message);
-            setLoading(false);
-          }
-        });
-    }
-  }, [activeNpcId, relation, profile, getOrCreateNPCProfile]);
+    const ids = partyIds.length > 0 ? partyIds : activeNpcId ? [activeNpcId] : [];
+    const missing = ids.filter(
+      (id) => relations.some((r) => r.id === id) && !npcChat.profiles.some((p) => p.npcId === id),
+    );
+    if (missing.length === 0) return;
+
+    setLoading(true);
+    setError("");
+    Promise.all(
+      missing.map((id) => {
+        const rel = relations.find((r) => r.id === id)!;
+        return getOrCreateNPCProfile(id, rel.name, rel.title);
+      }),
+    )
+      .then(() => {
+        if (isMountedRef.current) setLoading(false);
+      })
+      .catch((e) => {
+        if (isMountedRef.current) {
+          setError(e.message);
+          setLoading(false);
+        }
+      });
+  }, [activeNpcId, partyIds, relations, npcChat.profiles, getOrCreateNPCProfile]);
 
   useEffect(() => {
     if (isMountedRef.current && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [profile?.messages.length]);
+  }, [profile?.messages.length, partyMessages.length]);
 
   useEffect(() => {
     if (npcChat.errorMsg) {
@@ -65,9 +112,20 @@ export function NPCChatModal() {
 
   if (!activeNpcId) return null;
 
+  const busy = isTyping || isPartyTyping;
+
   const handleSend = () => {
     const text = input.trim();
-    if (!text || isTyping) return;
+    if (busy) return;
+    // 同席时玩家这一句是冲着一桌人说的，诸位依次答话
+    if (group) {
+      if (!text) return;
+      sendPartyMessage(text);
+      setInput("");
+      setError("");
+      return;
+    }
+    if (!text) return;
     sendNPCMessage(activeNpcId, text);
     setInput("");
     setError("");
@@ -88,50 +146,53 @@ export function NPCChatModal() {
     enemy: "仇敌",
   };
 
+  const showEmpty = group ? partyMessages.length === 0 : !!profile && profile.messages.length === 0;
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="absolute inset-0 bg-ink-900/80 backdrop-blur-sm animate-inkSpread"
+        className="absolute inset-0 bg-ink-darkest/60"
         onClick={closeNPCChat}
       />
 
       <div
-        className="relative scroll-card rounded-lg w-full max-w-3xl h-[70vh] flex flex-col"
+        className="relative scroll-card corner-ornament spiritual-particles rounded-lg w-full max-w-3xl h-[70vh] flex flex-col"
         style={{ animation: "inkSpread 0.4s ease-out" }}
       >
-        {/* 标题栏 */}
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-gold-500/20 bg-ink-800/95 backdrop-blur">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b-2 border-gold-500 bg-ink-800 cloud-border">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 red-seal rounded-sm text-xl font-brush flex items-center justify-center">
               {relation?.name.charAt(0) || "?"}
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-brush text-xl text-gold-400 tracking-widest">
-                  {relation?.name || profile?.name || "未知"}
+                <h2 className="font-brush text-xl text-gold-400 tracking-widest text-glow-spiritual">
+                  {group ? `${members.map((m) => m.name).join("、")}` : relation?.name || profile?.name || "未知"}
                 </h2>
-                <span className="font-serif text-xs text-paper-400/70">
-                  「{relation?.title || profile?.title || ""}」
-                </span>
+                {group && (
+                  <span className="font-serif text-xs text-jade-400/80 border border-jade-500/35 bg-jade-500/10 px-1.5 py-0.5 rounded">
+                    同席 {members.length} 人
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3 mt-0.5">
-                <span className="font-serif text-[11px] text-paper-400/60">
-                  {typeLabels[relation?.type || "friend"]}
+                <span className="font-serif text-xs text-paper-400/60">
+                  {group ? "众人相谈" : typeLabels[relation?.type || "friend"]}
                 </span>
-                {relation && (
+                {relation && !group && (
                   <div className="flex items-center gap-1">
-                    <div className="w-20 h-1.5 rounded-full bg-ink-900/60 overflow-hidden">
+                    <div className="w-20 h-1.5 rounded-full bg-ink-900/60 overflow-hidden spiritual-border">
                       <div
-                        className="h-full bg-gradient-to-r from-cinnabar-500 via-gold-400 to-jade-400"
-                        style={{ width: `${relation.affinity}%` }}
+                        className="h-full bg-gradient-to-r from-cinnabar-500 via-gold-400 to-jade-400 shadow-spiritual-glow animate-auraFlow"
+                        style={{ width: `${((migrateRelation(relation).relation + 100) / 200) * 100}%` }}
                       />
                     </div>
-                    <span className="font-number text-[10px] text-paper-400/50">
-                      {relation.affinity}
+                    <span className="font-number text-xs text-paper-400/50">
+                      {migrateRelation(relation).relation}
                     </span>
                   </div>
                 )}
@@ -146,7 +207,7 @@ export function NPCChatModal() {
                   clearNPCChat(activeNpcId);
                 }
               }}
-              className="font-serif text-[11px] text-paper-400/50 hover:text-cinnabar-400 px-2 py-1 rounded border border-paper-400/10 hover:border-cinnabar-500/30 transition flex items-center gap-1"
+              className="font-serif text-xs text-paper-400/50 hover:text-cinnabar-400 px-2 py-1 rounded border border-paper-400/10 hover:border-cinnabar-500/30 transition flex items-center gap-1"
             >
               <Trash2 size={10} /> 清空
             </button>
@@ -158,6 +219,46 @@ export function NPCChatModal() {
               <X size={18} />
             </button>
           </div>
+        </div>
+
+        {/* 在场的人：点名字可请入、可请出 */}
+        <div className="px-6 py-2 border-b border-gold-500/15 bg-ink-800/70 flex flex-wrap items-center gap-1.5">
+          <span className="font-serif text-[11px] text-paper-400/55 mr-1">在场</span>
+          {(members.length > 0 ? members : relation ? [relation] : []).map((m, i) => (
+            <button
+              key={m.id}
+              onClick={() => i > 0 && removeFromParty(m.id)}
+              disabled={i === 0}
+              title={i === 0 ? "这一席的主，走不得" : "请他先走一步"}
+              className={cn(
+                "px-2 py-0.5 rounded border font-serif text-[11px] transition",
+                i === 0
+                  ? "border-gold-500/35 bg-gold-500/10 text-gold-400"
+                  : "border-jade-500/35 bg-jade-500/10 text-jade-300 hover:border-cinnabar-500/40 hover:text-cinnabar-300",
+              )}
+            >
+              {m.name}
+              {i > 0 && " ×"}
+            </button>
+          ))}
+
+          {candidates.length > 0 && (
+            <>
+              <span className="font-serif text-[11px] text-paper-400/40 ml-2 mr-1">可请入</span>
+              {candidates.slice(0, 6).map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => inviteToParty(r.id)}
+                  disabled={partyIds.length >= MAX_PARTY_SIZE}
+                  title={partyIds.length >= MAX_PARTY_SIZE ? `一席最多 ${MAX_PARTY_SIZE} 人` : `请${r.name}一并说话`}
+                  className="px-2 py-0.5 rounded border border-paper-400/20 font-serif text-[11px] text-paper-400/70 hover:border-gold-400/45 hover:text-paper-100 transition disabled:opacity-40 disabled:hover:border-paper-400/20"
+                >
+                  <UserPlus size={9} className="inline mr-0.5 -mt-0.5" />
+                  {r.name}
+                </button>
+              ))}
+            </>
+          )}
         </div>
 
         {/* 人设信息（初次加载） */}
@@ -176,68 +277,45 @@ export function NPCChatModal() {
         )}
 
         {/* 消息列表 */}
-        {profile && (
+        {(profile || group) && (
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-            {profile.messages.length === 0 ? (
+            {showEmpty ? (
               <div className="text-center py-8">
                 <p className="font-brush text-sm text-paper-400/60 tracking-widest">
-                  开口交谈
+                  {group ? "众人相叙" : "开口交谈"}
                 </p>
                 <p className="font-serif text-xs text-paper-400/40 mt-2">
-                  与 {profile.name} 说些什么吧……
+                  {group ? `与${members.map((m) => m.name).join("、")}说些什么吧……` : `与 ${profile?.name} 说些什么吧……`}
                 </p>
               </div>
-            ) : (
-              (Array.isArray(profile.messages) ? profile.messages : []).map((msg) => (
-                <div
+            ) : group ? (
+              partyMessages.map((msg) => (
+                <Bubble
                   key={msg.id}
-                  className={cn(
-                    "flex gap-3",
-                    msg.role === "player" ? "flex-row-reverse" : "",
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "w-8 h-8 rounded-sm flex items-center justify-center shrink-0 font-brush text-sm",
-                      msg.role === "player"
-                        ? "bg-cinnabar-500/20 text-cinnabar-400 border border-cinnabar-500/40"
-                        : "bg-gold-500/20 text-gold-400 border border-gold-500/40",
-                    )}
-                  >
-                    {msg.role === "player" ? "我" : profile.name?.charAt(0) || "?"}
-                  </div>
-                  <div
-                    className={cn(
-                      "max-w-[70%] rounded-lg px-4 py-3",
-                      msg.role === "player"
-                        ? "bg-cinnabar-500/15 border border-cinnabar-500/30 rounded-br-none"
-                        : "bg-gold-500/10 border border-gold-500/20 rounded-bl-none",
-                    )}
-                  >
-                    <p className="font-serif text-sm text-paper-100 leading-relaxed whitespace-pre-wrap">
-                      {msg.content}
-                    </p>
-                    <div
-                      className={cn(
-                        "font-serif text-[9px] text-paper-400/40 mt-1",
-                        msg.role === "player" ? "text-right" : "",
-                      )}
-                    >
-                      {new Date(msg.timestamp).toLocaleTimeString("zh-CN", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </div>
-                  </div>
-                </div>
+                  mine={msg.speakerId === "player"}
+                  avatar={msg.speakerId === "player" ? "我" : msg.speakerName.charAt(0) || "?"}
+                  name={msg.speakerId === "player" ? "" : msg.speakerName}
+                  content={msg.content}
+                  timestamp={msg.timestamp}
+                />
+              ))
+            ) : (
+              (Array.isArray(profile?.messages) ? profile!.messages : []).map((msg) => (
+                <Bubble
+                  key={msg.id}
+                  mine={msg.role === "player"}
+                  avatar={msg.role === "player" ? "我" : profile?.name?.charAt(0) || "?"}
+                  content={msg.content}
+                  timestamp={msg.timestamp}
+                />
               ))
             )}
 
             {/* 打字中 */}
-            {isTyping && (
+            {busy && (
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-sm bg-gold-500/20 text-gold-400 border border-gold-500/40 flex items-center justify-center shrink-0 font-brush text-sm">
-                  {profile.name?.charAt(0) || "?"}
+                  {group ? "众" : profile?.name?.charAt(0) || "?"}
                 </div>
                 <div className="bg-gold-500/10 border border-gold-500/20 rounded-lg rounded-bl-none px-4 py-3">
                   <div className="flex items-center gap-1.5">
@@ -254,35 +332,107 @@ export function NPCChatModal() {
         )}
 
         {/* 输入区域 */}
-        {profile && (
-          <div className="sticky bottom-0 px-6 py-4 border-t border-gold-500/20 bg-ink-800/95 backdrop-blur">
+        {(profile || group) && (
+          <div className="sticky bottom-0 px-6 py-4 border-t-2 border-gold-500 bg-ink-800">
             <div className="flex gap-3">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isTyping}
+                disabled={busy}
                 placeholder="输入话语……&#10;（Ctrl/Cmd + Enter 发送）"
                 rows={3}
                 className="flex-1 input-ink resize-none leading-relaxed"
                 style={{ fontFamily: '"Noto Serif SC", serif' }}
               />
-              <SealButton
-                onClick={handleSend}
-                disabled={!input.trim() || isTyping}
-                className="shrink-0"
-              >
-                {isTyping ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <>
-                    <Send size={14} /> 言
-                  </>
+              <div className="shrink-0 flex flex-col gap-2">
+                <SealButton onClick={handleSend} disabled={!input.trim() || busy} className="px-4">
+                  {busy ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <>
+                      <Send size={14} /> 言
+                    </>
+                  )}
+                </SealButton>
+                {group && (
+                  <SealButton
+                    variant="ghost"
+                    onClick={() => {
+                      setError("");
+                      sendPartyMessage(null);
+                    }}
+                    disabled={busy}
+                    className="px-4 py-1.5 text-xs"
+                    title="这一回你不开口，只在一旁听他们说"
+                  >
+                    略过
+                  </SealButton>
                 )}
-              </SealButton>
+              </div>
             </div>
+            {group && (
+              <p className="mt-2 font-serif text-[11px] text-paper-400/40">
+                你说一句，{members.map((m) => m.name).join("、")}依次接话；不想开口就点「略过」。
+              </p>
+            )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function Bubble({
+  mine,
+  avatar,
+  name,
+  content,
+  timestamp,
+}: {
+  mine: boolean;
+  avatar: string;
+  name?: string;
+  content: string;
+  timestamp: number;
+}) {
+  return (
+    <div className={cn("flex gap-3", mine ? "flex-row-reverse" : "")}>
+      <div
+        className={cn(
+          "w-8 h-8 rounded-sm flex items-center justify-center shrink-0 font-brush text-sm",
+          mine
+            ? "bg-cinnabar-500/20 text-cinnabar-400 border border-cinnabar-500/40"
+            : "bg-gold-500/20 text-gold-400 border border-gold-500/40",
+        )}
+      >
+        {avatar}
+      </div>
+      <div
+        className={cn(
+          "max-w-[70%] rounded-lg px-4 py-3",
+          mine
+            ? "bg-cinnabar-500/15 border border-cinnabar-500/30 rounded-br-none"
+            : "bg-gold-500/10 border border-gold-500/20 rounded-bl-none",
+        )}
+      >
+        {name && (
+          <div className="font-brush text-[11px] text-gold-400/80 mb-1">{name}</div>
+        )}
+        <p className="font-serif text-sm text-paper-100 leading-relaxed whitespace-pre-wrap">
+          {content}
+        </p>
+        <div
+          className={cn(
+            "font-serif text-xs text-paper-400/40 mt-1",
+            mine ? "text-right" : "",
+          )}
+        >
+          {new Date(timestamp).toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </div>
       </div>
     </div>
   );

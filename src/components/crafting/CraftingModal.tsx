@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
@@ -8,7 +8,7 @@ import { GradeTag } from "@/components/ui/GradeTag";
 import { TalismanCrafting } from "@/components/crafting/TalismanCrafting";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
-import type { AlchemyRecipe, TalismanRecipe, BrewResult, CraftingResult } from "@/data/types";
+import type { BrewResult, CraftingResult } from "@/data/types";
 
 export function CraftingModal() {
   const isOpen = useAIStore((s) => s.isCraftingOpen);
@@ -16,16 +16,26 @@ export function CraftingModal() {
   const tab = useGameStore((s) => s.craftingTab);
   const setTab = useGameStore((s) => s.setCraftingTab);
 
+  // 按 Esc 也能合上百艺，与问道、侧栏等处一致，不必非去找右上角那个叉
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeCrafting();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, closeCrafting]);
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="absolute inset-0 bg-ink-900/80 backdrop-blur-sm animate-inkSpread"
+        className="absolute inset-0 bg-ink-darkest/60 backdrop-blur-sm animate-inkSpread"
         onClick={closeCrafting}
       />
 
@@ -40,7 +50,7 @@ export function CraftingModal() {
             </div>
             <div>
               <h2 className="font-brush text-xl text-gold-400 tracking-widest">百艺</h2>
-              <p className="font-serif text-[10px] text-paper-400/60">符箓丹药，皆为修真之助</p>
+              <p className="font-serif text-xs text-paper-400/60">符箓丹药，皆为修真之助</p>
             </div>
           </div>
 
@@ -82,109 +92,6 @@ export function CraftingModal() {
         <div className="flex-1 overflow-y-auto p-6">
           {tab === "talisman" ? <TalismanCrafting /> : <AlchemyWorkshop />}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function TalismanWorkshop() {
-  const recipes = useGameStore((s) => s.talismanRecipes);
-  const draw = useGameStore((s) => s.drawTalisman);
-  const inventory = useGameStore((s) => s.inventory);
-  const mp = useGameStore((s) => s.player.mp);
-  const [selectedId, setSelectedId] = useState<string>(recipes[0]?.id ?? "");
-  const selected = recipes.find((r) => r.id === selectedId);
-
-  const paperCount = inventory.find((i) => i.name === "黄表符纸")?.count ?? 0;
-  const cinnabarCount = inventory.find((i) => i.name === "朱砂")?.count ?? 0;
-
-  return (
-    <div className="grid grid-cols-12 gap-4">
-      <ScrollCard className="col-span-5" title="符箓图谱" subtitle="择一而绘">
-        <div className="space-y-2 max-h-[480px] overflow-y-auto pr-2">
-          {recipes.map((recipe) => (
-            <RecipeRow
-              key={recipe.id}
-              active={selectedId === recipe.id}
-              recipe={recipe}
-              onSelect={() => setSelectedId(recipe.id)}
-            />
-          ))}
-        </div>
-      </ScrollCard>
-
-      <div className="col-span-7">
-        <ScrollCard title="画符台" subtitle="凝神静气，笔走龙蛇">
-          {selected && (
-            <div>
-              <div className="flex justify-center mb-4">
-                <div className="relative w-32 h-40 bg-gradient-to-b from-paper-200 to-paper-300 rounded shadow-lg flex items-center justify-center transform rotate-1">
-                  <div className="absolute inset-2 border border-cinnabar-500/30 rounded" />
-                  <span className="font-brush text-5xl text-cinnabar-500">
-                    {selected.name?.charAt(0) || "?"}
-                  </span>
-                  <div className="absolute -top-2 -right-2 w-6 h-6 red-seal rounded-sm text-[10px]">
-                    符
-                  </div>
-                </div>
-              </div>
-
-              <div className="text-center mb-3">
-                <h3 className="font-brush text-2xl text-gold-400">{selected.name}</h3>
-                <div className="flex items-center justify-center gap-2 mt-1">
-                  <GradeTag grade={selected.grade} />
-                  <span className="font-serif text-xs text-paper-400/60">
-                    成功率 {selected.successRate}%
-                  </span>
-                </div>
-                <p className="font-serif text-xs text-paper-400/70 mt-2 max-w-md mx-auto leading-relaxed">
-                  {selected.desc}
-                </p>
-              </div>
-
-              <CloudDivider label="所需材料" />
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <MaterialSlot
-                  name="黄表符纸"
-                  need={selected.paperCost}
-                  have={paperCount}
-                  icon="纸"
-                />
-                <MaterialSlot
-                  name="朱砂"
-                  need={selected.cinnabarCost}
-                  have={cinnabarCount}
-                  icon="砂"
-                />
-              </div>
-
-              <div className="flex items-center justify-between mb-3 px-3 py-2 rounded bg-ink-900/40 border border-paper-400/10">
-                <span className="font-serif text-xs text-paper-400/70">消耗灵力</span>
-                <span
-                  className={cn(
-                    "font-number text-sm",
-                    mp >= selected.mpCost ? "text-jade-400" : "text-cinnabar-400",
-                  )}
-                >
-                  {selected.mpCost} / {mp}
-                </span>
-              </div>
-
-              <SealButton
-                onClick={() => draw(selected)}
-                disabled={
-                  paperCount < selected.paperCost ||
-                  cinnabarCount < selected.cinnabarCost ||
-                  mp < selected.mpCost
-                }
-                className="w-full"
-              >
-                画符
-              </SealButton>
-            </div>
-          )}
-        </ScrollCard>
       </div>
     </div>
   );
@@ -303,11 +210,11 @@ function AlchemyWorkshop() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="font-brush text-base text-paper-100">{herb.name}</span>
-                    <span className="font-number text-[10px] text-paper-400/50">×{herb.count}</span>
+                    <span className="font-number text-xs text-paper-400/50">×{herb.count}</span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <GradeTag grade={herb.grade} />
-                    <span className="font-number text-[10px] text-paper-500">{elemStr}</span>
+                    <span className="font-number text-xs text-paper-500">{elemStr}</span>
                   </div>
                 </div>
                 {selected && (
@@ -323,7 +230,7 @@ function AlchemyWorkshop() {
         <ScrollCard title="炼丹炉" subtitle="文武相济，火候为先">
           <div className="flex justify-center mb-4">
             <div className="relative">
-              <div className="w-36 h-32 bg-gradient-to-b from-pine-600 to-ink-800 rounded-b-3xl rounded-t-lg border-2 border-gold-500/30 shadow-2xl relative overflow-hidden">
+              <div className="w-36 h-32 bg-gradient-to-b from-pine-600 to-ink-dark rounded-b-3xl rounded-t-lg border-2 border-gold-500/30 shadow-2xl relative overflow-hidden">
                 <div
                   className="absolute bottom-0 left-0 right-0 transition-all duration-300"
                   style={{
@@ -351,7 +258,6 @@ function AlchemyWorkshop() {
             <div className="space-y-2 mb-4">
               {selectedHerbs.map((herb) => {
                 const item = inventory.find((i) => i.name === herb.name);
-                const have = item?.count ?? 0;
                 const elemStr = item?.elements
                   ? `(${Object.entries(item.elements).map(([e, v]) => `${e}:${v}`).join(',')})`
                   : '';
@@ -367,7 +273,7 @@ function AlchemyWorkshop() {
                       <div className="font-serif text-xs text-paper-200 truncate">{herb.name}</div>
                       <div className="flex items-center gap-1">
                         <span className="font-number text-xs text-jade-400">×{herb.count}</span>
-                        <span className="font-number text-[10px] text-paper-500">{elemStr}</span>
+                        <span className="font-number text-xs text-paper-500">{elemStr}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -446,7 +352,7 @@ function AlchemyWorkshop() {
                 >
                   <span className="font-brush text-xs text-paper-300">{elem}</span>
                   <span className={cn(
-                    "font-number text-[10px]",
+                    "font-number text-xs",
                     normalized > 0 ? "text-jade-400" :
                       normalized < 0 ? "text-cinnabar-400" : "text-paper-500",
                   )}>
@@ -537,7 +443,7 @@ function AlchemyWorkshop() {
                 <div className="flex flex-wrap gap-1 mt-2">
                   {Object.entries(brewResult.pillElements).map(([elem, val]) => (
                     <span key={elem} className={cn(
-                      "font-number text-[10px] px-1.5 py-0.5 rounded border",
+                      "font-number text-xs px-1.5 py-0.5 rounded border",
                       val > 0 ? "border-jade-500/30 text-jade-400/80" : val < 0 ? "border-cinnabar-500/30 text-cinnabar-400/80" : "border-paper-400/10 text-paper-400/50",
                     )}>
                       {elem}{val > 0 ? "+" : ""}{val}
@@ -553,85 +459,3 @@ function AlchemyWorkshop() {
   );
 }
 
-function RecipeRow({
-  active,
-  recipe,
-  onSelect,
-}: {
-  active: boolean;
-  recipe: TalismanRecipe | AlchemyRecipe;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      onClick={onSelect}
-      className={cn(
-        "w-full text-left rounded p-3 border transition-all",
-        active
-          ? "border-gold-400/50 bg-gold-400/10 shadow-glow"
-          : "border-paper-400/10 bg-ink-900/30 hover:border-paper-400/30",
-      )}
-    >
-      <div className="flex items-center justify-between mb-1">
-        <span className="font-brush text-base text-paper-100">{recipe.name}</span>
-        <GradeTag grade={recipe.grade} />
-      </div>
-      <p className="font-serif text-xs text-paper-400/60 leading-relaxed line-clamp-2">
-        {recipe.desc}
-      </p>
-      <div className="flex items-center gap-3 mt-1.5">
-        <span className="font-number text-[10px] text-gold-400/70">
-          成功率 {recipe.successRate}%
-        </span>
-        <span className="font-number text-[10px] text-paper-400/50">
-          耗灵力 {recipe.mpCost}
-        </span>
-      </div>
-    </button>
-  );
-}
-
-function MaterialSlot({
-  name,
-  need,
-  have,
-  icon,
-  extra = "",
-}: {
-  name: string;
-  need: number;
-  have: number;
-  icon: string;
-  extra?: string;
-}) {
-  const enough = have >= need;
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 px-3 py-2 rounded border",
-        enough
-          ? "border-jade-500/30 bg-jade-500/5"
-          : "border-cinnabar-500/40 bg-cinnabar-500/5",
-      )}
-    >
-      <div className="w-8 h-8 rounded bg-ink-900/60 flex items-center justify-center text-gold-400/80 border border-paper-400/10">
-        {icon}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-serif text-xs text-paper-200 truncate">{name}</div>
-        <div className="flex items-center gap-1">
-          <span
-            className={cn(
-              "font-number text-xs",
-              enough ? "text-jade-400" : "text-cinnabar-400",
-            )}
-          >
-            {have} / {need}
-          </span>
-          {extra && <span className="font-number text-[10px] text-paper-500">{extra}</span>}
-        </div>
-      </div>
-      {!enough && <span className="text-cinnabar-400 text-xs">缺</span>}
-    </div>
-  );
-}

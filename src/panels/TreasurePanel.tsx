@@ -1,11 +1,12 @@
 import { useState, useMemo } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { useAIStore } from "@/store/useAIStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { CloudDivider } from "@/components/ui/CloudDivider";
 import { GradeTag } from "@/components/ui/GradeTag";
 import { cn } from "@/lib/utils";
-import type { InventoryItem, ItemGrade } from "@/data/types";
+import type { InventoryItem, ItemGrade, SpiritStones } from "@/data/types";
 import { X, Sword } from "lucide-react";
 
 const STONE_TIERS = [
@@ -14,6 +15,9 @@ const STONE_TIERS = [
   { key: "high" as const, name: "上品灵石", color: "text-gold-400", bg: "from-gold-400/20" },
   { key: "supreme" as const, name: "极品灵石", color: "text-cinnabar-400", bg: "from-cinnabar-500/20" },
 ];
+
+/** 开发者补灵石的档位 */
+const STONE_GRANTS = [100, 1000, 10000];
 
 const GRADE_BG: Record<ItemGrade, string> = {
   凡品: "border-paper-400/20 hover:border-paper-400/50",
@@ -34,7 +38,8 @@ const INVENTORY_CATEGORIES: Record<string, { label: string; icon: string; order:
   丹药: { label: "成品丹药", icon: "💊", order: 2, color: "jade" },
   符箓: { label: "成品符箓", icon: "📜", order: 3, color: "cinnabar" },
   材料: { label: "炼器材料", icon: "🔨", order: 4, color: "pine" },
-  杂物: { label: "特殊物品", icon: "✦", order: 5, color: "purple" },
+  灵兽: { label: "灵兽", icon: "🐾", order: 5, color: "jade" },
+  杂物: { label: "特殊物品", icon: "✦", order: 6, color: "purple" },
 };
 
 export function TreasurePanel() {
@@ -42,6 +47,16 @@ export function TreasurePanel() {
   const inventory = useGameStore((s) => s.inventory);
   const equipItem = useGameStore((s) => s.equipItem);
   const unequipSlot = useGameStore((s) => s.unequipSlot);
+  const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
+
+  /** 开发者补灵石：直接往那一档上加，只在动手的这一刻记一笔 */
+  const addSpiritStones = (tier: keyof SpiritStones, amount: number) => {
+    const st = useGameStore.getState();
+    useGameStore.setState({
+      spiritStones: { ...st.spiritStones, [tier]: (st.spiritStones[tier] ?? 0) + amount },
+    });
+    st.addLog(`[开发者] 补了 ${amount.toLocaleString()} 枚${STONE_TIERS.find((t) => t.key === tier)?.name ?? "灵石"}。`);
+  };
 
   const equipped = inventory.filter((i) => i.equipped);
   const unequipped = inventory.filter((i) => !i.equipped);
@@ -61,7 +76,7 @@ export function TreasurePanel() {
               <div
                 key={tier.key}
                 className={cn(
-                  "relative rounded p-4 border bg-gradient-to-b to-ink-900/40",
+                  "relative rounded p-4 border bg-gradient-to-b to-ink-dark/40",
                   tier.bg,
                   "border-paper-400/15",
                 )}
@@ -73,7 +88,22 @@ export function TreasurePanel() {
                 <div className={cn("font-number text-2xl", tier.color)}>
                   {(spiritStones[tier.key] ?? 0).toLocaleString()}
                 </div>
-                <div className="font-serif text-[10px] text-paper-400/50 mt-0.5">枚</div>
+                <div className="font-serif text-xs text-paper-400/50 mt-0.5">枚</div>
+
+                {isDeveloperMode && (
+                  <div className="flex items-center gap-1 mt-2 flex-wrap">
+                    {STONE_GRANTS.map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => addSpiritStones(tier.key, n)}
+                        title={`补 ${n.toLocaleString()} 枚${tier.name}`}
+                        className="px-1.5 py-0.5 rounded border border-gold-400/30 bg-gold-400/5 font-number text-[10px] text-gold-400/80 hover:bg-gold-400/15 transition"
+                      >
+                        +{n >= 10000 ? `${n / 10000}万` : n >= 1000 ? `${n / 1000}千` : n}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -102,12 +132,12 @@ export function TreasurePanel() {
                       <div className="mt-1 flex justify-center">
                         <GradeTag grade={item.grade} />
                       </div>
-                      <p className="font-serif text-[10px] text-paper-400/60 mt-1.5 leading-relaxed">
+                      <p className="font-serif text-xs text-paper-400/60 mt-1.5 leading-relaxed">
                         {item.desc}
                       </p>
                       <button
                         onClick={() => unequipSlot(slotInfo.slot)}
-                        className="mt-2 flex items-center gap-1 mx-auto px-2 py-1 rounded border border-cinnabar-400/30 text-cinnabar-400/70 text-[10px] font-brush hover:bg-cinnabar-500/10 hover:text-cinnabar-400 transition"
+                        className="mt-2 flex items-center gap-1 mx-auto px-2 py-1 rounded border border-cinnabar-400/30 text-cinnabar-400/70 text-xs font-brush hover:bg-cinnabar-500/10 hover:text-cinnabar-400 transition"
                       >
                         <X size={10} /> 卸下
                       </button>
@@ -149,14 +179,6 @@ function InventoryGrid({ items, equipItem }: { items: InventoryItem[]; equipItem
     );
   }, [items]);
 
-  const categoryColors: Record<string, string> = {
-    gold: "border-gold-400/30 bg-gold-400/5",
-    jade: "border-jade-400/30 bg-jade-400/5",
-    cinnabar: "border-cinnabar-400/30 bg-cinnabar-400/5",
-    pine: "border-pine-400/30 bg-pine-400/5",
-    purple: "border-purple-400/30 bg-purple-400/5",
-  };
-
   return (
     <ScrollCard
       title="储物袋"
@@ -179,7 +201,7 @@ function InventoryGrid({ items, equipItem }: { items: InventoryItem[]; equipItem
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-sm">{catInfo.icon}</span>
                   <span className="font-brush text-sm text-paper-200">{catInfo.label}</span>
-                  <span className="font-number text-[10px] text-paper-400/50">{typeItems.length}件</span>
+                  <span className="font-number text-xs text-paper-400/50">{typeItems.length}件</span>
                 </div>
                 <div className="grid grid-cols-8 gap-1.5">
                   {typeItems.map((item) => (
@@ -197,7 +219,7 @@ function InventoryGrid({ items, equipItem }: { items: InventoryItem[]; equipItem
                         {item.icon}
                       </span>
                       {item.count > 1 && (
-                        <span className="absolute bottom-0 right-0.5 font-number text-[9px] text-paper-100 bg-ink-900/80 px-1 rounded-tl">
+                        <span className="absolute bottom-0 right-0.5 font-number text-xs text-paper-100 bg-ink-900/80 px-1 rounded-tl">
                           {item.count}
                         </span>
                       )}
@@ -242,13 +264,13 @@ function InventoryGrid({ items, equipItem }: { items: InventoryItem[]; equipItem
               </p>
               {selected.type === "法宝" && !selected.equipped && (
                 <div className="mt-3 pt-3 border-t border-paper-400/10">
-                  <p className="font-serif text-[10px] text-paper-400/50 mb-2">装备到法宝槽</p>
+                  <p className="font-serif text-xs text-paper-400/50 mb-2">装备到法宝槽</p>
                   <div className="flex gap-1.5">
                     {SLOT_LABELS.map((slotInfo) => (
                       <button
                         key={slotInfo.slot}
                         onClick={() => equipItem(selected.id, slotInfo.slot)}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded border border-gold-400/30 text-gold-400/80 text-[10px] font-brush hover:bg-gold-400/10 transition"
+                        className="flex items-center gap-1 px-2.5 py-1 rounded border border-gold-400/30 text-gold-400/80 text-xs font-brush hover:bg-gold-400/10 transition"
                       >
                         <Sword size={10} /> {slotInfo.name}
                       </button>

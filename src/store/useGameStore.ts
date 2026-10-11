@@ -6,114 +6,448 @@ import type {
   CraftingTab,
   DataOp,
   GameSnapshot,
-  Location,
-  LocationType,
-  ElementType,
   TalismanRecipe,
   Player,
   BrewResult,
   Buff,
   ShieldData,
   InventoryItem,
+  Relation,
+  Manor,
+  Market,
+  SkillCheck,
+  Skill,
+  PawnTicket,
+  Quest,
+  JobTarget,
+  Adventure,
+  EscortOffer,
+  CraftOffer,
+  Pact,
+  Workshop,
+  FacilityKindId,
+  CustomFacility,
+  GameTime,
+  SectSite,
+  SectRelation,
+  SectStance,
+  Occupation,
 } from "@/data/types";
-import { applyOpsToState } from "@/lib/dataOps";
+import { applyOpsToState, normalizeAppraisal, normalizeItemElements } from "@/lib/dataOps";
+import { WORLD_SCENE_ID, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerSectScenes, sectSceneId } from "@/data/map";
+import { presetKey } from "@/data/map/presets";
+import { makeVillageShop, rollVillageBuildings, rollVillageName, rollVillageNpcs, villageBuildingName } from "@/data/villages";
+import { ESTATE_DECAY_PER_DAY, REBUILD_CONDITION, REBUILD_DAYS, maintainCost, rebuildCost, rollEstateOffer, sellRefund } from "@/data/estates";
+import {
+  MANOR_PLOT_PRICE,
+  SHAPE_COST,
+  convertCost,
+  demolishRefund,
+  cropBlockedByWinter,
+  cropYield,
+  emptyPlot,
+  manorBonusOf,
+  quarterKey,
+  upgradeCost as manorUpgradeCost,
+} from "@/data/manors";
+import { migrateRelation } from "@/data/npcGen";
+import { clampShopFacilities, clampShopGoods, shopLeaseCost, shopMonthlyExpense, SHOP_ARREARS_LIMIT, SHOP_MONEY_MAX } from "@/data/playerShops";
+import { activeModifierEffects } from "@/data/sectModifiers";
+import type {
+  Estate,
+  EstateOffer,
+  ManorFunction,
+  ManorPlot,
+  ManorShape,
+  PlayerShop,
+  ShopFacility,
+  ShopGood,
+  ShopKind,
+  Village,
+} from "@/data/types";
+import { resolveLocation } from "@/data/locations";
+import { OPENING_GAME_TIME, OPENING_DAY_SERIAL, LEGACY_DAY_OFFSET, ERA_YEAR_OFFSET, daySerial, gameDateKey, gameMonthKey, normalizeGameTime, shiftGameTime, shichenName } from "@/lib/gameTime";
+import { MAX_TRAVEL_COMPANIONS, manorKey, rollManor, rollQuestNpc, travelingCount } from "@/data/npcGen";
+import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
+import { brokerTargetsFor } from "@/data/broker";
+import {
+  LECTURE_ABSENT_DAYS,
+  LECTURE_ABSENT_PENALTY,
+  STONES_PER_CONTRIBUTION_IN,
+  STONES_PER_CONTRIBUTION_OUT,
+  contributionForItem,
+  heritageCost,
+  heritageRequirement,
+  isElderOrAbove,
+  isInnerDiscipleOrAbove,
+  leaderRealmIndex,
+  lectureGain,
+  lectureHour,
+  nearestCityIdFor,
+  positionLevel,
+  preachReward,
+  rollSectTasks,
+  type SectTaskBuilding,
+} from "@/data/sectLife";
+import {
+  FACILITY_LEVEL_CAP,
+  MATERIAL_SURPLUS_KEEP,
+  buildOptions,
+  facilityActions,
+  facilityDecision,
+  facilityRoster,
+  facilityStateOf,
+  facilitySteward,
+  facilityUpkeep,
+  facilityYield,
+  initialEndowment,
+  materialPrice,
+  clampCustomFacility,
+  upgradeCost,
+} from "@/data/sectFacilities";
+import { SECT_EMPTY_TILE, SECT_TILE_COUNT, getSectTileKind, sectTileCode } from "@/data/map/sectTiles";
+import { applySectFeatureBias, sectBuildingRoster, sectBuildingSpec } from "@/data/map/sectBuildings";
+import { SHOP_KINDS, rollMarket, syncMarket } from "@/data/shops";
+import { aliveRumors } from "@/data/rumors";
+import { findSkill, rollSkillCheck, trainOnceADay, trainSkill } from "@/data/skills";
+import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld } from "@/data/quests";
+import { EMPTY_REPUTATION, normalizeReputation, reputationFirstImpression, shiftReputation } from "@/data/reputation";
+import type { BuskResult } from "@/data/types";
+import { beastFromItem, normalizeBeast, raiseBond } from "@/data/beast";
+import {
+  SECT_FOUND_STONE_COST,
+  buildFoundingSite,
+  claimPlayerSect,
+  foundingPositions,
+  playerSectName,
+  presetCulture,
+  rollSectSites,
+  type FoundingSectInput,
+} from "@/data/sectSites";
+import { PAWN_DAYS, isPawnOverdue, pawnPrice } from "@/data/pawn";
+import { escortToRelation, isEscortExpired } from "@/data/escort";
+import { normalizeSectRelation, upsertSectRelation, vassalTribute, type SectWarChoice } from "@/data/sectRelations";
+import { occupationTribute, ownerOf, upsertOccupation } from "@/data/occupations";
+import { rollWorkshop } from "@/data/craftsmen";
+import { PACT_KEPT_AFFINITY, PACT_OVERDUE_AFFINITY, pactLapsed, pactReady } from "@/data/pacts";
+import { showsToday } from "@/data/theatre";
+import { pruneBuffs, shortenDebuffs } from "@/lib/buffTime";
+import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
+import { BATH_RELIEF_PER_HOUR, bathCost, clampHours } from "@/data/bath";
+import { goodDesc } from "@/data/goods";
+import { gradeForPrice, itemTypeFor } from "@/data/shopStock";
 import {
   REALMS,
   initialPlayer,
-  initialTechniques,
-  initialInventory,
-  initialSpiritStones,
-  initialTalismanRecipes,
-  initialAlchemyRecipes,
-  initialSect,
-  initialRelations,
 } from "@/data/mockData";
 
-export const LOCATIONS: Location[] = [
-  {
-    id: "home",
-    name: "住所",
-    description: "你的修行居所，宁静雅致，适合休整。",
-    icon: "居",
-    allowedActions: ["休息", "冥想", "闭关"],
-  },
-  {
-    id: "alchemy_room",
-    name: "炼丹房",
-    description: "宗门炼丹之所，丹炉齐备，灵气充沛。",
-    icon: "丹",
-    allowedActions: ["炼丹", "配药", "研究丹方"],
-  },
-  {
-    id: "forge_room",
-    name: "炼器室",
-    description: "炼器工坊，炉火熊熊，可锻神兵。",
-    icon: "器",
-    allowedActions: ["炼器", "锻造", "修复法宝"],
-  },
-  {
-    id: "meditation_room",
-    name: "闭关室",
-    description: "隔绝外界干扰的静室，宜潜心修炼。",
-    icon: "静",
-    allowedActions: ["修炼", "突破", "参悟"],
-  },
-  {
-    id: "market",
-    name: "集市",
-    description: "坊市繁华，商贾云集，可买卖交换。",
-    icon: "市",
-    allowedActions: ["购物", "出售", "打探消息"],
-  },
-  {
-    id: "library",
-    name: "藏经阁",
-    description: "宗门典籍所在，功法秘籍琳琅满目。",
-    icon: "书",
-    allowedActions: ["研读", "参悟", "借阅"],
-  },
-  {
-    id: "training_ground",
-    name: "演武场",
-    description: "切磋比武之地，可磨练武技。",
-    icon: "武",
-    allowedActions: ["修炼", "切磋", "演练"],
-  },
-  {
-    id: "outdoor",
-    name: "野外",
-    description: "山野之间，灵气驳杂，机缘与危险并存。",
-    icon: "野",
-    allowedActions: ["探索", "狩猎", "采集"],
-  },
-];
-
 interface GameStore extends GameState {
-  setPanel: (panel: PanelId) => void;
+  setPanel: (panel: PanelId | null) => void;
   setCraftingTab: (tab: CraftingTab) => void;
-  setLocation: (location: LocationType) => void;
+  /** 终局：气血耗尽或寿元用尽时立起，弹出结局页；null 为未终局 */
+  ending: { reason: string } | null;
+  /** 立终局 */
+  raiseEnding: (reason: string) => void;
+  /** 时辰推进后的生死结算：重伤掉气血，气血/寿元见底则立终局 */
+  tickMortality: (hours: number) => void;
+  /** 开局兜底：余寿照「上限减年岁」算出来；没报年岁的仍须为正、留有余量，不可为 0 或与上限相等 */
+  sanitizeOpeningLifespan: () => void;
+  /** 进入某张地图场景；场景不存在则忽略 */
+  enterScene: (sceneId: string) => void;
+  /** 返回当前场景的上位地图 */
+  exitScene: () => void;
+  /** 眼下所在之地的名目：人在山门里便是那一处山门，否则是所在地点的名号 */
+  hereLabel: () => string;
+  /** 开发者模式：直接把所在之地切到某座城，跳过叙事推动 */
+  devMoveTo: (placeId: string) => void;
+  /** 在街区上结识一个人：首次交谈即把他固定进尘缘，此后这块地上一直有他 */
+  meetNpc: (npc: Relation) => void;
+  /** 把一段记事写进某个相识之人的记忆 */
+  appendRelationMemory: (id: string, text: string) => void;
+  /** 从尘缘里删去若干人（如情谊太浅的） */
+  removeRelations: (ids: string[]) => void;
+  /** 在别处按倍数练一门指定功法：进度记在功法上，修为随之长；返回实际所得 */
+  trainAt: (techniqueId: string, hours: number, mul: number) => number;
+  /** 掷出一户大户人家并固定进存档；已有则原样取出，绝不重掷 */
+  ensureManor: (cityId: string, districtId: number, cityName: string, culture?: string) => Manor;
+  /** 在本图空着的预设点位上，随机圈出若干村庄；已开过的不再变 */
+  ensureVillages: () => void;
+  /** 打听一处村庄：掷定村里的营生与人物，此后固定 */
+  inquireVillage: (key: string) => void;
+  /** 买下村里的屋舍后，把待售的牌子撤下 */
+  clearVillageEstateOffer: (key: string) => void;
+  /** 名下房产 */
+  estates: Estate[];
+  /** 买下一处屋舍；paid 是讲价后的实付 */
+  buyEstate: (offer: EstateOffer, paid: number) => Estate;
+  /** 出售一处房产，退回灵石 */
+  sellEstate: (id: string) => number;
+  /** 维护一处房产：花灵石把完好度补满 */
+  maintainEstate: (id: string) => boolean;
+  /** 重建一处房产：花灵石与数日，复原到可用 */
+  rebuildEstate: (id: string) => boolean;
+  /** 把行囊里的东西存进屋里 */
+  storeInEstate: (id: string, itemName: string, count: number) => boolean;
+  /** 从屋里取回行囊 */
+  takeFromEstate: (id: string, itemName: string, count: number) => boolean;
+  /** 把一处屋舍租出去；租客与月租由叙事议定 */
+  rentOutEstate: (id: string, rent: { tenant: string; monthly: number }) => void;
+  /** 收回一处屋舍自住 */
+  reclaimEstate: (id: string) => void;
+  /** 把整个宅邸租出去；租客与月租由叙事议定 */
+  rentOutPlot: (plotId: string, rent: { tenant: string; monthly: number }) => void;
+  /** 收回宅邸自住 */
+  reclaimPlot: (plotId: string) => void;
+  /** 把各处房产的完好度按日子结算到今日 */
+  settleEstates: () => void;
+  /** 坊市里自设的铺面 */
+  playerShops: PlayerShop[];
+  /** 在坊市盘下一间铺面：付盘店费，另投一笔作启动资金池 */
+  openShop: (input: {
+    name: string;
+    kind: ShopKind;
+    typeLabel?: string;
+    cityId: string;
+    districtId: number;
+    place: string;
+    culture?: string;
+    capital: number;
+    /** 开张时由 AI 推演出的底子；缺则空着起步 */
+    goods?: ShopGood[];
+    facilities?: ShopFacility[];
+    monthlyIncome?: number;
+    monthlyExpense?: number;
+    useStock?: boolean;
+  }) => PlayerShop | null;
+  /** 从铺子资金池里取钱出来；返回实取到的数 */
+  withdrawShopCash: (id: string, amount: number) => number;
+  /** 往铺子资金池里注钱；返回实注入的数 */
+  depositShopCash: (id: string, amount: number) => number;
+  /** 把「经营」面板里议定的改动落库：货物、设施与月收支 */
+  applyShopPatch: (
+    id: string,
+    patch: {
+      name?: string;
+      goods?: ShopGood[];
+      facilities?: ShopFacility[];
+      monthlyIncome?: number;
+      monthlyExpense?: number;
+    },
+  ) => void;
+  /** 名下铺面按月结算：进项入池、开销从池里扣；连欠三月便被债主收走 */
+  settlePlayerShops: () => void;
+  /** 名下宅邸地块 */
+  manorPlots: ManorPlot[];
+  /** 买下一处宅地（7×7 空地） */
+  buyPlot: (input: { place: string; cityId?: string; districtId?: number }) => ManorPlot | null;
+  /** 在空地上盖一处建筑形体 */
+  buildShape: (plotId: string, index: number, shape: ManorShape) => boolean;
+  /** 给一处建筑分配功能 */
+  assignManorFunction: (plotId: string, index: number, fn: ManorFunction | undefined) => boolean;
+  /** 升级一处建筑 */
+  upgradeManorCell: (plotId: string, index: number) => boolean;
+  /** 拆除一处建筑，退回部分灵石 */
+  demolishManorCell: (plotId: string, index: number) => boolean;
+  /** 改建：把一处建筑换成另一形体 */
+  convertManorCell: (plotId: string, index: number, shape: ManorShape) => boolean;
+  /** 名下宅邸某一项功能的加成合计 */
+  manorBonus: (fn: ManorFunction) => number;
+  /** 给灵田记下要种的作物（过了 AI 那一关才落） */
+  setManorCrop: (plotId: string, index: number, crop: string) => boolean;
+  /** 按季度结算灵田的收获 */
+  settleManorFields: () => void;
+  /** 记下向街坊打听来的家世 */
+  setManorBackground: (key: string, background: string) => void;
+  /** 主家允准进门，此后可直接入内拜会 */
+  admitManor: (key: string) => void;
+  /** 开一处坊市并固定进存档；已开过则原样取出，绝不重掷 */
+  ensureMarket: (cityId: string, districtId: number, culture: string | undefined, slots: number) => Market;
+  /** 开一处匠人区并固定进存档；工匠一局之内不再换人 */
+  ensureWorkshop: (cityId: string, districtId: number, cityName: string, culture?: string) => Workshop;
+  /** 在作坊里说定一件事：付清料钱工钱，记下一桩取货的约定 */
+  placeCustomOrder: (args: {
+    offer: CraftOffer;
+    npcId: string;
+    giver: string;
+    place: string;
+    cityId: string;
+    districtId: number;
+  }) => boolean;
+  /** 主动去了结一桩约定：取货要等日子到，口头的随时可以去 */
+  settlePact: (pactId: string) => boolean;
+  /** 误过宽限的口头之约，情谊上落一点亏 */
+  expirePacts: () => void;
+  /** 记下在某家铺子门前驻足所见 */
+  setShopInfo: (key: string, shopId: string, info: string) => void;
+  /** 买下一件货：扣下品灵石、入行囊、铺面减存；灵石或存货不够则不成 */
+  buyGood: (args: { key: string; shopId: string; goodName: string; price: number }) => boolean;
+  /** 卖出一样东西：行囊里减掉、灵石入袋；totalPrice 是整笔的价钱 */
+  sellItem: (args: { itemId: string; totalPrice: number; count: number }) => boolean;
+  /** 花掉几枚下品灵石，如打尖叫菜；不够则不成 */
+  payStones: (amount: number) => boolean;
+  /** 街头卖艺：对选定本事连考五回，过则得钱，失手折平民名声并压低后续判定 */
+  busk: (skillName: string) => BuskResult;
+  /** 城里花掉的时辰：打听、等候都算在内，只往前推 */
+  advanceTime: (hours?: number) => void;
   setActiveHeartTechnique: (id: string | null) => void;
   setPlayer: (player: Player) => void;
-  cultivate: () => void;
   breakthrough: () => void;
-  comprehendTechnique: (id: string) => void;
   drawTalisman: (recipe: TalismanRecipe) => { success: boolean; message: string };
   brewAlchemy: (selectedHerbs: { name: string; count: number }[], fire: number, duration: number) => Promise<BrewResult>;
   acceptTask: (id: string) => void;
+  /** 照本门附近真有的城池现掷一批门派任务；手头还有在办的便不换，除非 force */
+  refreshSectTasks: (force?: boolean) => void;
+  /**
+   * 在山门里听掌门开讲，或自己登坛：记考勤、涨修为，另给一句交给叙事去写。
+   * topic 是这一场讲什么，由玩家先挑定。
+   */
+  attendLecture: (topic?: string) => { ok: boolean; message?: string; decision?: string };
+  /** 过了开讲时辰仍不见人来，按半月缺勤的规矩扣一笔贡献；进山门与过时辰时各算一次 */
+  settleLecture: () => void;
+  /** 以贡献换一门功法：身份等级不到的换不得。只落账，叙事由调用方接着送 */
+  learnHeritage: (name: string) => boolean;
+  /** 在讲经堂登座讲一场经，换一笔贡献；一日一场。topic 是这一场讲什么 */
+  preachScripture: (topic?: string) => { ok: boolean; message?: string; decision?: string };
+  /** 建筑的日常结算：各处产出入宝库、扣维护、弟子耗灵谷与蔬菜；进山门与过日时各算一次 */
+  settleFacilities: () => void;
+  /** 开局给宗门备一笔家底：灵石与几样过日子的料；只给一回 */
+  ensureSectEndowment: () => void;
+  /** 各处山门的日结：进项、支用与余料发卖；本门另有 management.treasury 那一本 */
+  settleSectSites: () => void;
+  /** 拿宝库的灵石与材料把一座建筑升一级 */
+  upgradeFacility: (name: string, kindId: FacilityKindId) => boolean;
+  /** 在荒地上一手新立一座建筑：身份与门户品级都要够，耗费从宝库出 */
+  buildSectFacility: (
+    cellIndex: number,
+    name: string,
+    /** 玩家自拟的那一座：给了便不照名录挑，耗费与账目都照它自己的 */
+    custom?: CustomFacility,
+  ) => { ok: boolean; message: string };
+  /**
+   * 在一座建筑里做一件事：参数先挑定，由这里按规则落账，
+   * 再回一句交给叙事去写的行止。凡是一按即成的勾当，这里一概不做。
+   */
+  performFacilityAction: (
+    name: string,
+    kindId: FacilityKindId,
+    actionId: string,
+    option: string,
+  ) => { ok: boolean; message?: string; decision?: string };
   promote: (id: string) => void;
   buyShop: (id: string) => void;
-  interact: (relationId: string) => void;
+  /** 上交灵石换贡献：每 10 下品灵石折 1 点；返回实得贡献 */
+  donateStonesToSect: (stones: number) => number;
+  /** 上交行囊里的物品换贡献：按品阶折价；返回实得贡献 */
+  donateItemToSect: (itemName: string, count?: number) => number;
+  /** 内门弟子以上，以贡献兑换灵石：1 点贡献折 8 下品灵石；返回实得灵石 */
+  redeemContributionForStones: (contribution: number) => number;
+  /** 定下谁与你同行：同行的人遇上打斗会站到你这一边 */
+  setTraveling: (relationId: string, traveling: boolean) => boolean;
   addLog: (msg: string) => void;
   resetGame: () => void;
   applyOps: (ops: DataOp[]) => void;
   getSnapshot: () => GameSnapshot;
   restoreSnapshot: (snap: GameSnapshot) => void;
   updateNews: (newItems: { category: string; title: string; content: string; source: string }[]) => void;
+  /** 记下刚从别处听来的零碎消息；过了月的自行清掉 */
+  addRumors: (items: { text: string; source: string }[]) => void;
+  /** 承认某一次判定输了；此前悬着的余地就此了结 */
+  settleCheck: (id: string, success: boolean) => void;
+  /** 掷一次判定：点数加技能等级过难度；没这门本事就按零级算 */
+  checkSkill: (args: { skill: string; dc: number; context: string }) => SkillCheck | null;
+  /** 了结一桩机缘：交差或作罢；成不成由叙事里那人点头，这里只管落账 */
+  settleQuest: (args: { name: string; status: "done" | "failed" }) => boolean;
+  /** 误了期的机缘，到日子一并罚了 */
+  expireQuests: () => void;
+  /** 立一处奇遇；只落在空闲的预设点位上 */
+  addAdventure: (adventure: Adventure) => void;
+  /** 了结一处奇遇：keep 为真则了结后仍留在此处，否则撤去 */
+  settleAdventure: (id: string, keep: boolean) => void;
+  /** 玩家行至某处奇遇的点位：把位置钉到那一处，供入内交互 */
+  arriveAtAdventure: (id: string) => void;
+  /** 替任务人物立传改名：照 id 打补丁（名、性别、年岁、出身、性情、形貌、修为），
+   *  并把机缘里指向旧名的接头人一并改过来 */
+  patchRelations: (
+    updates: {
+      id: string;
+      patch: Partial<Pick<Relation, "name" | "gender" | "age" | "origin" | "personality" | "appearance" | "realm">>;
+    }[],
+  ) => void;
+  /** 在瓦舍听完一场戏：把那点门道记到本事上，并把今日的场次记上一笔 */
+  recordPlay: (args: { skillId?: string; gain: number; newSkill?: Skill }) => void;
+  /** 把行囊里的一头灵兽收作随身；一身只带一头，换兽时旧的那头自行归山 */
+  tameBeast: (itemId: string) => boolean;
+  /** 放归随身的灵兽 */
+  releaseBeast: () => void;
+  /** 开局照六处文化圈各掷三到五处宗门，落在九州舆图上 */
+  rollSectSites: () => void;
+  /** 该有的宗门补齐：一处都没有就先掷，玩家报过宗门名号的再认领一处作本门 */
+  ensureSectSites: () => void;
+  /**
+   * 开宗立派：散修自选一处空地点位，照自己填的信息立起门户。
+   * 花一笔灵石，落成后只有一座主殿、门下无人，玩家自此为掌门。
+   */
+  foundSect: (input: FoundingSectInput) => { ok: boolean; message: string };
+  /**
+   * 宗门战收场：攻破的一处宗门，照玩家所择发落——掠夺、纳附庸，或一举摧毁。
+   */
+  resolveSectWar: (args: {
+    targetId: string;
+    /** 打的是宗门、城还是村；缺省按宗门算 */
+    targetKind?: "sect" | "city" | "village";
+    choice: SectWarChoice;
+  }) => { ok: boolean; message: string };
+  /** 月度结算：各属城村来贡，本门占的入本门宝库，别家占的入那一处自己的账 */
+  settleOccupations: () => void;
+  /**
+   * 把玩家的身份对上本门的职位树。
+   * 开局报的身份是玩家随手写的，门中职位是模型另拟的，两边名目常对不上，
+   * 对不上便落在最低一级，免得判身份时卡在「低于外门弟子」。
+   */
+  alignPlayerPosition: () => void;
+  /** 鉴宝有了结果：把行囊里那件旧物换成看明白的样子；看不明白就原样留着 */
+  identifyItem: (args: { itemId: string; reading: unknown }) => boolean;
+  /** 把一件东西押在当铺，换回七成价钱的灵石 */
+  pawnItem: (args: {
+    itemId: string;
+    shopId: string;
+    shopName: string;
+    cityId: string;
+    districtId: number;
+    count?: number;
+  }) => PawnTicket | null;
+  /** 回原来那家当铺赎东西 */
+  redeemPawn: (ticketId: string) => boolean;
+  /** 过了期限还不来赎的，一并成了死当 */
+  expirePawns: () => void;
+  /** 从牙行柜上接下一桩差事：写成自己的机缘，赏押在那家柜上 */
+  takeBrokerJob: (args: {
+    key: string;
+    shopId: string;
+    jobId: string;
+    cityId: string;
+    districtId: number;
+  }) => boolean;
+  /** 回牙行领押在柜上的赏；没办成或是领过了都不成 */
+  claimQuest: (questId: string) => boolean;
+  /** 在镖局雇下一位镖师：付清佣金，他自此与你同行，雇期一到自行告辞 */
+  hireEscort: (args: {
+    offer: EscortOffer;
+    cityId: string;
+    districtId: number;
+    metAt: string;
+  }) => boolean;
+  /** 雇期到了的镖师各自上路 */
+  expireEscorts: () => void;
   addBuff: (buff: Buff) => void;
   removeBuff: (buffId: string) => void;
   addShield: (shield: ShieldData) => void;
   consumeShield: (amount: number) => void;
   updateBuffDuration: () => void;
+  /** 下汤池泡几个时辰：先付汤钱，负面状态随之缩短，挪过此刻的就此养好 */
+  takeBath: (hours: number) => { ok: boolean; cost: number; washed: string[]; reason?: string };
+  /** 战斗里香烧过了几柱：按柱香计的临时状态照数递减，烧完的自行散去 */
+  burnIncense: (sticks: number) => void;
   equipItem: (itemId: string, slot: "命" | "护" | "辅") => void;
   unequipSlot: (slot: "命" | "护" | "辅") => void;
 }
@@ -188,6 +522,8 @@ function validateAndFixState(state: any): GameState {
         supreme: typeof state.spiritStones.supreme === "number" ? state.spiritStones.supreme : 0,
       }
       : { low: 0, mid: 0, high: 0, supreme: 0 },
+    reputation: normalizeReputation(state?.reputation),
+    beast: normalizeBeast(state?.beast),
     sect: typeof state?.sect === "object" && state.sect !== null
       ? {
         ...initialState.sect,
@@ -196,9 +532,55 @@ function validateAndFixState(state: any): GameState {
         tasks: Array.isArray(state.sect.tasks) ? state.sect.tasks : [],
       }
       : initialState.sect,
-    relations: Array.isArray(state?.relations) ? state.relations : [],
+    // 旧档只有情谊，载入时折成关系与信任
+    relations: Array.isArray(state?.relations) ? state.relations.map(migrateRelation) : [],
     log: Array.isArray(state?.log) ? state.log : [],
     pillCache: typeof state?.pillCache === "object" && state.pillCache !== null ? state.pillCache : {},
+    districtNames: typeof state?.districtNames === "object" && state.districtNames !== null ? state.districtNames : {},
+    manors: typeof state?.manors === "object" && state.manors !== null ? state.manors : {},
+    markets: typeof state?.markets === "object" && state.markets !== null ? state.markets : {},
+    priceAdjusts: Array.isArray(state?.priceAdjusts) ? state.priceAdjusts : [],
+    rumors: Array.isArray(state?.rumors) ? state.rumors : [],
+    skills: Array.isArray(state?.skills) ? state.skills : [],
+    checks: Array.isArray(state?.checks) ? state.checks : [],
+    quests: Array.isArray(state?.quests) ? state.quests : [],
+    waseShows:
+      state?.waseShows && Number.isFinite(Number(state.waseShows.day))
+        ? { day: Math.trunc(Number(state.waseShows.day)), count: Math.max(0, Math.trunc(Number(state.waseShows.count) || 0)) }
+        : { day: 0, count: 0 },
+    pawns: Array.isArray(state?.pawns) ? state.pawns.filter((t) => t && t.item && t.shopId) : [],
+    workshops: typeof state?.workshops === "object" && state.workshops !== null ? state.workshops : {},
+    villages:
+      typeof state?.villages === "object" && state.villages !== null
+        ? Object.fromEntries(
+            Object.entries(state.villages as Record<string, Village>).map(([k, v]) => [
+              k,
+              // 旧档没有「已前往」这一项：打听过的，自然是去过的
+              { ...v, visited: !!(v?.visited || v?.inquired) },
+            ]),
+          )
+        : {},
+    estates: Array.isArray(state?.estates) ? state.estates : [],
+    manorPlots: Array.isArray(state?.manorPlots) ? state.manorPlots : [],
+    playerShops: Array.isArray(state?.playerShops) ? state.playerShops : [],
+    // 宗门之间的交情起初一张白纸，由叙事与新闻添改；旧档没有便空着
+    sectRelations: Array.isArray(state?.sectRelations)
+      ? state.sectRelations.filter((r) => r && r.id && r.a && r.b)
+      : [],
+    // 城村的归属同样是后加的；旧档里一处未占
+    occupations: Array.isArray(state?.occupations)
+      ? state.occupations.filter((o) => o && o.targetId && o.ownerSectId)
+      : [],
+    pacts: Array.isArray(state?.pacts) ? state.pacts.filter((p) => p && p.id && p.name) : [],
+    // 宗门点位是开局现掷的，旧档里没有这一项便空着，进主界面时再补
+    sectSites: Array.isArray(state?.sectSites) ? state.sectSites : [],
+    adventures: Array.isArray(state?.adventures) ? state.adventures.filter((a: any) => a && a.id && a.name) : [],
+    currentPlaceId: getMarker(state?.currentPlaceId) ? state.currentPlaceId : getDefaultPlaceId(),
+    currentSectId: typeof state?.currentSectId === "string" ? state.currentSectId : undefined,
+    currentAdventureId: typeof state?.currentAdventureId === "string" ? state.currentAdventureId : undefined,
+    mapSceneId: getScene(state?.mapSceneId) ? state.mapSceneId : WORLD_SCENE_ID,
+    currentLocation: resolveLocation(state?.currentLocation) ?? "home",
+    currentTime: normalizeGameTime(state?.currentTime, OPENING_GAME_TIME),
   };
 }
 
@@ -222,6 +604,8 @@ const initialState: GameState = {
   techniques: [],
   inventory: [],
   spiritStones: { low: 0, mid: 0, high: 0, supreme: 0 },
+  reputation: { ...EMPTY_REPUTATION },
+  beast: null,
   talismanRecipes: [],
   alchemyRecipes: [],
   sect: {
@@ -256,8 +640,10 @@ const initialState: GameState = {
     },
   },
   relations: [],
-  currentPanel: "profile",
+  currentPanel: null,
   craftingTab: "talisman",
+  currentPlaceId: getDefaultPlaceId(),
+  mapSceneId: WORLD_SCENE_ID,
   currentLocation: "home",
   log: [],
   pillCache: {},
@@ -265,12 +651,162 @@ const initialState: GameState = {
     items: [],
     lastUpdate: "",
   },
-  currentTime: {
-    year: 1,
-    month: 1,
-    day: 1,
-    hour: 0,
-  },
+  currentTime: { ...OPENING_GAME_TIME },
+  districtNames: {},
+  manors: {},
+  markets: {},
+  priceAdjusts: [],
+  rumors: [],
+  skills: [],
+  checks: [],
+  quests: [],
+  waseShows: { day: 0, count: 0 },
+  pawns: [],
+  workshops: {},
+  villages: {},
+  estates: [],
+  manorPlots: [],
+  playerShops: [],
+  sectRelations: [],
+  occupations: [],
+  pacts: [],
+  sectSites: [],
+  adventures: [],
+};
+
+/** 门中光景不好时落在弟子头上的那几条，由此标记，好转了便自行撤下 */
+const SECT_HARDSHIP_SOURCE = "宗门日结";
+
+/** 门中艰难落下的状态顶多久：三日 */
+const SECT_HARDSHIP_HOURS = 36;
+
+/**
+ * 给玩家添一条宗门艰难所致的状态；已经有了就续上日子。
+ * 只认自己加的那一条，旁处（叙事）落下的同名状态不动。
+ */
+function withSectDebuff(buffs: Buff[], templateId: string, until: GameTime): Buff[] {
+  const tpl = BUFF_TEMPLATES.find((x) => x.id === templateId);
+  if (!tpl) return buffs;
+  const at = buffs.findIndex((b) => b.id === tpl.id);
+  if (at >= 0) {
+    const next = buffs.slice();
+    next[at] = { ...next[at], durationType: "until", duration: undefined, until, source: SECT_HARDSHIP_SOURCE };
+    return next;
+  }
+  return [...buffs, buffFromTemplate(tpl, { until, source: SECT_HARDSHIP_SOURCE })];
+}
+
+/** 把宗门日结加的那一条撤下来；旁处来的同名状态留着 */
+function withoutSectDebuff(buffs: Buff[], templateId: string): Buff[] {
+  return buffs.filter((b) => !(b.id === templateId && b.source === SECT_HARDSHIP_SOURCE));
+}
+
+/**
+ * 这一处山门是不是别家的。
+ * 本门点位记着 mine；没记着（旧档或开发者到处看）便当是自己的，不作拦阻。
+ */
+function isForeignSect(state: GameState, sceneId: string): boolean {
+  const mine = (state.sectSites ?? []).find((s) => s?.mine);
+  if (!mine) return false;
+  return sectSceneId(mine.id) !== sceneId;
+}
+
+/** 把两份材料单并成一份，同名相加 */
+function mergeMaterials(
+  base: { name: string; amount: number }[] | undefined,
+  add: { name: string; amount: number }[] | undefined,
+): { name: string; amount: number }[] {
+  const map = new Map<string, number>();
+  [...(base ?? []), ...(add ?? [])].forEach((m) => {
+    if (!m?.name) return;
+    map.set(m.name, (map.get(m.name) ?? 0) + (Number(m.amount) || 0));
+  });
+  return [...map.entries()].map(([name, amount]) => ({ name, amount }));
+}
+
+/** 本门与他门之间记一笔交情；本门还没立起来便不记 */
+function makeSectRelation(
+  mine: SectSite | undefined,
+  other: SectSite,
+  stance: SectStance,
+  relation: number,
+  note: string,
+  day: number,
+): SectRelation | null {
+  if (!mine) return null;
+  return normalizeSectRelation({ a: mine.id, b: other.id, stance, relation, note, sinceDay: day }, day);
+}
+
+/**
+ * 一处宗门被踏破：门下之人在名册上一律成了散修，并各自记下这一桩。
+ * 只认名册上「所属」一栏写着这一门名号的；余人不动。
+ */
+function shatterSectNpcs(
+  relations: Relation[],
+  sectName: string,
+  byName: string,
+): { relations: Relation[]; changed: number } {
+  const name = String(sectName ?? "").trim();
+  if (!name) return { relations, changed: 0 };
+  const note = `「${name}」已为${byName}所破，门墙不存，我自此成了一个散修。`;
+  let changed = 0;
+  const next = (Array.isArray(relations) ? relations : []).map((r) => {
+    const aff = String(r?.affiliation ?? "").trim();
+    if (!aff || aff === "无" || !aff.includes(name)) return r;
+    changed += 1;
+    return {
+      ...r,
+      affiliation: "无",
+      memory: `${r.memory ? `${r.memory} ` : ""}${note}`.slice(-400),
+    };
+  });
+  return { relations: changed > 0 ? next : relations, changed };
+}
+
+/**
+ * 本门山门里能当任务去处的建筑清单。
+ * 建筑是照着山门图现排的，故按同一套排布现算一份；同一座只记一条。
+ * 去处写成本门名号加建筑名，如「青云宗·炼丹房」，与建筑面板上的写法一致。
+ */
+function sectTaskBuildings(state: GameState, site: SectSite | undefined): SectTaskBuilding[] {
+  if (!site) return [];
+  const scene = getScene(sectSceneId(site.id));
+  if (!scene) return [];
+  const label = state.sect?.name || "本门";
+  return sectBuildingRoster(scene).map((b) => ({
+    name: b.name,
+    kindId: b.kindId,
+    sectId: site.id,
+    label: `${label}·${b.name}`,
+  }));
+}
+
+/**
+ * 请模型照这一桩差事给钉下的人物各立一份小传（异步一笔）。
+ * 姓名、性别、年岁、出身、性情、形貌、修为都交给它，免得出现身份对不上的接头人；
+ * 接不上接口、或这一回没识出，便沿用先前现拼的样子，不碍事。
+ */
+function generateQuestNpcs(questName: string, questDesc: string | undefined, npcs: Relation[]): void {
+  const list = (Array.isArray(npcs) ? npcs : []).filter((n) => n?.id && n?.title);
+  if (list.length === 0) return;
+  void import("@/store/useAIStore")
+    .then(({ useAIStore }) =>
+      useAIStore.getState().generateTaskNpcs({
+        questName,
+        questDesc,
+        npcs: list.map((n) => ({ id: n.id, title: n.title, gender: n.gender, persona: n.persona })),
+      }),
+    )
+    .catch(() => {});
+}
+
+/** 编号化之前用的拼音 slug，只为 v18 迁移而留：把老存档里的所在地平移成编号 */
+const LEGACY_PLACE_IDS: Record<string, string> = {
+  youji: "1", changan: "2", liangzhou: "3", shuofang: "4", xuzhou: "5",
+  jinling: "6", linan: "7", jiangling: "8", chengdu: "9", bianliang: "10",
+  fuzhou: "11", panyu: "12", dali: "13", huanglong: "14", liujing: "15",
+  kaicheng: "16", liuqiu: "17", pinghu: "18", pinganjing: "19", kangcang: "20",
+  shenglong: "21",
 };
 
 export const useGameStore = create<GameStore>()(
@@ -278,9 +814,124 @@ export const useGameStore = create<GameStore>()(
     (set, get) => ({
       ...initialState,
 
+      ending: null,
+      raiseEnding: (reason) => {
+        if (get().ending) return;
+        set({ ending: { reason } });
+      },
+
+      tickMortality: (hours) => {
+        const st = get();
+        if (st.ending) return;
+        const hp0 = Number(st.player.hp) || 0;
+        // 重伤：气血低于两成，时间每推进一个时辰再掉一点
+        if (hp0 > 0 && hp0 < 20 && hours > 0) {
+          const hp = Math.max(0, hp0 - hours);
+          set((s) => ({
+            player: { ...s.player, hp },
+            log: [`伤重未愈，气血又损 ${hours} 点，只剩 ${hp} 点。`, ...s.log].slice(0, 30),
+          }));
+        }
+        const p = get().player;
+        if ((Number(p.hp) || 0) <= 0) {
+          get().raiseEnding("气血耗尽，伤重不治，就此殒身。");
+        } else if ((Number(p.lifespanCurrent) || 0) <= 0) {
+          get().raiseEnding("寿元已尽，灯枯油尽，溘然长逝。");
+        }
+      },
+
+      sanitizeOpeningLifespan: () =>
+        set((st) => {
+          const p = st.player;
+          const rawMax = Math.trunc(Number(p.lifespanMax));
+          // 上限得是个与凡人相称的正常数，认不出或过于离谱就取常例
+          const max = Number.isFinite(rawMax) && rawMax >= 10 ? Math.min(rawMax, 5000) : 120;
+
+          const rawAge = Math.trunc(Number(p.age));
+          // 年岁报到逼近上限的，也留一成余寿，免得开篇便油尽灯枯
+          const ageCap = Math.max(1, max - Math.max(1, Math.round(max * 0.1)));
+          const age = Number.isFinite(rawAge) && rawAge > 0 ? Math.min(rawAge, ageCap) : undefined;
+
+          // 报了年岁的，余寿照「上限减年岁」算出来，年岁加余寿正好是上限；
+          // 没报年岁的取上限的七成——余寿不再沿用开局那两个 100 的旧值
+          const cur = age ? max - age : Math.max(1, Math.round(max * 0.7));
+
+          if (cur === Math.trunc(Number(p.lifespanCurrent)) && max === rawMax && age === p.age) return st;
+          return { player: { ...p, age, lifespanMax: max, lifespanCurrent: cur } };
+        }),
+
       setPanel: (panel) => set({ currentPanel: panel }),
       setCraftingTab: (tab) => set({ craftingTab: tab }),
-      setLocation: (location) => set({ currentLocation: location }),
+
+      enterScene: (sceneId) => {
+        const scene = getScene(sceneId);
+        if (!scene) return;
+        const st = get();
+        // 已经在这张地图上就不重复记日志
+        if (scene.id === st.mapSceneId) return;
+        set({
+          mapSceneId: scene.id,
+          log: [`你踏入了「${scene.name}」。`, ...st.log].slice(0, 30),
+        });
+        // 进了山门：把搁着的门派事务张出来，开讲的缺勤也一并算过
+        if (scene.kind === "sect") {
+          get().refreshSectTasks();
+          get().settleLecture();
+        }
+      },
+
+      exitScene: () =>
+        set((st) => {
+          const parentId = getScene(st.mapSceneId)?.parentId;
+          if (!parentId) return st;
+          return { mapSceneId: parentId };
+        }),
+
+      hereLabel: () => {
+        const st = get();
+        // 人在山门里，便以那一处山门的名号为准
+        const scene = getScene(st.mapSceneId);
+        if (scene?.kind === "sect") return scene.name;
+        if (st.currentSectId) {
+          const site = (st.sectSites || []).find((x) => x.id === st.currentSectId);
+          if (site?.name) return site.name;
+        }
+        // 人正驻在某一处奇遇点位上，便以那一处奇遇的名号为准
+        if (st.currentAdventureId) {
+          const adv = (st.adventures || []).find((x) => x.id === st.currentAdventureId);
+          if (adv?.name) return adv.name;
+        }
+        return getMarker(st.currentPlaceId)?.name || "";
+      },
+
+      devMoveTo: (placeId) => {
+        if (placeId.startsWith("sect:")) {
+          const sectId = placeId.substring(5);
+          const st = get();
+          const sectSite = st.sectSites.find((s) => s.id === sectId);
+          if (!sectSite) return;
+          // 进宗门先把它的山门图注册上，才好点进去看
+          registerSectScenes(st.sectSites);
+          set({
+            currentSectId: sectId,
+            mapSceneId: WORLD_SCENE_ID,
+            log: [`【开发者】你来到了「${sectSite.name}」。`, ...st.log].slice(0, 30),
+          });
+          return;
+        }
+        set((st) => {
+          const marker = getMarker(placeId);
+          if (!marker) return st;
+          if (marker.id === st.currentPlaceId && !st.currentSectId) return { mapSceneId: WORLD_SCENE_ID };
+          return {
+            currentPlaceId: marker.id,
+            currentSectId: undefined,
+            currentLocation: "home",
+            mapSceneId: WORLD_SCENE_ID,
+            log: [`【开发者】你来到了「${marker.name}」。`, ...st.log].slice(0, 30),
+          };
+        });
+      },
 
       setActiveHeartTechnique: (id) =>
         set((st) => ({
@@ -295,10 +946,11 @@ export const useGameStore = create<GameStore>()(
 
       updateNews: (newItems) =>
         set((s) => {
+          // 每类留最新的几条：主动辑录一期最多 6 条且可能集中于某一侧重，故上限放到 6
           const categoryLimits: Record<string, number> = {
-            "官府公告": 3,
-            "宗门布告": 3,
-            "市井传言": 3,
+            "官府公告": 6,
+            "宗门布告": 6,
+            "市井传言": 6,
           };
 
           let newNews = Array.isArray(s.news.items) ? [...s.news.items] : [];
@@ -323,97 +975,59 @@ export const useGameStore = create<GameStore>()(
             return acc;
           }, {} as Record<string, typeof newNews>);
 
+          // lastUpdate 必须是日期键，runTurn 用它判断当天是否已经生成过新闻；
+          // 之前写成「今日」会与日期键永不相等，导致每回合都重刷一份默认新闻。
+          const ct = normalizeGameTime(s.currentTime, OPENING_GAME_TIME);
+
           return {
             news: {
               items: Object.values(grouped).flat(),
-              lastUpdate: "今日",
+              lastUpdate: gameDateKey(ct),
             },
           };
         }),
 
-      cultivate: () => {
-        const s = get();
-        const mpCost = 15;
-        if (s.player.mp < mpCost) {
-          set((st) => ({
-            log: ["灵力不足，无法入定修炼。", ...st.log].slice(0, 30),
-          }));
-          return;
-        }
-
-        const heartTechnique = s.player.activeHeartTechnique
-          ? s.techniques.find((t) => t.id === s.player.activeHeartTechnique)
-          : s.techniques.find((t) => t.category === "心法");
-        let efficiency = 1;
-        let basePracticeSpeed = 100;
-
-        if (heartTechnique) {
-          basePracticeSpeed = heartTechnique.basePracticeSpeed || 100;
-
-          const playerRootElements = (Array.isArray(s.player.spiritRoots) ? s.player.spiritRoots : []).map((r) => r.element);
-          const techElement = heartTechnique.element;
-
-          if (playerRootElements.includes(techElement)) {
-            efficiency += 0.25;
-          }
-
-          const ELEMENT_GENERATE: Record<ElementType, ElementType> = {
-            "金": "水", "木": "火", "土": "金", "水": "木", "火": "土",
-            "风": "雷", "雷": "火", "冰": "水", "暗": "土",
+      addRumors: (items) =>
+        set((st) => {
+          const day = daySerial(st.currentTime);
+          // 话是在哪座城听来的，一并记下；往后叙事也好知道这是哪儿的口风
+          const city = getMarker(st.currentPlaceId)?.name ?? "";
+          const trimmed = items
+            .map((r) => ({
+              id: `rumor-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+              text: String(r.text ?? "").trim().slice(0, 120),
+              source: String(r.source ?? "").trim().slice(0, 40) || "道听途说",
+              city: city || undefined,
+              day,
+            }))
+            .filter((r) => r.text);
+          if (trimmed.length === 0) return st;
+          // 同一天里同一句话不记第二遍；新听来的排在前头，过月的顺手丢掉
+          const seen = new Set(aliveRumors(st.rumors, st.currentTime).map((r) => r.text));
+          const fresh = trimmed.filter((r) => !seen.has(r.text));
+          return {
+            rumors: [...fresh, ...aliveRumors(st.rumors, st.currentTime)].slice(0, 60),
           };
-          if (playerRootElements.includes(ELEMENT_GENERATE[techElement])) {
-            efficiency += 0.1;
-          }
+        }),
 
-          const ELEMENT_COUNTER: Record<ElementType, ElementType> = {
-            "金": "木", "木": "土", "土": "水", "水": "火", "火": "金",
-            "风": "土", "雷": "水", "冰": "火", "暗": "风",
+      settleCheck: (id, success) =>
+        set((st) => {
+          const target = st.checks.find((c) => c.id === id);
+          if (!target) return st;
+          return {
+            checks: st.checks.map((c) =>
+              c.id === id ? { ...c, success, pending: undefined, admitted: !success } : c,
+            ),
+            // 判定过了，这门本事跟着长一截；同一日已经长过的就不再添
+            skills: trainOnceADay(st.skills, target.skill, success, target.day, st.checks),
+            log: [
+              success
+                ? `「${target.skill}」这一关，终究还是过了。`
+                : `你认下这一回：「${target.skill}」没看出门道。`,
+              ...st.log,
+            ].slice(0, 30),
           };
-          if (playerRootElements.includes(ELEMENT_COUNTER[techElement])) {
-            efficiency -= 0.15;
-          }
-
-          let heartBonus = 0;
-          const heartCompatibility = heartTechnique.heartCompatibility || [];
-          for (const compat of heartCompatibility) {
-            const score = s.player.stats.heartScores.find((hs) => hs.trait === compat.trait)?.score || 0;
-            heartBonus += (score / 100) * (compat.bonus / 100);
-          }
-          efficiency += heartBonus;
-
-          const conflictingPairs: [any, any][] = [["刚毅", "仁厚"], ["无情", "仁厚"], ["谨慎", "勇猛"], ["狡黠", "仁厚"]];
-          for (const [trait1, trait2] of conflictingPairs) {
-            const score1 = s.player.stats.heartScores.find((hs) => hs.trait === trait1)?.score || 0;
-            const score2 = s.player.stats.heartScores.find((hs) => hs.trait === trait2)?.score || 0;
-            if (score1 > 60 && score2 > 60) {
-              efficiency -= 0.05;
-            }
-          }
-        }
-
-        const meridians = Array.isArray(s.player.meridians) ? s.player.meridians : [];
-        const avgMeridianClarity =
-          meridians.length > 0 ? meridians.reduce((sum, m) => sum + m.clarity, 0) / meridians.length : 0;
-        if (avgMeridianClarity < 50) {
-          efficiency *= 0.5;
-        }
-
-        efficiency += (s.player.stats.wisdom - 50) * 0.005;
-
-        efficiency = Math.max(0.2, efficiency);
-
-        const baseGain = (20 + Math.random() * 30) * (basePracticeSpeed / 100);
-        const finalGain = Math.floor(baseGain * efficiency);
-
-        set((st) => ({
-          player: {
-            ...st.player,
-            cultivation: st.player.cultivation + finalGain,
-            mp: Math.max(0, st.player.mp - mpCost),
-          },
-          log: [`静坐吐纳，灵力流转，修为增长 ${finalGain} 点。`, ...st.log].slice(0, 30),
-        }));
-      },
+        }),
 
       breakthrough: () => {
         const s = get();
@@ -438,7 +1052,9 @@ export const useGameStore = create<GameStore>()(
         const meridians = Array.isArray(s.player.meridians) ? s.player.meridians : [];
         const avgMeridianClarity =
           meridians.length > 0 ? meridians.reduce((sum, m) => sum + m.clarity, 0) / meridians.length : 0;
-        baseSuccess += (avgMeridianClarity - 50) * 0.002;
+        if (meridians.length > 0) {
+          baseSuccess += (avgMeridianClarity - 50) * 0.002;
+        }
 
         const damageCount = meridians.filter((m) => m.damage).length;
         baseSuccess -= damageCount * 0.1;
@@ -451,6 +1067,8 @@ export const useGameStore = create<GameStore>()(
             player: {
               ...st.player,
               realmIndex: st.player.realmIndex + 1,
+              // 冲关要耗去积攒的修为，修为才不会变成一个只看不用的数字
+              cultivation: Math.max(0, st.player.cultivation - nextRealm.cultivationNeeded),
               lifespanMax: st.player.lifespanMax + 80,
               hpMax: st.player.hpMax + 150 + realmBonus,
               mpMax: st.player.mpMax + 100 + realmBonus,
@@ -480,58 +1098,6 @@ export const useGameStore = create<GameStore>()(
         }
       },
 
-      comprehendTechnique: (id) => {
-        const s = get();
-        const tech = s.techniques.find((t) => t.id === id);
-        if (!tech) return;
-        const mpCost = 30;
-        if (s.player.mp < mpCost) {
-          set((st) => ({ log: ["灵力不济，难以参悟。", ...st.log].slice(0, 30) }));
-          return;
-        }
-
-        let efficiency = 1;
-
-        const playerRootElements = (Array.isArray(s.player.spiritRoots) ? s.player.spiritRoots : []).map((r) => r.element);
-        const techElement = tech.element;
-
-        if (playerRootElements.includes(techElement)) {
-          efficiency += 0.2;
-        }
-
-        const ELEMENT_GENERATE: Record<ElementType, ElementType> = {
-          "金": "水", "木": "火", "土": "金", "水": "木", "火": "土",
-          "风": "雷", "雷": "火", "冰": "水", "暗": "土",
-        };
-        if (playerRootElements.includes(ELEMENT_GENERATE[techElement])) {
-          efficiency += 0.1;
-        }
-
-        const matchingHearts = Array.isArray(tech.heartMatch) ? tech.heartMatch.map((trait) => {
-          const score = s.player.stats.heartScores.find((hs) => hs.trait === trait)?.score || 0;
-          return score;
-        }) : [];
-        const avgMatchingScore = matchingHearts.length > 0
-          ? matchingHearts.reduce((a, b) => a + b, 0) / matchingHearts.length
-          : 0;
-        efficiency += (avgMatchingScore / 100) * 0.3;
-
-        efficiency += (s.player.stats.wisdom - 50) * 0.005;
-
-        const baseGain = 50 + Math.random() * 80;
-        const finalGain = Math.floor(baseGain * efficiency);
-
-        set((st) => ({
-          player: { ...st.player, mp: Math.max(0, st.player.mp - mpCost) },
-          techniques: (Array.isArray(st.techniques) ? st.techniques : []).map((t) =>
-            t.id === id
-              ? { ...t, proficiency: Math.min(t.proficiencyMax, t.proficiency + finalGain) }
-              : t,
-          ),
-          log: [`参悟《${tech.name}》，似有所得，熟练度 +${finalGain}。`, ...st.log].slice(0, 30),
-        }));
-      },
-
       drawTalisman: (recipe) => {
         const s = get();
         const paper = s.inventory.find((i) => i.name === "黄表符纸");
@@ -556,7 +1122,9 @@ export const useGameStore = create<GameStore>()(
             if (existing) {
               return {
                 inventory: newInventory.map((i) =>
-                  i.name === recipe.name ? { ...i, count: i.count + 1 } : i,
+                  i.name === recipe.name
+                    ? { ...i, count: i.count + 1 + (Math.random() < manorBonusOf(s.manorPlots, "锻坊") ? 1 : 0) }
+                    : i,
                 ),
                 player: { ...st.player, mp: Math.max(0, st.player.mp - recipe.mpCost) },
                 log: [`笔走龙蛇，灵光乍现，得《${recipe.name}》一道！`, ...st.log].slice(0, 30),
@@ -570,7 +1138,7 @@ export const useGameStore = create<GameStore>()(
                   name: recipe.name,
                   type: "符箓" as const,
                   grade: recipe.grade,
-                  count: 1,
+                  count: 1 + (Math.random() < manorBonusOf(s.manorPlots, "锻坊") ? 1 : 0),
                   icon: "符",
                   desc: recipe.desc,
                 },
@@ -761,6 +1329,9 @@ EFFECT: [效果描述]`,
           }
         }
 
+        // 宅邸里的「丹房」，成丹时或多出一枚
+        if (Math.random() < manorBonusOf(get().manorPlots, "丹房")) outputCount += 1;
+
         let result: BrewResult = { success: false, message: "丹炉轰鸣，丹药化为飞灰，功亏一篑。" };
 
         set((st) => {
@@ -770,7 +1341,7 @@ EFFECT: [效果描述]`,
             return i;
           });
 
-          let newPillCache = { ...st.pillCache };
+          const newPillCache = { ...st.pillCache };
           if (success && shouldCache) {
             newPillCache[cacheKey] = {
               name: pillName,
@@ -833,23 +1404,1108 @@ EFFECT: [效果描述]`,
         const s = get();
         const task = s.sect.tasks.find((t) => t.id === id);
         if (!task || task.accepted) return;
-        set((st) => ({
+
+        const today = daySerial(s.currentTime);
+        const days = Math.max(1, Math.trunc(task.days ?? 5));
+        const dueDay = today + days;
+        const cityId = task.target?.cityId ?? "";
+        const districtId = typeof task.target?.districtId === "number" ? task.target.districtId : undefined;
+        const label = task.place || task.target?.label || "门中";
+        const culture = cityId ? getMarker(cityId)?.culture : undefined;
+
+        // 接取时把托付要用的人钉到目标地块上：办到那儿，才寻得着人、交得了差
+        const relations = s.relations.map((r) => ({ ...r }));
+        const added: Relation[] = [];
+        let contact = task.target?.person;
+        const cast = Array.isArray(task.cast) ? task.cast : [];
+        if (task.target?.building) {
+          // 去处是本门某座建筑：人便钉在那座建筑里，进山门到那处才寻得着
+          for (const role of cast) {
+            added.push({
+              ...rollQuestNpc(role, label, cityId, undefined, culture, label),
+              fixedUntilDay: dueDay,
+            });
+          }
+          if (added.length > 0) contact = added[0].name;
+        } else if (cityId && districtId !== undefined && cast.length > 0) {
+          for (const role of cast) {
+            added.push({ ...rollQuestNpc(role, label, cityId, districtId, culture), fixedUntilDay: dueDay });
+          }
+          contact = added[0].name;
+        }
+
+        const target: JobTarget = {
+          cityId,
+          ...(districtId !== undefined ? { districtId } : {}),
+          label,
+          person: contact,
+          ...(task.target?.sectId ? { sectId: task.target.sectId } : {}),
+          ...(task.target?.building ? { building: task.target.building } : {}),
+        };
+        const quest: Quest = {
+          id: `quest-${task.id}`,
+          name: task.title,
+          desc: task.desc,
+          place: label,
+          // 宗门派下的差事都是奔着门中某一处去的，算地点类，去处与人已一并钉下
+          kind: "地点",
+          dueDay,
+          giver: s.sect.name || "宗门",
+          condition: task.condition || "照宗门所托办妥",
+          reward: `记宗门贡献 ${task.contribution}，另赏下品灵石 ${task.spiritStone}`,
+          penalty: `误了期，倒扣宗门贡献 ${Math.max(1, Math.round(task.contribution / 2))}`,
+          status: "open",
+          day: today,
+          target,
+          sectTask: { taskId: task.id, contribution: task.contribution, spiritStone: task.spiritStone },
+        };
+
+        set({
+          quests: [...s.quests, quest],
+          relations: [...relations, ...added],
           sect: {
-            ...st.sect,
-            tasks: (Array.isArray(st.sect?.tasks) ? st.sect.tasks : []).map((t) =>
-              t.id === id ? { ...t, accepted: true } : t,
+            ...s.sect,
+            tasks: (Array.isArray(s.sect?.tasks) ? s.sect.tasks : []).map((t) =>
+              t.id === id ? { ...t, accepted: true, questId: quest.id, dueDay } : t,
             ),
-            contribution: (st.sect?.contribution || 0) + task.contribution,
-          },
-          spiritStones: {
-            ...st.spiritStones,
-            low: st.spiritStones.low + task.spiritStone,
           },
           log: [
-            `接取门派任务「${task.title}」，得贡献 ${task.contribution}、下品灵石 ${task.spiritStone}。`,
+            `接下门派任务「${task.title}」，限期 ${days} 日，须往${label}走一趟，交付了才算完。`,
+            ...s.log,
+          ].slice(0, 30),
+        });
+        // 钉下的人由模型照这桩事立传，替掉先前现拼的名字与出身
+        generateQuestNpcs(task.title, task.desc, added);
+      },
+
+      refreshSectTasks: (force) => {
+        const st = get();
+        const tasks = Array.isArray(st.sect?.tasks) ? st.sect.tasks : [];
+        // 手头还有未了结的门派事务就不换，除非明说要重掷
+        if (!force && tasks.some((t) => t.target && !t.settled)) return;
+
+        const site = st.sectSites.find((s) => s.mine);
+        const cityId = nearestCityIdFor(site?.x, site?.y) ?? getCityMarkers()[0]?.id;
+        if (!cityId) return;
+
+        const targets = brokerTargetsFor(cityId, st.districtNames, st.relations);
+        const buildings = sectTaskBuildings(st, site);
+        const next = rollSectTasks(targets, buildings, 4);
+        if (next.length === 0) return;
+
+        set({
+          sect: { ...st.sect, tasks: next },
+          log: [`宗门新张出一批事务，共 ${next.length} 桩。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      attendLecture: (topic) => {
+        const st = get();
+        if (getScene(st.mapSceneId)?.kind !== "sect") {
+          const message = "你不在山门之内，听不着这一场开讲。";
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+        const today = daySerial(st.currentTime);
+        const hour = lectureHour(st.sect);
+        if (st.currentTime.hour < hour) {
+          const message = `今日开讲在${shichenName(hour)}，时候未到。`;
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+        if ((st.sect.lastLectureDay ?? 0) === today) {
+          const message = "今日已听过一场开讲，再听无益。";
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+
+        const subject = topic || "本门心法";
+        const isLeader = /掌门/.test(st.player.position || "");
+        // 掌门登坛不耗自家修为，讲的是自家体悟；弟子听讲才涨自家那一份
+        const realmIdx = leaderRealmIndex({
+          sect: st.sect,
+          playerName: st.player.name,
+          playerPosition: st.player.position,
+          playerRealmIndex: st.player.realmIndex,
+          relations: st.relations,
+        });
+        const gain = isLeader ? 0 : lectureGain(realmIdx, st.sect.level);
+        const line = isLeader
+          ? `你以「${subject}」为题登坛开讲一场，一堂弟子各有心得。`
+          : `你听掌门就「${subject}」讲了一场，于道上一通百通，修为 +${gain}。`;
+        set({
+          player: gain > 0
+            ? { ...st.player, cultivation: (Number(st.player.cultivation) || 0) + gain }
+            : st.player,
+          sect: { ...st.sect, lastLectureDay: today, lectureCheckedDay: today },
+          log: [line, ...st.log].slice(0, 30),
+        });
+
+        const decision = isLeader
+          ? `我以掌门之身登上传法大殿的法坛，以「${subject}」为题开讲一场，座下弟子环坐而听。`
+          : `我在传法大殿听掌门以「${subject}」为题讲了一场法，听至会心处，于道上有几分领悟。`;
+        return { ok: true, message: line, decision };
+      },
+
+      settleLecture: () => {
+        const st = get();
+        if (getScene(st.mapSceneId)?.kind !== "sect") return;
+
+        const today = daySerial(st.currentTime);
+        const hour = lectureHour(st.sect);
+        // 今日开讲还没开始，或是今日这一笔账已经算过，都不动
+        if (st.currentTime.hour < hour) return;
+        if ((st.sect.lectureCheckedDay ?? 0) >= today) return;
+
+        const last = st.sect.lastLectureDay ?? 0;
+        // 入门以来头一回进山门，先把日子记上，算是入了门，不算缺勤
+        if (last === 0 || last >= today) {
+          set({ sect: { ...st.sect, lastLectureDay: last === 0 ? today : last, lectureCheckedDay: today } });
+          return;
+        }
+
+        const absentDays = today - last;
+        if (absentDays > LECTURE_ABSENT_DAYS) {
+          const before = Number(st.sect.contribution) || 0;
+          const after = Math.max(0, before - LECTURE_ABSENT_PENALTY);
+          set({
+            sect: { ...st.sect, contribution: after, lectureCheckedDay: today },
+            log: [
+              `你已 ${absentDays} 日不曾听讲，宗门记你一过，扣贡献 ${before - after}。`,
+              ...st.log,
+            ].slice(0, 30),
+          });
+          return;
+        }
+
+        set({ sect: { ...st.sect, lectureCheckedDay: today } });
+      },
+
+      learnHeritage: (name) => {
+        const st = get();
+        const heritage = Array.isArray(st.sect?.heritage) ? st.sect.heritage : [];
+        const item = heritage.find((h) => h.name === name);
+        if (!item || item.status === "已习") return false;
+
+        const lv = positionLevel(st.sect.positions);
+        const need = heritageRequirement(item.grade);
+        if (lv < need) {
+          set({ log: [`身份未到，参悟不了「${name}」这一门。`, ...st.log].slice(0, 30) });
+          return false;
+        }
+        const cost = heritageCost(item.grade);
+        const have = Number(st.sect.contribution) || 0;
+        if (have < cost) {
+          set({ log: [`贡献不足，换不得「${name}」，尚需 ${cost - have} 点。`, ...st.log].slice(0, 30) });
+          return false;
+        }
+
+        set({
+          sect: {
+            ...st.sect,
+            contribution: have - cost,
+            heritage: heritage.map((h) => (h.name === name ? { ...h, status: "已习" as const } : h)),
+          },
+          log: [`以 ${cost} 贡献参得「${name}」，自此门中又多一门本事。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      preachScripture: (topic) => {
+        const st = get();
+        if (getScene(st.mapSceneId)?.kind !== "sect") {
+          const message = "讲经须在讲经堂前，先回山门再说。";
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+        const today = daySerial(st.currentTime);
+        if ((st.sect.lastPreachDay ?? 0) === today) {
+          const message = "今日已讲得一场，再多便絮烦了。";
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+
+        const subject = topic || "本门经义";
+        const gain = preachReward(positionLevel(st.sect.positions), st.sect.level);
+        const line = `你在讲经堂以「${subject}」为题登座讲了一场，门人听得入神，得贡献 ${gain}。`;
+        set({
+          sect: { ...st.sect, contribution: (Number(st.sect.contribution) || 0) + gain, lastPreachDay: today },
+          log: [line, ...st.log].slice(0, 30),
+        });
+
+        const decision = `我在讲经堂登座，就「${subject}」讲了一场经，座下门人屏息而听。`;
+        return { ok: true, message: line, decision };
+      },
+
+      ensureSectEndowment: () => {
+        const st = get();
+        // 只给一回；门号还没立起来便再等等
+        if (st.sect?.endowed) return;
+        const bare =
+          !st.sect?.name &&
+          !st.sect?.leader &&
+          !(Number(st.sect?.disciples) || 0) &&
+          !(Number(st.sect?.elders) || 0) &&
+          (Number(st.sect?.level) || 1) <= 1;
+        if (bare) return;
+
+        const grant = initialEndowment({
+          level: st.sect.level,
+          disciples: st.sect.disciples,
+          elders: st.sect.elders,
+        });
+        const materials = Array.isArray(st.sect.management?.treasury?.materials)
+          ? st.sect.management.treasury.materials.map((m) => ({ ...m }))
+          : [];
+        grant.materials.forEach((g) => {
+          const at = materials.findIndex((m) => m.name === g.name);
+          if (at >= 0) materials[at] = { ...materials[at], amount: materials[at].amount + g.amount };
+          else materials.push({ ...g });
+        });
+
+        set({
+          sect: {
+            ...st.sect,
+            endowed: true,
+            management: {
+              ...st.sect.management,
+              treasury: {
+                spiritStones: (Number(st.sect.management?.treasury?.spiritStones) || 0) + grant.stones,
+                materials,
+              },
+            },
+          },
+          log: [`门中清点家底，宝库入账 ${grant.stones} 枚灵石，另有若干日用之物。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      settleSectSites: () => {
+        const st = get();
+        const sites = Array.isArray(st.sectSites) ? st.sectSites : [];
+        if (sites.length === 0) return;
+        const today = daySerial(st.currentTime);
+        let changed = false;
+
+        const next = sites.map((site) => {
+          // 本门那一本账记在 management.treasury 里，这儿不另开一本
+          if (site.mine) return site;
+
+          const book = site.treasury;
+          if (!book) {
+            // 头一回翻到这一处：先把家底备上，往后照日算
+            const grant = initialEndowment({
+              level: site.level,
+              disciples: site.disciples,
+              elders: site.elders,
+            });
+            changed = true;
+            return {
+              ...site,
+              treasury: { spiritStones: grant.stones, materials: grant.materials, settledDay: today },
+            };
+          }
+
+          const settled = Number(book.settledDay) || 0;
+          if (settled >= today) return site;
+
+          // 隔得久了也只按三十日算，免得一觉醒来凭空涨出一座金山
+          const days = Math.max(1, Math.min(30, today - settled));
+          const materials = new Map<string, number>();
+          (Array.isArray(book.materials) ? book.materials : []).forEach((m) => {
+            if (!m?.name) return;
+            materials.set(m.name, (materials.get(m.name) ?? 0) + (Number(m.amount) || 0));
+          });
+
+          // 一日的进项与支用，都照门中品级与人数估
+          const income = site.level * 90 + site.disciples * 5;
+          const upkeep = site.level * 50 + site.disciples * 3;
+          let stones = (Number(book.spiritStones) || 0) + (income - upkeep) * days;
+
+          const addMaterial = (matName: string, amount: number) => {
+            materials.set(matName, Math.max(0, (materials.get(matName) ?? 0) + amount));
+          };
+          // 自家田里的出产，减去门中吃用
+          addMaterial("灵谷", (Math.ceil(site.disciples * 0.3) - Math.ceil(site.disciples * 0.2)) * days);
+          addMaterial("蔬菜", (Math.ceil(site.disciples * 0.15) - Math.ceil(site.disciples * 0.1)) * days);
+          addMaterial("药材", Math.ceil(site.level * 1.5) * days);
+
+          // 囤着用不上的，照旧发卖换现钱
+          materials.forEach((amount, matName) => {
+            if (amount <= MATERIAL_SURPLUS_KEEP) return;
+            stones += (amount - MATERIAL_SURPLUS_KEEP) * materialPrice(matName);
+            materials.set(matName, MATERIAL_SURPLUS_KEEP);
+          });
+
+          changed = true;
+          return {
+            ...site,
+            treasury: {
+              spiritStones: Math.max(0, Math.round(stones)),
+              materials: [...materials.entries()].map(([name, amount]) => ({ name, amount })),
+              settledDay: today,
+            },
+          };
+        });
+
+        if (changed) set({ sectSites: next });
+
+        // 附庸按日纳贡，入本门宝库
+        const mineSite = sites.find((s) => s.mine);
+        const cur = get();
+        if (mineSite && (Number(cur.sect.tributeSettledDay) || 0) < today) {
+          const tributeSum = next
+            .filter((s) => s.vassalOf === mineSite.id)
+            .reduce((sum, s) => sum + vassalTribute(s), 0);
+          const treasury = cur.sect.management?.treasury ?? { spiritStones: 0, materials: [] };
+          set({
+            sect: {
+              ...cur.sect,
+              tributeSettledDay: today,
+              management: {
+                ...cur.sect.management,
+                treasury: {
+                  spiritStones: (Number(treasury.spiritStones) || 0) + tributeSum,
+                  materials: Array.isArray(treasury.materials) ? treasury.materials : [],
+                },
+              },
+            },
+            ...(tributeSum > 0
+              ? { log: [`附庸来贡，共入灵石 ${tributeSum}。`, ...cur.log].slice(0, 30) }
+              : {}),
+          });
+        }
+      },
+
+      settleOccupations: () => {
+        const st = get();
+        const occs = Array.isArray(st.occupations) ? st.occupations : [];
+        if (occs.length === 0) return;
+        const monthKey = gameMonthKey(st.currentTime);
+        const mineSite = st.sectSites.find((s) => s.mine);
+
+        let playerGain = 0;
+        const siteGain = new Map<string, number>();
+        let changed = false;
+        const next = occs.map((o) => {
+          if (!o || o.settledMonth === monthKey) return o;
+          changed = true;
+          const tribute = occupationTribute(o.kind, o.targetId);
+          if (mineSite && o.ownerSectId === mineSite.id) playerGain += tribute;
+          else siteGain.set(o.ownerSectId, (siteGain.get(o.ownerSectId) ?? 0) + tribute);
+          return { ...o, settledMonth: monthKey };
+        });
+        if (!changed) return;
+
+        const sectSites = st.sectSites.map((s) => {
+          const add = siteGain.get(s.id);
+          if (!add) return s;
+          const book = s.treasury ?? { spiritStones: 0, materials: [] };
+          return { ...s, treasury: { ...book, spiritStones: (Number(book.spiritStones) || 0) + add } };
+        });
+        const treasury = st.sect.management?.treasury;
+        set({
+          occupations: next,
+          sectSites,
+          ...(playerGain > 0 && treasury
+            ? {
+                sect: {
+                  ...st.sect,
+                  management: {
+                    ...st.sect.management,
+                    treasury: {
+                      ...treasury,
+                      spiritStones: (Number(treasury.spiritStones) || 0) + playerGain,
+                    },
+                  },
+                },
+              }
+            : {}),
+          ...(playerGain > 0
+            ? { log: [`各属城村来贡，本门入灵石 ${playerGain}。`, ...st.log].slice(0, 30) }
+            : {}),
+        });
+      },
+
+      settleFacilities: () => {
+        // 家底还没给过的先把这一笔补上，免得头一天便无钱可支
+        get().ensureSectEndowment();
+        const st = get();
+        const scene = getScene(st.mapSceneId);
+        if (scene?.kind !== "sect") return;
+        // 别家的山门不来替你入账，只算本门的
+        if (isForeignSect(st, scene.id)) return;
+
+        const today = daySerial(st.currentTime);
+        if ((st.sect.facilitySettledDay ?? 0) >= today) return;
+
+        const roster = facilityRoster(scene);
+        // 本门自己营造的那几座也一并入账：自拟的照它自己的账，辨认时借同类的贴图
+        const mineSite = st.sectSites.find((s) => s.mine);
+        const customBook = mineSite?.custom ?? {};
+        Object.entries(mineSite?.built ?? {}).forEach(([key, name]) => {
+          const spec = sectBuildingSpec(name, customBook[name]?.kindId);
+          const cellIndex = Number(key);
+          if (!spec || !Number.isInteger(cellIndex)) return;
+          roster.push({
+            cellIndex,
+            kindId: spec.kind,
+            kindName: getSectTileKind(sectTileCode(spec.kind)).name,
+            name,
+          });
+        });
+        if (roster.length === 0) return;
+
+        const halls = st.sect.management?.halls;
+        const treasury = st.sect.management?.treasury;
+        // 宝库里现有的东西，按名目归拢
+        const materials = new Map<string, number>();
+        (Array.isArray(treasury?.materials) ? treasury!.materials : []).forEach((m) => {
+          if (!m?.name) return;
+          materials.set(m.name, (materials.get(m.name) ?? 0) + (Number(m.amount) || 0));
+        });
+
+        let stones = Number(treasury?.spiritStones) || 0;
+        let reputation = Number(st.sect.reputation) || 0;
+        let upkeepTotal = 0;
+
+        // 门中眼下生效的修正（政策、态势一类的时效）：产出按倍率折算，到期的顺手抹去
+        const liveMods = (st.sect.modifiers ?? []).filter((m) => Number(m.until) >= today);
+        const expiredMods = (st.sect.modifiers ?? []).filter((m) => Number(m.until) < today);
+        const modEff = activeModifierEffects(liveMods);
+
+        for (const item of roster) {
+          const state = facilityStateOf(st.sect.facilities, item.name);
+          const custom = customBook[item.name];
+          const y = facilityYield({
+            name: item.name,
+            kindId: item.kindId,
+            level: state.level,
+            status: state.status,
+            hasSteward: !!facilitySteward(halls, item.kindId),
+            nature: scene.sectNature,
+            isFeature: scene.sectFeature === item.name,
+            custom,
+          });
+          y.materials.forEach((m) =>
+            materials.set(m.name, (materials.get(m.name) ?? 0) + Math.round(m.amount * modEff.resourceMul)),
+          );
+          stones += Math.round(y.stone * modEff.resourceMul);
+          reputation += y.reputation;
+          upkeepTotal += facilityUpkeep(item.name, item.kindId, state.level, custom);
+        }
+        // 修正带来的声望增减，按这一日算一笔
+        reputation += modEff.reputationPerDay;
+
+        stones = Math.max(0, stones - upkeepTotal);
+
+        // 门中弟子每日耗灵谷与蔬菜；不够吃，人心就要散
+        const disciples = Math.max(0, Number(st.sect.disciples) || 0);
+        const grainNeed = Math.ceil(disciples * 0.2);
+        const vegNeed = Math.ceil(disciples * 0.1);
+        const grain = materials.get("灵谷") ?? 0;
+        const veg = materials.get("蔬菜") ?? 0;
+        const hungry = grain < grainNeed || veg < vegNeed;
+        materials.set("灵谷", Math.max(0, grain - grainNeed));
+        materials.set("蔬菜", Math.max(0, veg - vegNeed));
+
+        // 囤着用不上的料，趁日结发卖换现钱；各料留够底数，余下的才卖
+        let sold = 0;
+        materials.forEach((amount, matName) => {
+          if (amount <= MATERIAL_SURPLUS_KEEP) return;
+          const extra = amount - MATERIAL_SURPLUS_KEEP;
+          materials.set(matName, MATERIAL_SURPLUS_KEEP);
+          sold += extra * materialPrice(matName);
+        });
+        stones += sold;
+
+        // 门中光景不好，落在弟子头上的两条：银钱不继、庖厨断绝
+        const broke = stones < upkeepTotal * 3;
+        const until = shiftGameTime(st.currentTime, SECT_HARDSHIP_HOURS);
+        let buffs = Array.isArray(st.player.buffs) ? st.player.buffs : [];
+        buffs = broke ? withSectDebuff(buffs, "debuff-sect-broke", until) : withoutSectDebuff(buffs, "debuff-sect-broke");
+        buffs = hungry ? withSectDebuff(buffs, "debuff-hunger", until) : withoutSectDebuff(buffs, "debuff-hunger");
+
+        // 年久失修：旧的一处或自行修好，或又添一处待修
+        const facilities = { ...(st.sect.facilities ?? {}) };
+        for (const item of roster) {
+          const state = facilityStateOf(facilities, item.name);
+          if (state.status === "修缮中" && Math.random() < 0.6) {
+            facilities[item.name] = { ...state, status: "正常" };
+          } else if (state.status === "正常" && Math.random() < 0.05) {
+            facilities[item.name] = { ...state, status: "修缮中" };
+          }
+        }
+
+        const nextMaterials = [...materials.entries()].map(([name, amount]) => ({ name, amount }));
+        const recent = [
+          ...(Array.isArray(st.sect.management?.consumption?.recentConsumption)
+            ? st.sect.management!.consumption.recentConsumption
+            : []),
+          { date: `${st.currentTime.month}/${st.currentTime.day}`, cost: upkeepTotal },
+        ].slice(-7);
+
+        const settleLines = [
+          `宗门日结：各处进项入宝库，维护与伙食共耗 ${upkeepTotal} 灵石。`,
+        ];
+        if (sold > 0) settleLines.push(`余料发卖，得灵石 ${sold}。`);
+        if (hungry) settleLines.push("灵谷与蔬菜不足，弟子面有饥色，一个个提不起劲。");
+        if (broke) settleLines.push("宝库见底，门中银钱不继，人心浮动。");
+        if (liveMods.length > 0) settleLines.push(`门中正行：${liveMods.map((m) => m.name).join("、")}。`);
+        if (expiredMods.length > 0) settleLines.push(`「${expiredMods.map((m) => m.name).join("、")}」的势已过。`);
+
+        set({
+          player: buffs === st.player.buffs ? st.player : { ...st.player, buffs },
+          sect: {
+            ...st.sect,
+            reputation,
+            facilities,
+            modifiers: liveMods,
+            facilitySettledDay: today,
+            management: {
+              ...st.sect.management,
+              treasury: { spiritStones: stones, materials: nextMaterials },
+              consumption: { dailyCost: upkeepTotal, recentConsumption: recent },
+            },
+          },
+          log: [...settleLines, ...st.log].slice(0, 30),
+        });
+      },
+
+      upgradeFacility: (name, kindId) => {
+        const st = get();
+        const scene = getScene(st.mapSceneId);
+        if (scene?.kind !== "sect") {
+          set({ log: ["修缮之门不在眼前，先回山门再说。", ...st.log].slice(0, 30) });
+          return false;
+        }
+        if (isForeignSect(st, scene.id)) {
+          set({ log: ["这是别家的山门，轮不到你来做主。", ...st.log].slice(0, 30) });
+          return false;
+        }
+        // 权限：执事以上才动得了土木，且宗门等级要撑得住这一级
+        if (positionLevel(st.sect.positions) < 2) {
+          set({ log: ["此事须由执事以上的人做主，你的身份还差着一层。", ...st.log].slice(0, 30) });
+          return false;
+        }
+        const state = facilityStateOf(st.sect.facilities, name);
+        if (state.level >= FACILITY_LEVEL_CAP) {
+          set({ log: [`「${name}」已到顶，再无可升。`, ...st.log].slice(0, 30) });
+          return false;
+        }
+        if (state.level + 1 > (Number(st.sect.level) || 1)) {
+          set({ log: ["宗门品级不足，撑不起这一处更大的场面，先壮大宗门再说。", ...st.log].slice(0, 30) });
+          return false;
+        }
+
+        const cost = upgradeCost({
+          name,
+          kindId,
+          level: state.level,
+          nature: scene.sectNature,
+          custom: st.sectSites.find((s) => s.mine)?.custom?.[name],
+        });
+        const treasury = st.sect.management?.treasury;
+        const stones = Number(treasury?.spiritStones) || 0;
+        const stock = Array.isArray(treasury?.materials) ? treasury!.materials : [];
+        const lack = cost.materials.find((m) => (stock.find((x) => x.name === m.name)?.amount ?? 0) < m.amount);
+        if (stones < cost.stones || lack) {
+          set({
+            log: [
+              lack
+                ? `宝库里「${lack.name}」不足，修缮不得。`
+                : `宝库灵石不足，尚需 ${Math.max(0, cost.stones - stones)} 枚。`,
+              ...st.log,
+            ].slice(0, 30),
+          });
+          return false;
+        }
+
+        const nextMaterials = stock.map((m) => {
+          const need = cost.materials.find((c) => c.name === m.name);
+          return need ? { ...m, amount: Math.max(0, m.amount - need.amount) } : m;
+        });
+
+        set({
+          sect: {
+            ...st.sect,
+            facilities: { ...(st.sect.facilities ?? {}), [name]: { ...state, level: state.level + 1 } },
+            management: {
+              ...st.sect.management,
+              treasury: { spiritStones: stones - cost.stones, materials: nextMaterials },
+            },
+          },
+          log: [
+            `你调集灵石与材料，把「${name}」修葺扩建成 Lv.${state.level + 1}。`,
             ...st.log,
           ].slice(0, 30),
-        }));
+        });
+        return true;
+      },
+
+      buildSectFacility: (cellIndex, name, custom) => {
+        const st = get();
+        const scene = getScene(st.mapSceneId);
+        if (scene?.kind !== "sect") return { ok: false, message: "你不在山门之内，动不了这里的土木。" };
+        if (isForeignSect(st, scene.id)) return { ok: false, message: "这是别家的山门，轮不到你来做主。" };
+        // 权限：长老以上才起得了楼
+        if (!isElderOrAbove(st.sect.positions)) {
+          return { ok: false, message: "营造之事须由长老以上的人主持，你的身份还差着一层。" };
+        }
+
+        const idx = Math.trunc(Number(cellIndex));
+        if (!Number.isInteger(idx) || idx < 0 || idx >= SECT_TILE_COUNT) {
+          return { ok: false, message: "这一处不在地界之内。" };
+        }
+        // 只能在荒地上起楼：水域、山地与已有建筑的格子一概不动
+        const layout = applySectFeatureBias(scene.tiles ?? [], scene.sectNature, scene.sectFeature);
+        if (layout[idx] !== SECT_EMPTY_TILE) {
+          return { ok: false, message: "此处或临水、或依山、或已立着屋舍，起不得楼。" };
+        }
+
+        const site = st.sectSites.find((s) => s.mine);
+        if (!site) return { ok: false, message: "你还没有本门的山门。" };
+        const built = { ...(site.built ?? {}) };
+        if (built[String(idx)]) return { ok: false, message: "这一处已经起过楼了。" };
+
+        // 玩家口述的那一座：照它自己的账；名录里的：按名录挑
+        const own = custom ? clampCustomFacility(custom, name) : null;
+        if (custom && !own) return { ok: false, message: "这一座的账目立不起来，且先改一改再说。" };
+
+        let cost: { stones: number; materials: { name: string; amount: number }[] };
+        if (own) {
+          cost = own.cost;
+        } else {
+          const option = buildOptions({ sectLevel: st.sect.level, nature: scene.sectNature }).find(
+            (o) => o.name === name,
+          );
+          if (!option) return { ok: false, message: "名录里没有这一座建筑。" };
+          if (!option.unlocked) {
+            return { ok: false, message: `营造「${name}」须宗门至少 ${option.minSectLevel} 级，眼下还撑不起。` };
+          }
+          cost = option.cost;
+        }
+
+        const treasury = st.sect.management?.treasury;
+        const stones = Number(treasury?.spiritStones) || 0;
+        const stock = Array.isArray(treasury?.materials) ? treasury!.materials : [];
+        const lack = cost.materials.find(
+          (m) => (stock.find((x) => x.name === m.name)?.amount ?? 0) < m.amount,
+        );
+        if (stones < cost.stones || lack) {
+          return {
+            ok: false,
+            message: lack
+              ? `宝库里「${lack.name}」不足，营造不得。`
+              : `宝库灵石不足，尚需 ${Math.max(0, cost.stones - stones)} 枚。`,
+          };
+        }
+
+        const nextMaterials = stock.map((m) => {
+          const need = cost.materials.find((c) => c.name === m.name);
+          return need ? { ...m, amount: Math.max(0, m.amount - need.amount) } : m;
+        });
+        built[String(idx)] = name;
+        // 自拟的那一座，连同它那一份账一并记在山门名下，日后入账、铺图都认得出
+        const nextSite = own
+          ? { ...site, built, custom: { ...(site.custom ?? {}), [name]: own } }
+          : { ...site, built };
+
+        set({
+          sectSites: st.sectSites.map((s) => (s.id === site.id ? nextSite : s)),
+          sect: {
+            ...st.sect,
+            management: {
+              ...st.sect.management,
+              treasury: { spiritStones: stones - cost.stones, materials: nextMaterials },
+            },
+          },
+          log: [`你调集灵石与材料，在山门空地上新起了「${name}」。`, ...st.log].slice(0, 30),
+        });
+        return { ok: true, message: `「${name}」已立在山门里。` };
+      },
+
+      performFacilityAction: (name, kindId, actionId, option) => {
+        const st = get();
+        const scene = getScene(st.mapSceneId);
+        if (scene?.kind !== "sect") return { ok: false, message: "你不在山门之内，做不得这一桩。" };
+        if (isForeignSect(st, scene.id)) return { ok: false, message: "这是别家的山门，你在这里做不得主。" };
+
+        const custom = st.sectSites.find((s) => s.mine)?.custom?.[name];
+        const action = facilityActions(name, kindId, custom).find((a) => a.id === actionId);
+        if (!action) return { ok: false, message: "门中没有这一桩。" };
+
+        const lv = positionLevel(st.sect.positions);
+        if ((action.need ?? 1) > lv) {
+          const message = `身份未到，做不得「${action.name}」。`;
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+
+        const today = daySerial(st.currentTime);
+        const key = `${name}:${actionId}`;
+        const daily = st.sect.facilityDaily ?? {};
+        if (action.daily && daily[key] === today) {
+          const message = `今日已在「${name}」做过这一桩，明日再来。`;
+          set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+
+        // 一桩事总要先说清做什么：参数没挑就不动手，免得又成一按即成的勾当
+        if (!option) return { ok: false, message: `先定下「${action.optionLabel}」再说。` };
+        const optionLabel = action.options?.find((o) => o.value === option)?.label ?? option;
+        const markDone = { ...daily, [key]: today };
+
+        // 主殿开讲与讲经堂讲经另有一套账，借既有的那两处走
+        if (actionId === "lecture") {
+          const r = get().attendLecture(optionLabel);
+          if (r.ok) set((s) => ({ sect: { ...s.sect, facilityDaily: { ...(s.sect.facilityDaily ?? {}), [key]: today } } }));
+          return { ok: r.ok, message: r.message, decision: r.decision };
+        }
+        if (actionId === "preach") {
+          const r = get().preachScripture(optionLabel);
+          if (r.ok) set((s) => ({ sect: { ...s.sect, facilityDaily: { ...(s.sect.facilityDaily ?? {}), [key]: today } } }));
+          return { ok: r.ok, message: r.message, decision: r.decision };
+        }
+
+        // 炼丹、画符与比试交给各自的模块去办，这里只记下今日已做过
+        if (action.mode === "craft" || action.mode === "battle") {
+          set({
+            sect: { ...st.sect, facilityDaily: markDone },
+            log: [`你在「${name}」${action.name}。`, ...st.log].slice(0, 30),
+          });
+          return { ok: true, message: `你去${name}${action.name}。` };
+        }
+
+        const state = facilityStateOf(st.sect.facilities, name);
+        const treasury = st.sect.management?.treasury;
+        const stock = Array.isArray(treasury?.materials) ? treasury!.materials.map((m) => ({ ...m })) : [];
+        const stones = Number(treasury?.spiritStones) || 0;
+        const addMaterial = (matName: string, amount: number) => {
+          const at = stock.findIndex((m) => m.name === matName);
+          if (at >= 0) stock[at] = { ...stock[at], amount: stock[at].amount + amount };
+          else stock.push({ name: matName, amount });
+        };
+        // 时长类的选项，值就是时辰数
+        const hours = /^\d+$/.test(option) ? Math.max(0, Number(option)) : 0;
+        // 门中这一处按等级与管事折出来的日产，劳作多照它算
+        const baseY = facilityYield({
+          name,
+          kindId,
+          level: state.level,
+          status: state.status,
+          hasSteward: !!facilitySteward(st.sect.management?.halls, kindId),
+          nature: scene.sectNature,
+          isFeature: scene.sectFeature === name,
+        });
+
+        let player = st.player;
+        let beast = st.beast;
+        let techniques = Array.isArray(st.techniques) ? st.techniques : [];
+        let heritage = Array.isArray(st.sect.heritage) ? st.sect.heritage : [];
+        let contribution = Number(st.sect.contribution) || 0;
+        let reputation = Number(st.sect.reputation) || 0;
+        let spent = 0;
+        let line = "";
+        /** 这一桩做不成时的说法；有它便不落账 */
+        let denied: string | undefined;
+
+        const gainCultivation = (n: number) => {
+          player = { ...player, cultivation: (Number(player.cultivation) || 0) + n };
+        };
+        /**
+         * 修炼一段时辰：进度记在功法上，境界进度随功法进度一同长。
+         * 这是「练功即长修为」那条规矩，本地与叙事两头都照它办。
+         */
+        const trainTechnique = (hours: number): { gain: number; name: string; eff: { mul: number; note: string } } => {
+          const eff = localCultivationFrom({
+            facilities: st.sect?.facilities,
+            location: st.currentLocation,
+          });
+          // 自家宅邸里的「聚灵」之屋，把这一处的修炼效率再抬一抬
+          const manorSpirit = manorBonusOf(st.manorPlots, "聚灵");
+          const gain = cultivationGain(hours, eff.mul * (1 + manorSpirit));
+          if (gain <= 0) return { gain: 0, name: "", eff };
+          // 有主修心法便修心法，没有就修最先习得的那一门
+          const list = Array.isArray(techniques) ? techniques : [];
+          const idx = list.findIndex((t) => t.id === player.activeHeartTechnique);
+          const at = idx >= 0 ? idx : list.length > 0 ? 0 : -1;
+          if (at < 0) {
+            // 手里一门功法也没有，进益便直接记在境界上
+            gainCultivation(gain);
+            return { gain, name: "", eff };
+          }
+          const target = list[at];
+          const max = Number(target.proficiencyMax) || 100;
+          const before = Number(target.proficiency) || 0;
+          const after = Math.min(max, before + gain);
+          const real = after - before;
+          techniques = list.map((t, i) => (i === at ? { ...t, proficiency: after } : t));
+          gainCultivation(real);
+          return { gain: real, name: target.name || "", eff };
+        };
+        /** 疗伤：泡得够久便全复，短的只回几成 */
+        const mend = (full: boolean) => {
+          player = {
+            ...player,
+            hp: full ? player.hpMax : Math.min(player.hpMax, Math.round(player.hp + player.hpMax * 0.3)),
+            mp: full ? player.mpMax : Math.min(player.mpMax, Math.round(player.mp + player.mpMax * 0.3)),
+          };
+        };
+
+        switch (actionId) {
+          // —— 主殿：议一议事 ——
+          case "council": {
+            gainCultivation(3);
+            spent = 3;
+            line = `你与长老执事就「${optionLabel}」议了半日，事情理出眉目，自己也有所得，修为 +3。`;
+            break;
+          }
+
+          // —— 经阁：参传承、抄书 ——
+          case "study": {
+            const item = heritage.find((h) => h.name === option);
+            if (!item) {
+              denied = "阁中并无这一门。";
+              break;
+            }
+            if (item.status === "已习") {
+              denied = `「${item.name}」你已经参过了。`;
+              break;
+            }
+            const need = heritageRequirement(item.grade);
+            if (lv < need) {
+              denied = `参「${item.name}」须身份 ${need} 级，你还差着一层。`;
+              break;
+            }
+            const cost = heritageCost(item.grade);
+            if (contribution < cost) {
+              denied = `参「${item.name}」要 ${cost} 点贡献，尚缺 ${cost - contribution} 点。`;
+              break;
+            }
+            contribution -= cost;
+            heritage = heritage.map((h) => (h.name === item.name ? { ...h, status: "已习" as const } : h));
+            spent = 2;
+            line = `你以 ${cost} 贡献参得「${item.name}」，自此门中又多一门本事。`;
+            break;
+          }
+          case "copy": {
+            const isPaper = option === "符纸";
+            addMaterial(isPaper ? "符纸" : "书卷", 3);
+            spent = 2;
+            line = isPaper ? "你在案前裁纸抄录，得符纸 3。" : "你伏案抄了三卷，收进经阁。";
+            break;
+          }
+
+          // —— 演武：操练 ——
+          case "drill": {
+            // 操练一场三个时辰，约合三点修为；兵器上手难些，多给一点
+            const gain = option === "兵刃" ? 4 : 3;
+            gainCultivation(gain);
+            spent = 3;
+            line = `你在${name}练了一场${optionLabel}，筋骨与手法都熟了几分，修为 +${gain}。`;
+            break;
+          }
+
+          // —— 锻器：打铁、挖矿 ——
+          case "forgework": {
+            if (option === "兵刃") {
+              addMaterial("兵器", 1);
+              addMaterial("熟铁", 2);
+            } else if (option === "器物") {
+              addMaterial("矿石", 2);
+              addMaterial("熟铁", 1);
+            } else {
+              addMaterial("熟铁", 3);
+            }
+            spent = 4;
+            line = `你在${name}生火打了一场${optionLabel}，出一件实打实的东西，送进宝库。`;
+            break;
+          }
+          case "mine": {
+            const ore = baseY.materials[0]?.name ?? "矿石";
+            const amount = Math.max(1, hours * 2);
+            addMaterial(ore, amount);
+            contribution += 2 * hours;
+            spent = hours;
+            line = `你在${name}挖了${optionLabel}，得${ore} ${amount}，宗门记你贡献 +${2 * hours}。`;
+            break;
+          }
+
+          // —— 灵脉与灵田：修炼或劳作，做多久算多久 ——
+          case "meditate": {
+            // 照本处的修炼效率算：每时辰一点，灵脉与洞府各有加成
+            const r = trainTechnique(hours);
+            spent = hours;
+            line = r.gain > 0
+              ? `你在${name}静坐了${optionLabel}，${r.name ? `「${r.name}」` : ""}进度 +${r.gain}（此地修炼效率 ×${r.eff.mul}，${r.eff.note}），境界进度随之同涨。`
+              : `你在${name}静坐了${optionLabel}，只是这一门已修到尽头，进益有限。`;
+            break;
+          }
+          case "labor": {
+            const mat = baseY.materials[0]?.name ?? "灵谷";
+            const amount = Math.max(1, hours);
+            addMaterial(mat, amount);
+            contribution += 2 * hours;
+            spent = hours;
+            line = `你在${name}劳作${optionLabel}，得${mat} ${amount}，宗门记你贡献 +${2 * hours}。`;
+            break;
+          }
+          // —— 丹房：浸体、养蛊、配给 ——
+          case "soak": {
+            // 药力浸体也算修炼，照本处的效率走
+            const eff = localCultivationFrom({
+              facilities: st.sect?.facilities,
+              location: st.currentLocation,
+            });
+            const gain = cultivationGain(hours, eff.mul);
+            gainCultivation(gain);
+            if (hours >= 3) mend(true);
+            spent = hours;
+            line = `你以药力浸体${optionLabel}，血气翻涌一场，修为 +${gain}。`;
+            break;
+          }
+          case "raise": {
+            addMaterial("蛊虫", 1);
+            spent = 3;
+            line = `你以${optionLabel}照看窟里的蛊虫，养得一头合用，蛊虫 +1。`;
+            break;
+          }
+          case "ration": {
+            contribution += 2;
+            spent = 2;
+            line = `你把库中的丹药清点了一遍，${optionLabel}，众人称便，贡献 +2。`;
+            break;
+          }
+
+          // —— 灵苑：喂兽、牵兽 ——
+          case "feed": {
+            if (beast) {
+              beast = { ...beast, bond: Math.min(100, beast.bond + 4) };
+              line = `你亲手喂了一回，${optionLabel}，「${beast.name}」凑过来蹭你，亲疏 +4。`;
+            } else {
+              line = `你到栏前看了一回，${optionLabel}，只是身上并无随身的灵兽，喂了也无处交托。`;
+            }
+            spent = 1;
+            break;
+          }
+          case "tame": {
+            addMaterial("兽材", 1);
+            gainCultivation(2);
+            spent = 2;
+            line = `你牵一头${optionLabel}出来试脚力，跑得尽兴，得兽材一件，修为 +2。`;
+            break;
+          }
+
+          // —— 阵法：巡阵、占卜、祭祀、传功 ——
+          case "ward": {
+            contribution += 2;
+            reputation += 1;
+            spent = 2;
+            line = `你把${optionLabel}的阵眼逐一理过，护山之势更稳，贡献 +2、声望 +1。`;
+            break;
+          }
+          case "divine": {
+            contribution += 3;
+            spent = 1;
+            line = `你就着阵势问了${optionLabel}一卦，得些启示，贡献 +3。`;
+            break;
+          }
+          case "rite": {
+            contribution += 2;
+            reputation += 2;
+            spent = 3;
+            line = `你在${name}击鼓${optionLabel}，鼓声传出十里，门人齐聚，贡献 +2、声望 +2。`;
+            break;
+          }
+          case "transmit": {
+            gainCultivation(3);
+            spent = 2;
+            line = `你在${name}就「${optionLabel}」点了门下弟子一回，自己于道上也更清楚，修为 +3。`;
+            break;
+          }
+
+          // —— 居所：歇息、用饭、待客、走访 ——
+          case "rest": {
+            spent = hours;
+            mend(hours >= 6);
+            line = `你回房睡了过去，一觉${optionLabel}，醒来日子已往前走了。`;
+            break;
+          }
+          case "feast": {
+            const grain = stock.find((m) => m.name === "灵谷");
+            if (grain) grain.amount = Math.max(0, grain.amount - 2);
+            reputation += 2;
+            spent = 2;
+            line = `你在${name}与门人同席，${optionLabel}，宾主尽欢，声望 +2。`;
+            break;
+          }
+          case "receive": {
+            reputation += 1;
+            spent = 2;
+            line = `你在${name}${optionLabel}，来客受了礼数，门中的名声又厚一分，声望 +1。`;
+            break;
+          }
+          case "visit": {
+            contribution += 2;
+            spent = 2;
+            line = `你各处走了一走，${optionLabel}的闲话听了满耳，心里有数，贡献 +2。`;
+            break;
+          }
+
+          // —— 零星几桩 ——
+          case "rubbing": {
+            addMaterial("书卷", 2);
+            contribution += 1;
+            spent = 2;
+            line = `你拓下${optionLabel}，得书卷 2，贡献 +1。`;
+            break;
+          }
+          case "repair": {
+            addMaterial("兵器", 1);
+            spent = 2;
+            line = "你把门中的旧兵器收拾一番，修出可用的一件。";
+            break;
+          }
+          default: {
+            denied = "这一桩还没个做法。";
+          }
+        }
+
+        if (denied) {
+          set({ log: [denied, ...st.log].slice(0, 30) });
+          return { ok: false, message: denied };
+        }
+
+        set({
+          player,
+          beast,
+          techniques,
+          sect: {
+            ...st.sect,
+            contribution,
+            reputation,
+            heritage,
+            facilityDaily: markDone,
+            management: {
+              ...st.sect.management,
+              treasury: { spiritStones: stones, materials: stock },
+            },
+          },
+          log: [line, ...st.log].slice(0, 30),
+        });
+        // 这一桩花去或跳过的时辰，照实往前推
+        if (spent > 0) get().advanceTime(spent);
+
+        const decision = facilityDecision({
+          building: name,
+          kindName: getSectTileKind(sectTileCode(kindId)).name,
+          action,
+          optionLabel,
+          playerName: st.player.name,
+          playerPosition: st.player.position,
+          sectName: st.sect.name,
+        });
+        return { ok: true, message: line, decision };
       },
 
       promote: (id) => {
@@ -890,38 +2546,912 @@ EFFECT: [效果描述]`,
           }));
           return;
         }
-        set((st) => ({
-          sect: { ...st.sect, contribution: st.sect.contribution - item.cost },
-          log: [`以 ${item.cost} 贡献兑换得「${item.name}」。`, ...st.log].slice(0, 30),
-        }));
+
+        // 商店条目只有名称与类型，入库时补足物品系统需要的字段
+        const name = item.name || "无名之物";
+        const typeText = `${item.type || ""}${name}`;
+        const invType: InventoryItem["type"] =
+          /内丹|药引|药材|灵草|朱砂|符纸/.test(typeText) ? "材料"
+            : /丹/.test(typeText) ? "丹药"
+              : /符|箓/.test(typeText) ? "符箓"
+                : /剑|刀|盾|甲|珠|镜|器|宝|佩/.test(typeText) ? "法宝"
+                  : /草|芝|花|叶|石|砂|精|矿|木/.test(typeText) ? "材料"
+                    : "杂物";
+
+        set((st) => {
+          const inventory = Array.isArray(st.inventory) ? st.inventory : [];
+          const existing = inventory.find((i) => i.name === name);
+          const nextInventory = existing
+            ? inventory.map((i) => (i.name === name ? { ...i, count: i.count + 1 } : i))
+            : [
+              ...inventory,
+              normalizeItemElements({
+                id: `shop-${Date.now()}`,
+                name,
+                type: invType,
+                grade: "凡品" as const,
+                count: 1,
+                icon: name.charAt(0) || "宝",
+                desc: item.desc || `以 ${item.cost} 贡献自宗门兑换所得。`,
+              }),
+            ];
+          return {
+            sect: { ...st.sect, contribution: st.sect.contribution - item.cost },
+            inventory: nextInventory,
+            log: [`以 ${item.cost} 贡献兑换得「${name}」×1。`, ...st.log].slice(0, 30),
+          };
+        });
       },
 
-      interact: (relationId) => {
-        const s = get();
-        const rel = s.relations.find((r) => r.id === relationId);
-        if (!rel) return;
-        const gain = Math.floor(3 + Math.random() * 8);
-        if (rel.type === "dao_companion") {
-          const cultGain = Math.floor(40 + Math.random() * 60);
-          set((st) => ({
-            player: { ...st.player, cultivation: st.player.cultivation + cultGain },
-            relations: (Array.isArray(st.relations) ? st.relations : []).map((r) =>
-              r.id === relationId
-                ? { ...r, affinity: Math.min(r.affinityMax, r.affinity + gain) }
-                : r,
-            ),
-            log: [`与道侣双修，情谊 +${gain}，修为 +${cultGain}。`, ...st.log].slice(0, 30),
-          }));
-          return;
-        }
-        set((st) => ({
-          relations: (Array.isArray(st.relations) ? st.relations : []).map((r) =>
-            r.id === relationId
-              ? { ...r, affinity: Math.min(r.affinityMax, r.affinity + gain) }
-              : r,
-          ),
-          log: [`与「${rel.name}」往来，亲疏变化 ${gain}。`, ...st.log].slice(0, 30),
+      donateStonesToSect: (stones) => {
+        const st = get();
+        const want = Math.max(0, Math.trunc(Number(stones) || 0));
+        // 只收整份，零头留着
+        const gain = Math.floor(want / STONES_PER_CONTRIBUTION_IN);
+        const spend = gain * STONES_PER_CONTRIBUTION_IN;
+        if (gain <= 0 || (Number(st.spiritStones.low) || 0) < spend) return 0;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - spend },
+          sect: { ...s.sect, contribution: (Number(s.sect.contribution) || 0) + gain },
+          log: [`你向门中上交 ${spend} 下品灵石，记贡献 ${gain} 点。`, ...s.log].slice(0, 30),
         }));
+        return gain;
+      },
+
+      donateItemToSect: (itemName, count = 1) => {
+        const st = get();
+        const item = (st.inventory ?? []).find((i) => i.name === itemName);
+        if (!item) return 0;
+        const n = Math.max(1, Math.min(Math.trunc(Number(count) || 1), Math.trunc(Number(item.count) || 0)));
+        if (n <= 0) return 0;
+        const gain = contributionForItem(item.grade) * n;
+        set((s) => ({
+          inventory: (s.inventory ?? [])
+            .map((i) => (i.name === itemName ? { ...i, count: (Number(i.count) || 0) - n } : i))
+            .filter((i) => (Number(i.count) || 0) > 0),
+          sect: { ...s.sect, contribution: (Number(s.sect.contribution) || 0) + gain },
+          log: [`你向门中上交「${itemName}」×${n}，记贡献 ${gain} 点。`, ...s.log].slice(0, 30),
+        }));
+        return gain;
+      },
+
+      redeemContributionForStones: (contribution) => {
+        const st = get();
+        if (!isInnerDiscipleOrAbove(st.player.position, st.sect.positions)) return 0;
+        const want = Math.max(0, Math.trunc(Number(contribution) || 0));
+        const use = Math.min(want, Math.max(0, Math.trunc(Number(st.sect.contribution) || 0)));
+        if (use <= 0) return 0;
+        const stones = use * STONES_PER_CONTRIBUTION_OUT;
+        set((s) => ({
+          sect: { ...s.sect, contribution: (Number(s.sect.contribution) || 0) - use },
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + stones },
+          log: [`你以 ${use} 点贡献，自门中领了 ${stones} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return stones;
+      },
+
+      setTraveling: (relationId, traveling) => {
+        const st = get();
+        const rel = st.relations.find((r) => r.id === relationId);
+        if (!rel) return false;
+        // 仇敌不与之同行；人数也有个数，太多人一路走不像话
+        if (traveling && (rel.type === "enemy" || travelingCount(st.relations) >= MAX_TRAVEL_COMPANIONS)) {
+          return false;
+        }
+        if (rel.traveling === traveling) return false;
+
+        set({
+          relations: st.relations.map((r) => (r.id === relationId ? { ...r, traveling } : r)),
+          log: [
+            traveling ? `「${rel.name}」与你结伴同行。` : `「${rel.name}」与你作别，各走各的路。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return true;
+      },
+
+      checkSkill: ({ skill, dc, context }) => {
+        const st = get();
+        const named = String(skill ?? "").trim().slice(0, 8);
+        if (!named) return null;
+
+        const matched = findSkill(st.skills, named);
+        const name = matched?.name ?? named;
+        const check = rollSkillCheck({
+          asked: named,
+          skill: matched,
+          dc,
+          context,
+          day: daySerial(st.currentTime),
+          failedBefore: st.checks.some((c) => c.skill === name && !c.success),
+        });
+
+        set({
+          checks: [...st.checks, check].slice(-20),
+          // 同一日内同一门只长一次，反复考同一门磨不出长进
+          skills: trainOnceADay(st.skills, name, check.success, check.day, st.checks),
+          log: [
+            `考较「${name}」：掷 ${check.roll} + Lv.${check.level} = ${check.total}，难度 ${check.dc}，${
+              check.success ? "过了" : "没过"
+            }。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return check;
+      },
+
+      settleQuest: ({ name, status }) => {
+        const st = get();
+        const target = [...st.quests]
+          .reverse()
+          .find((q) => q.status === "open" && (q.name === name || name.includes(q.name) || q.name.includes(name)));
+        if (!target) return false;
+
+        // 牙行揽下的差事：交上了也只算办成，赏还押在柜上，得他自己回去领
+        if (status === "done" && target.broker) {
+          const held = holdRewardOutcome(target);
+          set({
+            quests: st.quests.map((q) =>
+              q.id === target.id
+                ? { ...q, status: "done", settledDay: daySerial(st.currentTime), claimed: false, outcome: held }
+                : q,
+            ),
+            log: [`「${target.name}」${held}`, ...st.log].slice(0, 30),
+          });
+          return true;
+        }
+
+        // 照单落账：酬谢或责罚都兑成实数，不留作一时的状态
+        const player = { ...st.player };
+        const spiritStones = { ...st.spiritStones };
+        const reputation = { ...st.reputation };
+        const sect = { ...st.sect };
+        const relations = st.relations.map((r) => ({ ...r }));
+        const outcome = applyQuestLedger({ player, spiritStones, reputation, sect, relations, now: st.currentTime }, target, status);
+
+        // 门派任务的去向也在任务板上更新：办成的标作已了，误期的只算翻过这一页
+        if (target.sectTask) {
+          const taskId = target.sectTask.taskId;
+          // 交差或误期都算翻过这一页；成败由机缘留下的状态区分
+          sect.tasks = (Array.isArray(sect.tasks) ? sect.tasks : []).map((t) =>
+            t.id === taskId ? { ...t, settled: true } : t,
+          );
+        }
+
+        set({
+          player,
+          spiritStones,
+          reputation,
+          sect,
+          relations,
+          quests: st.quests.map((q) =>
+            q.id === target.id
+              ? { ...q, status, settledDay: daySerial(st.currentTime), outcome }
+              : q,
+          ),
+          log: [`「${target.name}」${outcome}`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      expireQuests: () => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        const overdue = st.quests.filter((q) => isQuestOverdue(q, today));
+        if (overdue.length === 0) return;
+
+        // 一次把到期的都算清：各罚各的，最后只写一次档
+        const player = { ...st.player };
+        const spiritStones = { ...st.spiritStones };
+        const reputation = { ...st.reputation };
+        const sect = { ...st.sect };
+        const relations = st.relations.map((r) => ({ ...r }));
+        const ledger = { player, spiritStones, reputation, sect, relations, now: st.currentTime };
+
+        const outcomes = new Map<string, string>();
+        const failedTaskIds = new Set<string>();
+        for (const quest of overdue) {
+          outcomes.set(quest.id, applyQuestLedger(ledger, quest, "failed"));
+          if (quest.sectTask) failedTaskIds.add(quest.sectTask.taskId);
+        }
+        // 误了期的门派事务，任务板上也翻过这一页
+        if (failedTaskIds.size > 0) {
+          sect.tasks = (Array.isArray(sect.tasks) ? sect.tasks : []).map((t) =>
+            failedTaskIds.has(t.id) ? { ...t, settled: true } : t,
+          );
+        }
+
+        set({
+          player,
+          spiritStones,
+          reputation,
+          sect,
+          relations,
+          quests: st.quests.map((q) =>
+            outcomes.has(q.id) ? { ...q, status: "failed", settledDay: today, outcome: outcomes.get(q.id)! } : q,
+          ),
+          log: [...overdue.map((q) => `「${q.name}」误了期。${outcomes.get(q.id)}`), ...st.log].slice(0, 30),
+        });
+      },
+
+      addAdventure: (adventure) => {
+        const st = get();
+        const list = Array.isArray(st.adventures) ? st.adventures : [];
+        if (!adventure || list.some((a) => a.id === adventure.id)) return;
+        set({
+          adventures: [...list, adventure],
+          log: [`舆图上多了一处去处：${adventure.name}。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      settleAdventure: (id, keep) => {
+        const st = get();
+        const list = Array.isArray(st.adventures) ? st.adventures : [];
+        const target = list.find((a) => a.id === id);
+        if (!target) return;
+        const next = keep
+          ? list.map((a) => (a.id === id ? { ...a, status: "done" as const, persistent: true } : a))
+          : list.filter((a) => a.id !== id);
+        set({
+          adventures: next,
+          // 人还站在原地，但那处已经没了，便不再算驻在奇遇点位上
+          currentAdventureId: !keep && st.currentAdventureId === id ? undefined : st.currentAdventureId,
+          log: [`「${target.name}」这一处${keep ? "暂且搁下，日后再来" : "就此了结，不复再提"}。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      arriveAtAdventure: (id) => {
+        const st = get();
+        const adv = (Array.isArray(st.adventures) ? st.adventures : []).find((a) => a.id === id);
+        if (!adv) return;
+        // 该奇遇归在哪一城，就把脚下钉到那一城的标点；认不出便沿用原处
+        const point = getMarker(adv.cityId);
+        set({
+          currentAdventureId: id,
+          currentSectId: undefined,
+          currentPlaceId: point ? adv.cityId : st.currentPlaceId,
+          currentLocation: "outdoor",
+          mapSceneId: WORLD_SCENE_ID,
+          log: [`你行至「${adv.name}」所在的那一处地头。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      patchRelations: (updates) => {
+        const st = get();
+        const list = (Array.isArray(updates) ? updates : []).filter(
+          (u) => u?.id && u?.patch && Object.keys(u.patch).length > 0,
+        );
+        if (list.length === 0) return;
+        const byId = new Map(list.map((u) => [u.id, u.patch]));
+        // 旧名 → 新名，供机缘里指向接头人的那一栏一并改过来
+        const oldNames = new Map<string, string>();
+        const relations = st.relations.map((r) => {
+          const patch = byId.get(r.id);
+          if (!patch) return r;
+          const nextName = typeof patch.name === "string" && patch.name ? patch.name : r.name;
+          if (nextName !== r.name && r.name) oldNames.set(r.name, nextName);
+          const merged = { ...r, ...patch, name: nextName } as Relation;
+          // 出身、性情、形貌换过了，那句「某某的某职。形貌，性情，出身。」也要跟着重写
+          if (patch.appearance || patch.personality || patch.origin) {
+            const where = merged.metAt ? `${merged.metAt}的` : "";
+            const bits = [merged.appearance, merged.personality, merged.origin].filter(Boolean).join("，");
+            if (bits) merged.note = `${where}${merged.title}。${bits}。`;
+          }
+          return merged;
+        });
+        const quests =
+          oldNames.size === 0
+            ? st.quests
+            : st.quests.map((q) => {
+                const person = q.target?.person;
+                if (!person || !oldNames.has(person)) return q;
+                return { ...q, target: { ...q.target!, person: oldNames.get(person)! } };
+              });
+        set({ relations, quests });
+      },
+
+      recordPlay: ({ skillId, gain, newSkill }) => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        // 隔了日子就把场次从头算，今日这算是第一场
+        const shown = showsToday(st.waseShows, today);
+        let skills = skillId
+          ? st.skills.map((s) => (s.id === skillId ? trainSkill(s, gain) : s))
+          : st.skills;
+        // 偶尔听出一门新本事来；同名的已经有了就不再添
+        if (newSkill && !skills.some((s) => s.name === newSkill.name)) {
+          skills = [...skills, newSkill];
+        }
+        set({
+          waseShows: { day: today, count: shown + 1 },
+          skills,
+        });
+      },
+
+      tameBeast: (itemId) => {
+        const st = get();
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!item) return false;
+        const beast = beastFromItem(item);
+        // 收作随身之后就不再算行囊里的一件东西了
+        const inventory = st.inventory.filter((i) => i.id !== itemId);
+        set({
+          beast,
+          inventory,
+          log: [
+            st.beast
+              ? `你放走了「${st.beast.name}」，转而把「${beast.name}」带在身边。`
+              : `你把「${beast.name}」带在了身边，它${beast.temper}。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return true;
+      },
+
+      releaseBeast: () => {
+        const st = get();
+        if (!st.beast) return;
+        set({
+          beast: null,
+          log: [`你放「${st.beast.name}」归山去了。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      rollSectSites: () => {
+        const sites = rollSectSites();
+        registerSectScenes(sites);
+        set({ sectSites: sites });
+      },
+
+      ensureSectSites: () => {
+        // 一处都没有（旧档，或那会儿地图还没读进来）就先掷一遍
+        if (get().sectSites.length === 0) {
+          const sites = rollSectSites();
+          registerSectScenes(sites);
+          set({ sectSites: sites });
+        }
+
+        let st = get();
+        // 逐处把山门图注册上，进主界面时补齐，点得进每一处宗门
+        registerSectScenes(st.sectSites);
+
+        // 玩家报过宗门名号的以那条为准；「整段开局」这类没有填表的路子，
+        // 宗门是开篇由 AI 写进 sect.name 的，玩家身上那一栏还空着，这里补认一手，
+        // 否则本门在地图上无从认领，看着就像「入了宗门却不见山门」
+        const declared = playerSectName(st.player.sectName);
+        const name = declared || playerSectName(st.sect?.name);
+        if (name) {
+          if (!declared) {
+            // 把开篇定下的宗门口径记回玩家身上，顶栏等处才显示得对
+            set((s) => ({ player: { ...s.player, sectName: name } }));
+            st = get();
+          }
+          // 玩家在哪一带，就在哪一带认下一处作本门；本门的底子取自开局 AI 生成的宗门信息
+          const claimed = claimPlayerSect(
+            st.sectSites,
+            name,
+            st.sect,
+            getMarker(st.currentPlaceId)?.culture,
+          );
+          if (claimed !== st.sectSites) {
+            set({
+              sectSites: claimed,
+              log: [`「${name}」在舆图上有了落点。`, ...st.log].slice(0, 30),
+            });
+            st = get();
+          }
+        }
+
+        // 认下的那一处，把它的底子交给本门：开局状态给的那几个数、山门气象与四类词条。
+        // 叙事里已写下数目的便不再改，只把缺的词条补上。
+        const mine = st.sectSites.find((s) => s.mine);
+        if (!mine) return;
+        const s = st.sect;
+        const lacksNumbers =
+          (Number(s.level) || 1) <= 1 &&
+          !(Number(s.reputation) || 0) &&
+          !(Number(s.elders) || 0) &&
+          !(Number(s.disciples) || 0);
+        const patch: Partial<typeof s> = {};
+        if (!s.name) patch.name = mine.name;
+        if (!s.territory) patch.territory = mine.seat;
+        if (!s.nature) patch.nature = { ...mine.nature };
+        if (!s.climate) patch.climate = { ...mine.climate };
+        if (!s.feature) patch.feature = { ...mine.feature };
+        if (!s.start) patch.start = { ...mine.start };
+        if (lacksNumbers) {
+          patch.level = mine.level;
+          patch.reputation = mine.reputation;
+          patch.elders = mine.elders;
+          patch.disciples = mine.disciples;
+          patch.appearance = s.appearance || mine.appearance;
+          patch.reputationDesc = s.reputationDesc || mine.reputationDesc;
+          patch.surroundings = s.surroundings || mine.surroundings;
+        }
+        if (Object.keys(patch).length > 0) set({ sect: { ...s, ...patch } });
+        // 门中立住了，顺带把玩家的身份对上职位树
+        get().alignPlayerPosition();
+      },
+
+      foundSect: (input) => {
+        const st = get();
+        // 已是一派之主便不必再立门户
+        if (st.sectSites.some((s) => s.mine) || playerSectName(st.sect?.name || st.player.sectName)) {
+          return { ok: false, message: "你已是一派之主，不必再立门户。" };
+        }
+        const cost = SECT_FOUND_STONE_COST;
+        const stones = Number(st.spiritStones.low) || 0;
+        if (stones < cost) {
+          return { ok: false, message: `开山立派须下品灵石 ${cost}，眼下还差 ${cost - stones}。` };
+        }
+        const site = buildFoundingSite(input, st.sectSites);
+        if (!site) {
+          return { ok: false, message: "这一处立不得：名号已有人用，或这一处不是空地。" };
+        }
+
+        const sites = [...st.sectSites, site];
+        // 山门图当场注册，立完便进得去
+        registerSectScenes(sites);
+        set({
+          spiritStones: { ...st.spiritStones, low: stones - cost },
+          sectSites: sites,
+          sect: {
+            ...st.sect,
+            name: site.name,
+            level: site.level,
+            reputation: site.reputation,
+            leader: st.player.name || "你",
+            elders: site.elders,
+            disciples: site.disciples,
+            territory: site.seat,
+            contribution: 0,
+            appearance: site.appearance,
+            reputationDesc: site.reputationDesc,
+            surroundings: site.surroundings,
+            nature: { ...site.nature },
+            climate: { ...site.climate },
+            feature: { ...site.feature },
+            start: { ...site.start },
+            positions: foundingPositions(),
+            tasks: [],
+            shop: [],
+            heritage: [],
+            resources: [],
+            management: {
+              ...st.sect.management,
+              treasury: { spiritStones: 0, materials: [] },
+              consumption: { dailyCost: 0, recentConsumption: [] },
+            },
+            // 新立之门只有主殿一处，尚未动土兴建，日结也还没算过
+            facilities: {},
+            facilityDaily: {},
+            facilitySettledDay: 0,
+            modifiers: [],
+          },
+          player: { ...st.player, sectName: site.name, position: "掌门" },
+          log: [`你在${site.seat}立起「${site.name}」，自此自成一派。`, ...st.log].slice(0, 30),
+        });
+        get().alignPlayerPosition();
+        return { ok: true, message: `「${site.name}」已在${site.seat}立起，你便是开山掌门。` };
+      },
+
+      resolveSectWar: ({ targetId, targetKind = "sect", choice }) => {
+        const st = get();
+        const day = daySerial(st.currentTime);
+        const monthKey = gameMonthKey(st.currentTime);
+        const logLine = (line: string) => [line, ...st.log].slice(0, 30);
+        const mineSite = st.sectSites.find((s) => s.mine);
+
+        // ---- 打的是城或村：只有掠夺与占领两路 ----
+        if (targetKind === "city" || targetKind === "village") {
+          if (!targetId) return { ok: false, message: "对不上这一处的所在。" };
+          const targetName =
+            targetKind === "city"
+              ? getMarker(targetId)?.name ?? targetId
+              : st.villages?.[targetId]?.name ?? targetId;
+          const book = ownerOf(st.occupations, targetKind, targetId);
+          if (choice === "占领") {
+            if (!mineSite) return { ok: false, message: "你还没有本门，占不得地方。" };
+            if (book?.ownerSectId === mineSite.id) {
+              return { ok: false, message: `「${targetName}」已在你的名下。` };
+            }
+            const occ: Occupation = {
+              kind: targetKind,
+              targetId,
+              targetName,
+              ownerSectId: mineSite.id,
+              ownerName: mineSite.name,
+              sinceDay: day,
+              // 占下的这一月不另收，自下月起算
+              settledMonth: monthKey,
+            };
+            set({
+              occupations: upsertOccupation(st.occupations, occ),
+              // 夺人所占，两家的交情便结了梁子
+              sectRelations: book
+                ? (() => {
+                    const r = makeSectRelation(
+                      mineSite,
+                      { id: book.ownerSectId, name: book.ownerName } as SectSite,
+                      "敌对",
+                      -60,
+                      `${targetName}易主，两家自此交恶。`,
+                      day,
+                    );
+                    return r ? upsertSectRelation(st.sectRelations, r) : st.sectRelations;
+                  })()
+                : st.sectRelations,
+              log: logLine(
+                `你占了${targetKind === "city" ? "城" : "村"}「${targetName}」，自此按月纳贡。`,
+              ),
+            });
+            return { ok: true, message: `「${targetName}」已归本门治下。` };
+          }
+          if (choice === "掠夺") {
+            const takeStones = occupationTribute(targetKind, targetId) * 3;
+            const treasury = st.sect.management?.treasury;
+            // 有本门便入本门宝库，没有便记在自家身上
+            if (mineSite && treasury) {
+              set({
+                sect: {
+                  ...st.sect,
+                  management: {
+                    ...st.sect.management,
+                    treasury: {
+                      spiritStones: (Number(treasury.spiritStones) || 0) + takeStones,
+                      materials: Array.isArray(treasury.materials) ? treasury.materials : [],
+                    },
+                  },
+                },
+                log: logLine(`你纵兵劫掠「${targetName}」，得灵石 ${takeStones}。`),
+              });
+            } else {
+              set({
+                spiritStones: { ...st.spiritStones, low: (Number(st.spiritStones.low) || 0) + takeStones },
+                log: logLine(`你劫掠「${targetName}」，得灵石 ${takeStones}。`),
+              });
+            }
+            return { ok: true, message: `掠得「${targetName}」，灵石 ${takeStones} 入袋。` };
+          }
+          return { ok: false, message: "这一处只能掠夺或占领。" };
+        }
+
+        const target = st.sectSites.find((s) => s.id === targetId);
+        if (!target) return { ok: false, message: "这一处宗门已不在舆图上。" };
+        if (target.mine) return { ok: false, message: "本门之事，另有处置。" };
+        const mine = mineSite;
+
+        if (choice === "掠夺") {
+          // 尽夺其府库：灵石并入本门宝库，余料也一并卷走
+          const book = target.treasury;
+          const heldStones = Math.max(0, Number(book?.spiritStones) || 0);
+          const heldMaterials = Array.isArray(book?.materials)
+            ? book!.materials.map((m) => ({ ...m }))
+            : [];
+          // 库里空着便照其实力估一笔，免得白打一场
+          const takeStones = heldStones > 0
+            ? heldStones
+            : Math.round((Number(target.level) || 1) * 120 + (Number(target.disciples) || 0) * 6 + 80);
+          const treasury = st.sect.management?.treasury ?? { spiritStones: 0, materials: [] };
+          const rel = makeSectRelation(mine, target, "敌对", -80, "一场恶战，本门破其山门，尽掠府库。", day);
+          set({
+            sect: {
+              ...st.sect,
+              management: {
+                ...st.sect.management,
+                treasury: {
+                  spiritStones: (Number(treasury.spiritStones) || 0) + takeStones,
+                  materials: mergeMaterials(treasury.materials, heldMaterials),
+                },
+              },
+            },
+            sectSites: st.sectSites.map((s) =>
+              s.id === target.id
+                ? {
+                    ...s,
+                    reputation: Math.max(0, (Number(s.reputation) || 0) - 30),
+                    treasury: { spiritStones: 0, materials: [] },
+                  }
+                : s,
+            ),
+            sectRelations: rel ? upsertSectRelation(st.sectRelations, rel) : st.sectRelations,
+            log: logLine(`你破了「${target.name}」的山门，尽掠其宝库，得灵石 ${takeStones}。`),
+          });
+          return { ok: true, message: `掠得「${target.name}」府库，灵石 ${takeStones} 入本门。` };
+        }
+
+        if (choice === "附庸") {
+          if (!mine) return { ok: false, message: "你还没有本门，纳不得附庸。" };
+          const rel = makeSectRelation(mine, target, "附庸", 40, `${target.name}俯首称臣，岁岁来贡。`, day);
+          set({
+            sectSites: st.sectSites.map((s) =>
+              s.id === target.id
+                ? { ...s, vassalOf: mine.id, reputation: Math.max(0, (Number(s.reputation) || 0) - 15) }
+                : s,
+            ),
+            sectRelations: rel ? upsertSectRelation(st.sectRelations, rel) : st.sectRelations,
+            log: logLine(`「${target.name}」俯首称臣，自今而后为本门附庸，按日纳贡。`),
+          });
+          return { ok: true, message: `「${target.name}」已为本门附庸。` };
+        }
+
+        // 摧毁：删去这一处宗门，门下之人流落为散修，各自记下这一桩
+        const shattered = shatterSectNpcs(st.relations, target.name, st.sect.name || "本门");
+        set({
+          sectSites: st.sectSites.filter((s) => s.id !== target.id),
+          sectRelations: st.sectRelations.filter((r) => r.a !== target.id && r.b !== target.id),
+          // 门墙既倒，它名下的城村也一并脱籍
+          occupations: (st.occupations ?? []).filter((o) => o?.ownerSectId !== target.id),
+          relations: shattered.relations,
+          log: logLine(
+            `你踏破「${target.name}」，门墙自此不存；其门下${shattered.changed > 0 ? ` ${shattered.changed} 人` : "之人"}流落江湖，成了散修。`,
+          ),
+        });
+        return { ok: true, message: `「${target.name}」已自舆图上抹去。` };
+      },
+
+      alignPlayerPosition: () => {
+        const st = get();
+        const positions = Array.isArray(st.sect?.positions) ? st.sect.positions : [];
+        if (positions.length === 0) return;
+
+        const current = String(st.player?.position || "").trim();
+        const match = current
+          ? positions.find(
+              (p) => p?.name && (p.name === current || p.name.includes(current) || current.includes(p.name)),
+            )
+          : undefined;
+        // 对不上名目便落在最低一级，总好过卡在门外
+        const lowest = positions.reduce(
+          (min, p) => ((Number(p.level) || 1) < (Number(min.level) || 1) ? p : min),
+          positions[0],
+        );
+        const target = match ?? lowest;
+
+        const seat = positions.find((p) => p.isCurrent);
+        if (seat?.name === target.name && current === target.name) return;
+
+        set({
+          player: { ...st.player, position: target.name },
+          sect: {
+            ...st.sect,
+            positions: positions.map((p) => ({ ...p, isCurrent: p.name === target.name })),
+          },
+          log: [`门中叙职，你位列「${target.name}」。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      identifyItem: ({ itemId, reading }) => {
+        const st = get();
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!item || !item.mystery) return false;
+
+        const identified = normalizeAppraisal(reading, item);
+        if (!identified) return false;
+
+        set({
+          inventory: st.inventory.map((i) => (i.id === itemId ? identified : i)),
+          log: [`「${item.name}」请人看过，原来是${identified.name}。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      pawnItem: ({ itemId, shopId, shopName, cityId, districtId, count }) => {
+        const st = get();
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!item) return null;
+
+        const take = Math.max(1, Math.min(Math.trunc(count) || 1, Math.max(1, item.count)));
+        const price = pawnPrice(item, take);
+        const today = daySerial(st.currentTime);
+        const rest = item.count - take;
+
+        const ticket: PawnTicket = {
+          id: `pawn-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          // 押出去的这一份单独存下来，赎回来还是原样
+          item: { ...item, id: `pawned-${item.id}-${Date.now().toString(36)}`, count: take },
+          shopId,
+          shopName,
+          cityId,
+          districtId,
+          price,
+          day: today,
+          dueDay: today + PAWN_DAYS,
+        };
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low + price },
+          inventory:
+            rest > 0
+              ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: rest } : i))
+              : st.inventory.filter((i) => i.id !== itemId),
+          pawns: [...st.pawns, ticket],
+          log: [
+            `你把「${item.name}」押在「${shopName}」，当得 ${price} 下品灵石，第 ${ticket.dueDay} 日前可赎。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return ticket;
+      },
+
+      redeemPawn: (ticketId) => {
+        const st = get();
+        const ticket = st.pawns.find((t) => t.id === ticketId);
+        if (!ticket) return false;
+        if (st.spiritStones.low < ticket.price) return false;
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - ticket.price },
+          inventory: [...st.inventory, { ...ticket.item, id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}` }],
+          pawns: st.pawns.filter((t) => t.id !== ticketId),
+          log: [
+            `你回到「${ticket.shopName}」，花了 ${ticket.price} 下品灵石赎回「${ticket.item.name}」。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return true;
+      },
+
+      expirePawns: () => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        const dead = st.pawns.filter((t) => isPawnOverdue(t, today));
+        if (dead.length === 0) return;
+
+        // 过了期的就是死当：东西归当铺，当票从此作废
+        set({
+          pawns: st.pawns.filter((t) => !isPawnOverdue(t, today)),
+          log: [
+            ...dead.map((t) => `「${t.shopName}」的当票过了期，「${t.item.name}」成了死当，再赎不回来了。`),
+            ...st.log,
+          ].slice(0, 30),
+        });
+      },
+
+      takeBrokerJob: ({ key, shopId, jobId, cityId, districtId }) => {
+        const st = get();
+        const market = st.markets[key];
+        const shop = market?.shops.find((s) => s.id === shopId);
+        const job = shop?.jobs?.find((j) => j.id === jobId);
+        if (!market || !shop || !job || job.taken) return false;
+
+        const today = daySerial(st.currentTime);
+        const days = Math.max(1, Math.trunc(job.days) || 1);
+        const dueDay = today + days;
+
+        const cityName = getMarker(cityId)?.name ?? "此城";
+        // 去处落在本城平民住宅上；柜上没有明写街区的，从平民住宅里现挑一处
+        const targetDistrictId =
+          typeof job.target?.districtId === "number"
+            ? job.target.districtId
+            : getDistricts(cityId).find((d) => d.nature === "平民住宅")?.id;
+        const spot = st.districtNames?.[`${cityId}:${targetDistrictId}`] || "平民住宅";
+        const label = job.target?.label || `${cityName}·${spot}`;
+
+        // 奔人去的差事把尘缘里那个人改钉到目标地块上；奔地方去的只管去处，不另钉人——
+        // 到了那一处怎么办，由叙事去写
+        const relations = st.relations.map((r) => ({ ...r }));
+        const added: Relation[] = [];
+        const contact = job.target?.person;
+
+        if (targetDistrictId !== undefined && contact) {
+          const at = relations.findIndex((r) => r.name === contact && r.cityId === cityId);
+          if (at >= 0) {
+            relations[at] = { ...relations[at], cityId, districtId: targetDistrictId, fixedUntilDay: dueDay };
+          }
+        }
+
+        const target: JobTarget = {
+          cityId,
+          districtId: targetDistrictId,
+          label,
+          person: contact,
+        };
+
+        const quest: Quest = {
+          id: `quest-${job.id}`,
+          name: job.name,
+          desc: job.desc,
+          place: label,
+          // 柜上奔人去的差事算人物类，连人去处一并钉下；奔地方去的算地点类，只管去处
+          kind: contact ? "人物" : "地点",
+          dueDay,
+          giver: shop.keeper?.name || shop.name,
+          condition: job.condition,
+          reward: job.reward,
+          rewardKind: job.rewardKind,
+          rewardAmount: job.rewardAmount,
+          penalty: job.penalty,
+          penaltyKind: job.penaltyKind,
+          penaltyAmount: job.penaltyAmount,
+          status: "open",
+          day: today,
+          // 赏钱先押在这家柜上，办成之后回来领
+          broker: { cityId, districtId, shopId, shopName: shop.name },
+          // 去处连同要找的人一并记下，好在地图上星标、到地块上寻得着
+          target,
+        };
+
+        set({
+          quests: [...st.quests, quest],
+          relations: [...relations, ...added],
+          markets: {
+            ...st.markets,
+            [key]: {
+              ...market,
+              shops: market.shops.map((s) =>
+                s.id === shopId && s.jobs
+                  ? { ...s, jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, taken: true } : j)) }
+                  : s,
+              ),
+            },
+          },
+          log: [
+            `你在「${shop.name}」接下「${job.name}」，限期 ${days} 日，赏钱押在柜上，办成回来领。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        // 钉下的人由模型照这桩差事立传，替掉先前现拼的名字与出身
+        generateQuestNpcs(job.name, job.desc, added);
+        return true;
+      },
+
+      claimQuest: (questId) => {
+        const st = get();
+        const target = st.quests.find((q) => q.id === questId);
+        const broker = target?.broker;
+        if (!target || !broker || !isRewardHeld(target)) return false;
+
+        // 到这一步才照单落账：此前赏一直押在柜上，谁也没动
+        const player = { ...st.player };
+        const spiritStones = { ...st.spiritStones };
+        const reputation = { ...st.reputation };
+        const sect = { ...st.sect };
+        const relations = st.relations.map((r) => ({ ...r }));
+        const outcome = applyQuestLedger({ player, spiritStones, reputation, sect, relations, now: st.currentTime }, target, "done");
+
+        set({
+          player,
+          spiritStones,
+          reputation,
+          sect,
+          relations,
+          quests: st.quests.map((q) => (q.id === questId ? { ...q, claimed: true, outcome } : q)),
+          log: [`你回「${broker.shopName}」领了「${target.name}」的赏。${outcome}`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      hireEscort: ({ offer, cityId, districtId, metAt }) => {
+        const st = get();
+        // 身边带不了那么多人，佣金也得当场付清
+        if (travelingCount(st.relations) >= MAX_TRAVEL_COMPANIONS) return false;
+        if (st.spiritStones.low < offer.fee) return false;
+
+        const npc = escortToRelation(offer, daySerial(st.currentTime), { cityId, districtId, metAt });
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - offer.fee },
+          relations: [...st.relations, npc],
+          log: [
+            `在「${metAt}」雇下镖师「${npc.name}」，付佣金 ${offer.fee} 下品灵石，雇到第 ${npc.hireUntilDay} 日。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return true;
+      },
+
+      expireEscorts: () => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        const gone = st.relations.filter((r) => r.traveling && isEscortExpired(r, today));
+        if (gone.length === 0) return;
+
+        set({
+          relations: st.relations.map((r) =>
+            gone.includes(r) ? { ...r, traveling: false, hireUntilDay: undefined, hireFee: undefined } : r,
+          ),
+          log: [...gone.map((r) => `镖师「${r.name}」的雇期到了，就此告辞。`), ...st.log].slice(0, 30),
+        });
       },
 
       addBuff: (buff) => {
@@ -1005,16 +3535,58 @@ EFFECT: [效果描述]`,
         set((st) => ({
           player: {
             ...st.player,
+            // 非战斗的状态一律按时辰算，时辰走到了就自行散去
+            buffs: pruneBuffs(st.player.buffs, st.currentTime),
+          },
+        }));
+      },
+
+      takeBath: (hours) => {
+        const st = get();
+        const count = clampHours(hours);
+        const cost = bathCost(count);
+
+        if (st.spiritStones.low < cost) {
+          return { ok: false, cost, washed: [] as string[], reason: `下品灵石不够，还差 ${cost - st.spiritStones.low}。` };
+        }
+
+        // 每泡一个时辰，身上的负面状态便往前挪八个时辰；挪过此刻的就算养好了
+        const { buffs, washed } = shortenDebuffs(
+          st.player.buffs,
+          st.currentTime,
+          count * BATH_RELIEF_PER_HOUR,
+        );
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost },
+          player: { ...st.player, buffs },
+          log: [
+            `在汤池里泡了 ${count} 个时辰，${washed.length > 0 ? `${washed.join("、")}就此养好了。` : "周身的滞涩松快了些。"}`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        // 泡澡本身也费时辰
+        get().advanceTime(count);
+
+        return { ok: true, cost, washed };
+      },
+
+      burnIncense: (sticks) => {
+        const burned = Math.trunc(sticks);
+        if (!Number.isFinite(burned) || burned <= 0) return;
+        set((st) => ({
+          player: {
+            ...st.player,
             buffs: (Array.isArray(st.player.buffs) ? st.player.buffs : [])
-              .filter((buff) => {
-                if (buff.durationType !== "round") return true;
-                if (buff.duration === undefined) return true;
-                return buff.duration > 0;
-              })
-              .map((buff) => {
-                if (buff.durationType !== "round" || buff.duration === undefined) return buff;
-                return { ...buff, duration: buff.duration - 1 };
-              }),
+              .filter(
+                (b) =>
+                  b.durationType !== "incense" || b.duration === undefined || b.duration - burned > 0,
+              )
+              .map((b) =>
+                b.durationType === "incense" && b.duration !== undefined
+                  ? { ...b, duration: b.duration - burned }
+                  : b,
+              ),
           },
         }));
       },
@@ -1055,43 +3627,1142 @@ EFFECT: [效果描述]`,
             localStorage.setItem("xiuxian-ai", JSON.stringify(aiData));
           }
         } catch { /* ignore */ }
-        set({ ...initialState, log: ["重入轮回，再启修真。"] });
+        // 重入轮回：宗门也照新的一局重掷一遍
+        set({ ...initialState, sectSites: rollSectSites(), log: ["重入轮回，再启修真。"], ending: null });
       },
 
       applyOps: (ops) => {
         if (ops.length === 0) return;
+        const placeBefore = get().currentPlaceId;
+        const relationIdsBefore = new Set(get().relations.map((r) => r.id));
+        const sectSitesBefore = get().sectSites;
         set((st) => {
           const dataView: GameState = {
+            villages: st.villages ?? {},
+            estates: st.estates ?? [],
+            manorPlots: st.manorPlots ?? [],
+            playerShops: st.playerShops ?? [],
+            sectRelations: st.sectRelations ?? [],
+            occupations: st.occupations ?? [],
             player: st.player,
             techniques: st.techniques,
             inventory: st.inventory,
             spiritStones: st.spiritStones,
+            reputation: st.reputation,
+            beast: st.beast,
             talismanRecipes: st.talismanRecipes,
             alchemyRecipes: st.alchemyRecipes,
             sect: st.sect,
             relations: st.relations,
             currentPanel: st.currentPanel,
             craftingTab: st.craftingTab,
+            currentPlaceId: st.currentPlaceId,
+            mapSceneId: st.mapSceneId,
             currentLocation: st.currentLocation,
             log: st.log,
             pillCache: st.pillCache,
             news: st.news,
             currentTime: st.currentTime,
+            districtNames: st.districtNames,
+            manors: st.manors,
+            markets: st.markets,
+            priceAdjusts: st.priceAdjusts,
+            rumors: st.rumors,
+            skills: st.skills,
+            checks: st.checks,
+            quests: st.quests,
+            waseShows: st.waseShows,
+            pawns: st.pawns,
+            workshops: st.workshops,
+            pacts: st.pacts,
+            sectSites: st.sectSites,
+            adventures: st.adventures,
           };
           const next = applyOpsToState(dataView, ops);
+          // 首次获得心法时自动生效，否则玩家不打开功法面板手动切换就一直是「未定心法」
+          const nextPlayer = { ...next.player };
+          // 叙事若把时辰推过去了，到点的状态同一笔账里就散去，别等到下一轮
+          nextPlayer.buffs = pruneBuffs(nextPlayer.buffs, next.currentTime ?? st.currentTime);
+          if (!nextPlayer.activeHeartTechnique) {
+            const heart = (Array.isArray(next.techniques) ? next.techniques : []).find((t) => t.category === "心法");
+            if (heart) nextPlayer.activeHeartTechnique = heart.id;
+          }
+          // 修炼任何一门功法，境界进度都跟着长：功法进度长多少，修为便长多少。
+          // 叙事里写到打坐闭关，只给功法进度即可，修为由这一笔自动补上。
+          // 新参得的功法不算——那是白捡的，不是修出来的。
+          const beforeProf = new Map(
+            (Array.isArray(st.techniques) ? st.techniques : []).map((t) => [t.id, Number(t.proficiency) || 0]),
+          );
+          let profGain = 0;
+          for (const t of Array.isArray(next.techniques) ? next.techniques : []) {
+            const prev = beforeProf.get(t.id);
+            if (prev === undefined) continue;
+            const gain = (Number(t.proficiency) || 0) - prev;
+            if (gain > 0) profGain += gain;
+          }
+          if (profGain > 0) {
+            nextPlayer.cultivation = (Number(nextPlayer.cultivation) || 0) + profGain;
+          }
+          // 叙事可以写"你启程去了金陵"，但只有落在标点表里的 id 才认，免得光标飘到地图外
+          const nextPlace = getMarker(next.currentPlaceId) ? next.currentPlaceId : st.currentPlaceId;
+          const moved = nextPlace !== st.currentPlaceId;
+          // 场所同样只认表里的值，认不出就沿用原处
+          const nextLocation = resolveLocation(next.currentLocation) ?? st.currentLocation;
+          // 人没挪窝、场所也照旧，才算仍驻在原先那处奇遇点位上；否则奇遇点位自然作废
+          const stillAtPoint = !moved && nextLocation === st.currentLocation;
           return {
-            player: next.player,
+            player: nextPlayer,
             techniques: next.techniques,
             inventory: next.inventory,
             spiritStones: next.spiritStones,
+            // 名声也是叙事能改的一笔：牙行差事、做下的事都记在这上头
+            reputation: next.reputation,
             sect: next.sect,
             relations: next.relations,
+            currentPlaceId: nextPlace,
+            // 换了地方就退回世界地图，免得停在上一个地点的内部地图里
+            mapSceneId: moved ? WORLD_SCENE_ID : st.mapSceneId,
+            currentLocation: nextLocation,
+            currentAdventureId: stillAtPoint ? st.currentAdventureId : undefined,
             log: next.log,
             pillCache: next.pillCache,
             news: next.news,
             currentTime: next.currentTime,
+            districtNames: next.districtNames,
+            priceAdjusts: next.priceAdjusts,
+            // 判定的掷骰与改口都在结算里做完，这里把结果收回来
+            skills: next.skills ?? st.skills,
+            checks: next.checks ?? st.checks,
+            // 机缘的立与了也在结算里做完
+            quests: next.quests ?? st.quests,
+            // 叙事牵出的奇遇也落在舆图上
+            adventures: next.adventures ?? st.adventures,
+            // 当票只在当铺与到期时动，叙事结算不会碰它
+            pawns: st.pawns,
+            // 作坊里的工匠不受叙事影响；约定只在说定与了结时动
+            workshops: st.workshops,
+            pacts: st.pacts,
+            // 叙事里动身去了某一村，便把这一村的「已前往」收回来，往后才能打听人事
+            villages: next.villages ?? st.villages,
+            // 叙事里新置的宅地、谈定的出租，也照这一笔落库
+            manorPlots: next.manorPlots ?? st.manorPlots,
+            estates: next.estates ?? st.estates,
+            // 本门山门若被叙事毁了某座建筑（或掌事有变），也照这一笔落库
+            sectSites: next.sectSites ?? st.sectSites,
+            // 叙事与新闻添改的宗门交情，一并收进来
+            sectRelations: next.sectRelations ?? st.sectRelations,
+            // 城村的归属也照这一笔落库
+            occupations: next.occupations ?? st.occupations,
           };
         });
+        // 山门有变（拆了某座建筑）就重注册一遍宗门场景，地图上即刻见废墟；山门图不是每回合都动，故先比对再注册
+        if (get().sectSites !== sectSitesBefore) registerSectScenes(get().sectSites);
+        // 叙事新立、且钉下了接头人的机缘：那几位由模型照这桩事取名，替掉现拼的名字
+        const questLabels = new Set(
+          get()
+            .quests.filter((q) => q.status === "open" && q.target)
+            .map((q) => q.target!.label),
+        );
+        const freshCast = get().relations.filter(
+          (r) => !relationIdsBefore.has(r.id) && r.persona && r.metAt && questLabels.has(r.metAt),
+        );
+        if (freshCast.length > 0) {
+          const ctx = get().quests.find(
+            (q) => q.status === "open" && q.target && freshCast.some((n) => n.metAt === q.target!.label),
+          );
+          generateQuestNpcs(ctx?.name || "这桩事", ctx?.desc, freshCast);
+        }
+        // 叙事若把日子推过了头，误期的机缘该罚的罚，口头的约定也该落账了
+        get().expireQuests();
+        get().expirePacts();
+        // 日子推进了，名下房产的完好度与月租也在此一并结清
+        get().settleEstates();
+        // 铺面同样按月结账
+        get().settlePlayerShops();
+        // 城村的贡金也按月结
+        get().settleOccupations();
+        // 门中职位或玩家的身份若在这一笔里动过，重新对上号
+        get().alignPlayerPosition();
+        // 叙事把气血或寿元算到了头，就地立终局
+        get().tickMortality(0);
+        // 叙事里启程去了别处，这一路也算走过一段，路上同样可能生变
+        if (placeBefore !== get().currentPlaceId) {
+          void import("@/store/useAIStore")
+            .then(({ useAIStore }) => useAIStore.getState().maybeTriggerRandomEvent(12))
+            .catch(() => {});
+        }
+      },
+
+      meetNpc: (npc) =>
+        set((st) => {
+          if (st.relations.some((r) => r.id === npc.id)) return st;
+          // 名声在外，初见时人家心里先有个底；往后的交情仍旧靠处
+          const firstImpression = reputationFirstImpression(st.reputation);
+          const base = migrateRelation(npc);
+          const met: Relation = {
+            ...base,
+            relation: Math.max(-100, Math.min(100, base.relation + firstImpression * 2)),
+            note: firstImpression
+              ? `${npc.note}${firstImpression > 0 ? " 他听过你的名，见面便客气三分。" : " 你的名头不怎么好听，他见面先存了几分戒心。"}`
+              : npc.note,
+          };
+          return {
+            relations: [...st.relations, met],
+            log: [`你与「${npc.name}」攀谈了几句。`, ...st.log].slice(0, 30),
+          };
+        }),
+
+      appendRelationMemory: (id, text) =>
+        set((st) => ({
+          relations: st.relations.map((r) =>
+            r.id === id ? { ...r, memory: r.memory ? `${r.memory}\n${text}` : text } : r,
+          ),
+        })),
+
+      removeRelations: (ids) =>
+        set((st) => {
+          const dead = new Set(ids);
+          return { relations: st.relations.filter((r) => !dead.has(r.id)) };
+        }),
+
+      trainAt: (techniqueId, hours, mul) => {
+        // 宅邸里的「演武」之屋，练功进益也照它加成
+        const gain = cultivationGain(hours, mul * (1 + manorBonusOf(get().manorPlots, "演武")));
+        if (gain <= 0) return 0;
+        let real = 0;
+        set((st) => {
+          const list = Array.isArray(st.techniques) ? st.techniques : [];
+          const at = list.findIndex((t) => t.id === techniqueId);
+          const cultivation = Number(st.player.cultivation) || 0;
+          if (at < 0) {
+            real = gain;
+            return { player: { ...st.player, cultivation: cultivation + gain } };
+          }
+          const target = list[at];
+          const max = Number(target.proficiencyMax) || 100;
+          const before = Number(target.proficiency) || 0;
+          const after = Math.min(max, before + gain);
+          real = after - before;
+          return {
+            techniques: list.map((t, i) => (i === at ? { ...t, proficiency: after } : t)),
+            player: { ...st.player, cultivation: cultivation + real },
+          };
+        });
+        return real;
+      },
+
+      ensureManor: (cityId, districtId, cityName, culture) => {
+        const key = manorKey(cityId, districtId);
+        const existing = get().manors[key];
+        if (existing) return existing;
+        const manor = rollManor(cityId, districtId, cityName, culture);
+        set((st) => ({ manors: { ...st.manors, [key]: manor } }));
+        return manor;
+      },
+
+      ensureVillages: () => {
+        const st = get();
+        const sceneId = WORLD_SCENE_ID;
+        const all = getScenePresetPoints(sceneId);
+        if (all.length === 0) return;
+        const used = new Set<string>();
+        for (const s of st.sectSites ?? []) if (s?.sceneId) used.add(presetKey(s));
+        for (const a of st.adventures ?? []) if (a?.sceneId && a.status !== "done") used.add(presetKey(a));
+        for (const k of Object.keys(st.villages ?? {})) used.add(k);
+
+        // 至少留四成点位给奇遇（连同宗门、其它机缘一并算在占用里）：
+        // 村庄最多占到这个上限，占满了就不再新立，免得野外的奇遇无处落脚。
+        const reserve = Math.ceil(all.length * 0.4);
+        const occupiedByOthers = used.size - Object.keys(st.villages ?? {}).length;
+        const maxVillages = Math.max(0, all.length - reserve - occupiedByOthers);
+        let room = maxVillages - Object.keys(st.villages ?? {}).length;
+        if (room <= 0) return;
+
+        const free = all.filter((p) => !used.has(presetKey(p)));
+        if (free.length === 0) return;
+
+        const cities = getCityMarkers();
+        const next: Record<string, Village> = { ...(st.villages ?? {}) };
+        let added = 0;
+        for (const p of free) {
+          if (room <= 0) break;
+          // 只占一部分空位，其余留给宗门与奇遇
+          if (Math.random() > 0.4) continue;
+          const key = presetKey(p);
+          if (next[key]) continue;
+          // 村庄属哪个文化圈，照离它最近的那座城来定：村名与村里人的姓名都随这一圈取，
+          // 各圈各异，不至于天下村庄同一个名、同一个姓。
+          const culture = presetCulture(p, cities);
+          next[key] = {
+            key,
+            sceneId,
+            x: p.x,
+            y: p.y,
+            name: rollVillageName(culture),
+            culture,
+            buildings: [],
+            npcs: [],
+            inquired: false,
+          };
+          added += 1;
+          room -= 1;
+        }
+        if (added > 0) set({ villages: next });
+      },
+
+      inquireVillage: (key) => {
+        const st = get();
+        const v = st.villages?.[key];
+        // 须先在问道中动身到过这一村，才谈得上向村人打听
+        if (!v || v.inquired || !v.visited) return;
+        // 村不在城内，用点位坐标折算一个稳定的编号，交给合成出的铺子用
+        const spot = Math.abs(Math.round(v.x) * 1000 + Math.round(v.y));
+        const buildings = rollVillageBuildings().map((kind, i) => ({
+          kind,
+          name: villageBuildingName(kind, v.culture),
+          shop: makeVillageShop(kind, v.culture, v.sceneId, spot, i),
+        }));
+        const npcs = rollVillageNpcs(v.sceneId, spot, v.name, v.culture);
+        // 有的村正巧有人要出手屋舍
+        const estateOffer =
+          Math.random() < 0.35
+            ? rollEstateOffer({ place: v.name, culture: v.culture, villageKey: v.key })
+            : undefined;
+        set((s) => ({
+          villages: { ...s.villages, [key]: { ...v, buildings, npcs, estateOffer, inquired: true } },
+        }));
+      },
+
+      clearVillageEstateOffer: (key) => {
+        set((s) => {
+          const v = s.villages?.[key];
+          if (!v) return s;
+          return { villages: { ...s.villages, [key]: { ...v, estateOffer: undefined } } };
+        });
+      },
+
+      buyEstate: (offer, paid) => {
+        const today = daySerial(get().currentTime);
+        const estate: Estate = {
+          id: `estate-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          name: offer.name,
+          place: offer.place,
+          cityId: offer.cityId,
+          districtId: offer.districtId,
+          villageKey: offer.villageKey,
+          baseEfficiency: offer.baseEfficiency,
+          condition: 100,
+          price: Math.max(0, Math.round(paid)),
+          settledDay: today,
+          storage: [],
+        };
+        set((st) => ({
+          estates: [...(st.estates ?? []), estate],
+          log: [`你买下了「${estate.name}」（${estate.place}），花 ${estate.price} 下品灵石。`, ...st.log].slice(0, 30),
+        }));
+        return estate;
+      },
+
+      sellEstate: (id) => {
+        const st = get();
+        const e = (st.estates ?? []).find((x) => x.id === id);
+        if (!e) return 0;
+        const refund = sellRefund(e);
+        set((s) => ({
+          estates: (s.estates ?? []).filter((x) => x.id !== id),
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + refund },
+          log: [`你把「${e.name}」出手，收回 ${refund} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return refund;
+      },
+
+      maintainEstate: (id) => {
+        const st = get();
+        const e = (st.estates ?? []).find((x) => x.id === id);
+        if (!e || e.condition >= 100) return false;
+        const cost = maintainCost(e.condition);
+        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          estates: (s.estates ?? []).map((x) => (x.id === id ? { ...x, condition: 100 } : x)),
+          log: [`你花 ${cost} 下品灵石把「${e.name}」修葺一新。`, ...s.log].slice(0, 30),
+        }));
+        return true;
+      },
+
+      rebuildEstate: (id) => {
+        const st = get();
+        const e = (st.estates ?? []).find((x) => x.id === id);
+        if (!e || e.condition > 0) return false;
+        const cost = rebuildCost(e);
+        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          estates: (s.estates ?? []).map((x) => (x.id === id ? { ...x, condition: REBUILD_CONDITION } : x)),
+          log: [`你雇人重建「${e.name}」，耗时 ${REBUILD_DAYS} 日，花 ${cost} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        get().advanceTime(REBUILD_DAYS * 24);
+        return true;
+      },
+
+      storeInEstate: (id, itemName, count) => {
+        const st = get();
+        const e = (st.estates ?? []).find((x) => x.id === id);
+        if (!e) return false;
+        const have = (st.inventory ?? []).find((i) => i.name === itemName);
+        const n = Math.min(Math.max(1, Math.trunc(count) || 1), Number(have?.count) || 0);
+        if (!have || n <= 0) return false;
+        // 存得下多少，看宅邸里「仓廪」有几处：底子二十格，仓廪每级再添一格
+        const cap = 20 + Math.floor(manorBonusOf(st.manorPlots, "仓廪"));
+        const used = (e.storage ?? []).reduce((sum, i) => sum + (Number(i.count) || 0), 0);
+        if (used + n > cap) return false;
+        set((s) => {
+          const inventory = (s.inventory ?? [])
+            .map((i) => (i.name === itemName ? { ...i, count: Number(i.count) - n } : i))
+            .filter((i) => Number(i.count) > 0);
+          const estates = (s.estates ?? []).map((x) => {
+            if (x.id !== id) return x;
+            const storage = [...(x.storage ?? [])];
+            const at = storage.findIndex((i) => i.name === itemName);
+            if (at >= 0) storage[at] = { ...storage[at], count: Number(storage[at].count) + n };
+            else storage.push({ ...have, count: n });
+            return { ...x, storage };
+          });
+          return { inventory, estates };
+        });
+        return true;
+      },
+
+      takeFromEstate: (id, itemName, count) => {
+        const st = get();
+        const e = (st.estates ?? []).find((x) => x.id === id);
+        if (!e) return false;
+        const have = (e.storage ?? []).find((i) => i.name === itemName);
+        const n = Math.min(Math.max(1, Math.trunc(count) || 1), Number(have?.count) || 0);
+        if (!have || n <= 0) return false;
+        set((s) => {
+          const estates = (s.estates ?? []).map((x) => {
+            if (x.id !== id) return x;
+            const storage = (x.storage ?? [])
+              .map((i) => (i.name === itemName ? { ...i, count: Number(i.count) - n } : i))
+              .filter((i) => Number(i.count) > 0);
+            return { ...x, storage };
+          });
+          const inventory = [...(s.inventory ?? [])];
+          const at = inventory.findIndex((i) => i.name === itemName);
+          if (at >= 0) inventory[at] = { ...inventory[at], count: Number(inventory[at].count) + n };
+          else inventory.push({ ...have, count: n });
+          return { estates, inventory };
+        });
+        return true;
+      },
+
+      rentOutEstate: (id, rent) =>
+        set((st) => ({
+          estates: (st.estates ?? []).map((e) =>
+            e.id === id
+              ? {
+                  ...e,
+                  rent: {
+                    tenant: rent.tenant.trim() || "租客",
+                    monthly: Math.max(0, Math.round(Number(rent.monthly) || 0)),
+                    // 挂租当月便算已收，自次月起逐月入账
+                    lastPaidMonth: gameMonthKey(st.currentTime),
+                  },
+                }
+              : e,
+          ),
+        })),
+
+      reclaimEstate: (id) =>
+        set((st) => ({ estates: (st.estates ?? []).map((e) => (e.id === id ? { ...e, rent: undefined } : e)) })),
+
+      rentOutPlot: (plotId, rent) =>
+        set((st) => ({
+          manorPlots: (st.manorPlots ?? []).map((p) =>
+            p.id === plotId
+              ? {
+                  ...p,
+                  rent: {
+                    tenant: rent.tenant.trim() || "租客",
+                    monthly: Math.max(0, Math.round(Number(rent.monthly) || 0)),
+                    lastPaidMonth: gameMonthKey(st.currentTime),
+                  },
+                }
+              : p,
+          ),
+        })),
+
+      reclaimPlot: (plotId) =>
+        set((st) => ({ manorPlots: (st.manorPlots ?? []).map((p) => (p.id === plotId ? { ...p, rent: undefined } : p)) })),
+
+      settleEstates: () => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        const monthKey = gameMonthKey(st.currentTime);
+        let earned = 0;
+        const earnedLines: string[] = [];
+
+        let estatesChanged = false;
+        const nextEstates = (st.estates ?? []).map((e) => {
+          let out = e;
+          // 完好度随日子往下掉
+          const days = Math.max(0, today - (Number(out.settledDay) || today));
+          if (days > 0) {
+            out = {
+              ...out,
+              condition: Math.max(0, Math.round((Number(out.condition) || 0) - days * ESTATE_DECAY_PER_DAY)),
+              settledDay: today,
+            };
+          }
+          // 租出去的，到了新月便收一回租
+          const rent = out.rent;
+          if (rent && Number(rent.monthly) > 0 && rent.lastPaidMonth !== monthKey) {
+            earned += Math.round(Number(rent.monthly) || 0);
+            earnedLines.push(`「${out.name}」${rent.tenant}送来 ${Math.round(Number(rent.monthly) || 0)} 灵石`);
+            out = { ...out, rent: { ...rent, lastPaidMonth: monthKey } };
+          }
+          if (out !== e) estatesChanged = true;
+          return out;
+        });
+
+        let plotsChanged = false;
+        const nextPlots = (st.manorPlots ?? []).map((p) => {
+          const rent = p.rent;
+          if (rent && Number(rent.monthly) > 0 && rent.lastPaidMonth !== monthKey) {
+            earned += Math.round(Number(rent.monthly) || 0);
+            earnedLines.push(`「${p.place}·宅邸」${rent.tenant}送来 ${Math.round(Number(rent.monthly) || 0)} 灵石`);
+            plotsChanged = true;
+            return { ...p, rent: { ...rent, lastPaidMonth: monthKey } };
+          }
+          return p;
+        });
+
+        if (!estatesChanged && !plotsChanged) return;
+        set((s) => ({
+          estates: nextEstates,
+          manorPlots: nextPlots,
+          spiritStones:
+            earned > 0 ? { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + earned } : s.spiritStones,
+          log: earned > 0 ? [`月租入账：${earnedLines.join("；")}。`, ...s.log].slice(0, 30) : s.log,
+        }));
+      },
+
+      openShop: (input) => {
+        const st = get();
+        const lease = shopLeaseCost(input.culture);
+        const capital = Math.max(0, Math.round(Number(input.capital) || 0));
+        if ((Number(st.spiritStones.low) || 0) < lease + capital) return null;
+        const shop: PlayerShop = {
+          id: `shop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          name: input.name.trim() || "无名铺子",
+          kind: input.kind,
+          typeLabel: input.typeLabel?.trim() || undefined,
+          cityId: input.cityId,
+          districtId: input.districtId,
+          place: input.place,
+          culture: input.culture,
+          cash: capital,
+          goods: clampShopGoods(input.goods ?? []),
+          facilities: clampShopFacilities(input.facilities ?? []),
+          monthlyIncome: Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(input.monthlyIncome) || 0))),
+          monthlyExpense: Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(input.monthlyExpense) || 0))),
+          useStock: input.useStock !== false,
+          // 开张当月便算已结，自次月起逐月入账
+          lastSettledMonth: gameMonthKey(st.currentTime),
+          arrears: 0,
+        };
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - lease - capital },
+          playerShops: [...(s.playerShops ?? []), shop],
+          log: [
+            `你在${input.place}盘下一间铺面「${shop.name}」，盘店花 ${lease} 下品灵石，另投 ${capital} 作本钱。`,
+            ...s.log,
+          ].slice(0, 30),
+        }));
+        return shop;
+      },
+
+      withdrawShopCash: (id, amount) => {
+        const st = get();
+        const shop = (st.playerShops ?? []).find((s) => s.id === id);
+        if (!shop) return 0;
+        const take = Math.max(0, Math.min(Math.round(Number(amount) || 0), Math.round(Number(shop.cash) || 0)));
+        if (take <= 0) return 0;
+        set((s) => ({
+          playerShops: (s.playerShops ?? []).map((x) =>
+            x.id === id ? { ...x, cash: Math.round(Number(x.cash) || 0) - take } : x,
+          ),
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + take },
+          log: [`你从「${shop.name}」的账上取出 ${take} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return take;
+      },
+
+      depositShopCash: (id, amount) => {
+        const st = get();
+        const shop = (st.playerShops ?? []).find((s) => s.id === id);
+        if (!shop) return 0;
+        const want = Math.max(0, Math.round(Number(amount) || 0));
+        const put = Math.min(want, Math.max(0, Math.round(Number(st.spiritStones.low) || 0)));
+        if (put <= 0) return 0;
+        set((s) => ({
+          playerShops: (s.playerShops ?? []).map((x) =>
+            x.id === id ? { ...x, cash: Math.round(Number(x.cash) || 0) + put } : x,
+          ),
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - put },
+          log: [`你往「${shop.name}」的账上注入 ${put} 下品灵石作本钱。`, ...s.log].slice(0, 30),
+        }));
+        return put;
+      },
+
+      applyShopPatch: (id, patch) =>
+        set((s) => ({
+          playerShops: (s.playerShops ?? []).map((x) =>
+            x.id === id
+              ? {
+                  ...x,
+                  name: patch.name?.trim() || x.name,
+                  goods: patch.goods ? clampShopGoods(patch.goods) : x.goods,
+                  facilities: patch.facilities ? clampShopFacilities(patch.facilities) : x.facilities,
+                  monthlyIncome:
+                    patch.monthlyIncome !== undefined
+                      ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyIncome) || 0)))
+                      : x.monthlyIncome,
+                  monthlyExpense:
+                    patch.monthlyExpense !== undefined
+                      ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyExpense) || 0)))
+                      : x.monthlyExpense,
+                }
+              : x,
+          ),
+        })),
+
+      settlePlayerShops: () => {
+        const st = get();
+        const list = st.playerShops ?? [];
+        if (list.length === 0) return;
+        const monthKey = gameMonthKey(st.currentTime);
+        let changed = false;
+        const notes: string[] = [];
+        const next: PlayerShop[] = [];
+        for (const shop of list) {
+          if (shop.lastSettledMonth === monthKey) {
+            next.push(shop);
+            continue;
+          }
+          changed = true;
+          const income = Math.max(0, Math.round(Number(shop.monthlyIncome) || 0));
+          const expense = shopMonthlyExpense(shop);
+          let cash = Math.round(Number(shop.cash) || 0) + income - expense;
+          let arrears = Math.max(0, Number(shop.arrears) || 0);
+          if (cash < 0) {
+            // 池子垫不上这个月的开销，先记账；连欠三月便被债主收走
+            cash = 0;
+            arrears += 1;
+          } else {
+            arrears = 0;
+          }
+          if (arrears >= SHOP_ARREARS_LIMIT) {
+            notes.push(`「${shop.name}」连欠三月，被债主收走，铺面另易其主。`);
+            continue;
+          }
+          if (arrears > 0) {
+            notes.push(`「${shop.name}」这个月没挣够开销，已欠 ${arrears} 月。`);
+          } else if (expense > income) {
+            // 池子里还有钱，便自动支取差额把这一月撑过去
+            notes.push(`「${shop.name}」进项不敷，自动从资金池支出 ${expense - income} 维持经营。`);
+          }
+          next.push({ ...shop, cash, arrears, lastSettledMonth: monthKey });
+        }
+        if (!changed) return;
+        set((s) => ({
+          playerShops: next,
+          log: notes.length ? [...notes, ...s.log].slice(0, 30) : s.log,
+        }));
+      },
+
+      buyPlot: (input) => {
+        const st = get();
+        if ((Number(st.spiritStones.low) || 0) < MANOR_PLOT_PRICE) return null;
+        const plot = emptyPlot(input);
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - MANOR_PLOT_PRICE },
+          manorPlots: [...(s.manorPlots ?? []), plot],
+          log: [`你在${input.place}买下一块宅地，花 ${MANOR_PLOT_PRICE} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return plot;
+      },
+
+      buildShape: (plotId, index, shape) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        if (!plot || plot.cells[index]) return false;
+        const cost = SHAPE_COST[shape];
+        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index ? { shape, level: 1 } : c)) } : p,
+          ),
+          log: [`你在宅邸里盖起一座「${shape}」，花 ${cost} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return true;
+      },
+
+      assignManorFunction: (plotId, index, fn) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        if (!plot?.cells[index]) return false;
+        set((s) => ({
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, fn } : c)) } : p,
+          ),
+        }));
+        return true;
+      },
+
+      upgradeManorCell: (plotId, index) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        const cell = plot?.cells[index];
+        if (!plot || !cell) return false;
+        const cost = manorUpgradeCost(cell.shape, cell.level);
+        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId
+              ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, level: c.level + 1 } : c)) }
+              : p,
+          ),
+        }));
+        return true;
+      },
+
+      demolishManorCell: (plotId, index) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        const cell = plot?.cells[index];
+        if (!plot || !cell) return false;
+        const refund = demolishRefund(cell.shape, cell.level);
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + refund },
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index ? null : c)) } : p,
+          ),
+          log: [`你拆了宅邸里的「${cell.shape}」，收回 ${refund} 下品灵石。`, ...s.log].slice(0, 30),
+        }));
+        return true;
+      },
+
+      convertManorCell: (plotId, index, shape) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        const cell = plot?.cells[index];
+        if (!plot || !cell) return false;
+        const cost = convertCost(cell.shape, shape, cell.level);
+        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, shape } : c)) } : p,
+          ),
+        }));
+        return true;
+      },
+
+      manorBonus: (fn) => manorBonusOf(get().manorPlots, fn),
+
+      setManorCrop: (plotId, index, crop) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        const cell = plot?.cells[index];
+        if (!plot || !cell || cell.fn !== "园圃") return false;
+        set((s) => ({
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId
+              ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, crop, lastHarvest: undefined } : c)) }
+              : p,
+          ),
+        }));
+        return true;
+      },
+
+      settleManorFields: () => {
+        const st = get();
+        const plots = st.manorPlots ?? [];
+        if (plots.length === 0) return;
+        const qk = quarterKey(st.currentTime);
+        const month = st.currentTime?.month ?? 1;
+        const yieldPer = cropYield(manorBonusOf(plots, "园圃"));
+        const harvested: { name: string; count: number }[] = [];
+        let changed = false;
+
+        const next = plots.map((p) => {
+          const culture = p.cityId ? getMarker(p.cityId)?.culture : undefined;
+          const cells = p.cells.map((c) => {
+            if (!c || c.fn !== "园圃" || !c.crop || c.lastHarvest === qk) return c;
+            changed = true;
+            // 中原、漠北、西域入冬便不收，但仍记下这一季已过
+            if (!cropBlockedByWinter(culture, month)) harvested.push({ name: c.crop, count: yieldPer });
+            return { ...c, lastHarvest: qk };
+          });
+          return changed ? { ...p, cells } : p;
+        });
+        if (!changed) return;
+
+        set((s) => {
+          const inventory = [...(s.inventory ?? [])];
+          for (const h of harvested) {
+            const at = inventory.findIndex((i) => i.name === h.name);
+            if (at >= 0) inventory[at] = { ...inventory[at], count: Number(inventory[at].count) + h.count };
+            else
+              inventory.push({
+                id: `crop-${h.name}-${Date.now()}`,
+                name: h.name,
+                type: "材料",
+                grade: "凡品",
+                count: h.count,
+                icon: "草",
+                desc: `${h.name}，自家灵田里收的。`,
+              });
+          }
+          return {
+            manorPlots: next,
+            inventory,
+            log:
+              harvested.length > 0
+                ? [`灵田收了：${harvested.map((h) => `${h.name}×${h.count}`).join("、")}。`, ...s.log].slice(0, 30)
+                : s.log,
+          };
+        });
+      },
+
+      ensureMarket: (cityId, districtId, culture, slots) => {
+        const key = manorKey(cityId, districtId);
+        const day = daySerial(get().currentTime);
+        const known = get().relations;
+        const existing = get().markets[key];
+        if (existing) {
+          // 同一日里货架原样不动，只少了卖掉的；隔了日子才按旧规模重新上货，
+          // 顺带把早先没备货的铺子补上，免得门口挂着招牌却进不去
+          const synced = syncMarket(existing, cityId, districtId, culture, day, known, get().districtNames);
+          if (synced) {
+            set((st) => ({ markets: { ...st.markets, [key]: synced } }));
+            return synced;
+          }
+          return existing;
+        }
+        // 同城同类铺子最多两家：先数一数本城已开的铺面，再定各类还余几家可开
+        const used: Record<string, number> = {};
+        for (const [k, m] of Object.entries(get().markets)) {
+          if (!k.startsWith(`${cityId}:`)) continue;
+          for (const s of m.shops ?? []) used[s.kind] = (used[s.kind] ?? 0) + 1;
+        }
+        const kindBudget: Record<string, number> = {};
+        for (const kind of SHOP_KINDS) kindBudget[kind] = Math.max(0, 2 - (used[kind] ?? 0));
+
+        const market = rollMarket(cityId, districtId, culture, slots, day, known, get().districtNames, kindBudget);
+        set((st) => ({ markets: { ...st.markets, [key]: market } }));
+        return market;
+      },
+
+      ensureWorkshop: (cityId, districtId, cityName, culture) => {
+        const key = manorKey(cityId, districtId);
+        const existing = get().workshops[key];
+        if (existing) return existing;
+        const workshop = rollWorkshop(`${cityName}·匠人区`, cityId, districtId, culture);
+        set((st) => ({ workshops: { ...st.workshops, [key]: workshop } }));
+        return workshop;
+      },
+
+      placeCustomOrder: ({ offer, npcId, giver, place, cityId, districtId }) => {
+        const st = get();
+        // 料钱工钱得当面付清
+        if (st.spiritStones.low < offer.price) return false;
+
+        const today = daySerial(st.currentTime);
+        const item = normalizeItemElements({
+          id: `craft-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          name: offer.name,
+          type: offer.type,
+          grade: offer.grade,
+          count: 1,
+          icon: offer.icon || offer.name.charAt(0) || "宝",
+          desc: offer.desc,
+          elements: offer.elements,
+        }) as InventoryItem;
+
+        const pact: Pact = {
+          id: `pact-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          kind: "pickup",
+          name: `定制 · ${item.name}`,
+          desc: item.desc,
+          giver,
+          giverId: npcId,
+          place,
+          cityId,
+          districtId,
+          madeDay: today,
+          dueDay: today + Math.max(1, Math.trunc(offer.days) || 1),
+          item,
+          status: "open",
+        };
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - offer.price },
+          pacts: [...st.pacts, pact],
+          log: [
+            `在「${place}」与${giver}说定，付 ${offer.price} 下品灵石定做「${item.name}」，第 ${pact.dueDay} 日来取。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return true;
+      },
+
+      settlePact: (pactId) => {
+        const st = get();
+        const pact = st.pacts.find((p) => p.id === pactId);
+        // 取货的约定得等日子到，东西还没做成便取不走
+        if (!pact || pact.status !== "open" || !pactReady(pact, daySerial(st.currentTime))) return false;
+
+        const today = daySerial(st.currentTime);
+
+        if (pact.kind === "pickup") {
+          const item = pact.item
+            ? { ...pact.item, id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}` }
+            : undefined;
+          set({
+            inventory: item ? [...st.inventory, item] : st.inventory,
+            pacts: st.pacts.map((p) =>
+              p.id === pactId
+                ? { ...p, status: "done", settledDay: today, outcome: item ? `取回「${item.name}」。` : "事了了。" }
+                : p,
+            ),
+            log: [`你到「${pact.place}」取回「${pact.item?.name ?? pact.name}」。`, ...st.log].slice(0, 30),
+          });
+          return true;
+        }
+
+        // 口头约定：话说了算，事也办了，情谊上添一点
+        set({
+          relations: st.relations.map((r) =>
+            r.id === pact.giverId ? { ...r, relation: Math.min(100, migrateRelation(r).relation + PACT_KEPT_AFFINITY * 2) } : r,
+          ),
+          pacts: st.pacts.map((p) =>
+            p.id === pactId ? { ...p, status: "done", settledDay: today, outcome: "话说了算，事也办了。" } : p,
+          ),
+          log: [`你与「${pact.giver}」说定的事践了。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      /** 口头之约误过宽限的日子：情谊上折一点，这桩事也就黄了 */
+      expirePacts: () => {
+        const st = get();
+        const today = daySerial(st.currentTime);
+        const lapsed = st.pacts.filter((p) => pactLapsed(p, today));
+        if (lapsed.length === 0) return;
+
+        set({
+          relations: st.relations.map((r) =>
+            lapsed.some((p) => p.giverId === r.id)
+              ? { ...r, relation: Math.max(-100, migrateRelation(r).relation - PACT_OVERDUE_AFFINITY * 2) }
+              : r,
+          ),
+          pacts: st.pacts.map((p) =>
+            lapsed.includes(p)
+              ? { ...p, status: "failed", settledDay: today, outcome: `说定的事误了，「${p.giver}」心里记下这笔。` }
+              : p,
+          ),
+          log: [...lapsed.map((p) => `与「${p.giver}」说定的「${p.name}」误了日子，情谊上折了些。`), ...st.log].slice(0, 30),
+        });
+      },
+
+      setShopInfo: (key, shopId, info) =>
+        set((st) => {
+          const market = st.markets[key];
+          if (!market) return st;
+          return {
+            markets: {
+              ...st.markets,
+              [key]: {
+                ...market,
+                shops: market.shops.map((shop) => (shop.id === shopId ? { ...shop, info } : shop)),
+              },
+            },
+          };
+        }),
+
+      buyGood: ({ key, shopId, goodName, price }) => {
+        const st = get();
+        const market = st.markets[key];
+        const shop = market?.shops.find((s) => s.id === shopId);
+        const good = shop?.goods?.find((g) => g.name === goodName);
+        if (!market || !shop || !good || good.stock <= 0) return false;
+        if (st.spiritStones.low < price) return false;
+
+        const taken = Math.max(0, Math.trunc(price));
+        const patchShop = (s: typeof shop) =>
+          s.id === shopId && s.goods
+            ? { ...s, goods: s.goods.map((g) => (g.name === goodName ? { ...g, stock: g.stock - 1 } : g)) }
+            : s;
+
+        // 行囊里已有同名同类的东西就摞上去，免得买几回就多出几行
+        const type = itemTypeFor(shop.kind);
+        const stacked = st.inventory.find((i) => i.name === good.name && i.type === type);
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - taken },
+          inventory: stacked
+            ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + 1 } : i))
+            : [
+                ...st.inventory,
+                {
+                  id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+                  name: good.name,
+                  type,
+                  // 品阶看底价定，讲价讲下来的便宜不该把东西的品阶也压下去
+                  grade: gradeForPrice(good.base),
+                  count: 1,
+                  icon: good.name.charAt(0),
+                  desc: good.desc || goodDesc(good.name) || `在「${shop.name}」买的。`,
+                  // 收来的旧物：留着这一笔，往后有了鉴宝的门道再细看
+                  ...(good.mystery ? { mystery: true } : {}),
+                },
+              ],
+          markets: { ...st.markets, [key]: { ...market, shops: market.shops.map(patchShop) } },
+          log: [`你在「${shop.name}」花了 ${taken} 下品灵石，买下${good.name}。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      sellItem: ({ itemId, totalPrice, count }) => {
+        const st = get();
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!item) return false;
+
+        const take = Math.max(1, Math.min(Math.trunc(count) || 1, item.count));
+        const gain = Math.max(1, Math.round(Math.max(0, totalPrice)));
+        const rest = item.count - take;
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low + gain },
+          inventory:
+            rest > 0
+              ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: rest } : i))
+              : st.inventory.filter((i) => i.id !== itemId),
+          log: [`你卖掉「${item.name}」${take} 件，得 ${gain} 下品灵石。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      setManorBackground: (key, background) =>
+        set((st) => {
+          const manor = st.manors[key];
+          if (!manor) return st;
+          return { manors: { ...st.manors, [key]: { ...manor, background } } };
+        }),
+
+      admitManor: (key) =>
+        set((st) => {
+          const manor = st.manors[key];
+          if (!manor || manor.admitted) return st;
+          return {
+            manors: { ...st.manors, [key]: { ...manor, admitted: true } },
+            log: [`你得了「${manor.surname}府」允准，往后可以进门拜会。`, ...st.log].slice(0, 30),
+          };
+        }),
+
+      advanceTime: (hours = 1) => {
+        set((st) => {
+          const currentTime = shiftGameTime(st.currentTime, hours);
+          // 按时辰算的增益，走到点上就自行消了
+          const buffs = pruneBuffs(st.player.buffs, currentTime);
+          // 又处了一日，随身的灵兽跟你更近一层；只按日算，不按时辰算
+          const turnedDay = gameDateKey(st.currentTime) !== gameDateKey(currentTime);
+          const beast = st.beast && turnedDay ? raiseBond(st.beast, 1) : st.beast;
+          if (buffs === st.player.buffs && beast === st.beast) return { currentTime };
+          return { currentTime, player: { ...st.player, buffs }, beast };
+        });
+        // 日子往前走了，误期的机缘该罚的罚，过了期的当票该作废，雇来的镖师也该告辞了
+        get().expireQuests();
+        get().expirePawns();
+        get().expireEscorts();
+        // 名下房产的完好度也随日子往下掉
+        get().settleEstates();
+        // 坊市里的铺面按月结一次账
+        get().settlePlayerShops();
+        // 名下城村按月来贡
+        get().settleOccupations();
+        // 灵田按季度结一次收获
+        get().settleManorFields();
+        get().expirePacts();
+        // 人还在山门里，今日开讲的时辰若已过，缺勤的账顺手算一算
+        get().settleLecture();
+        // 日子翻过一篇，宗门各处建筑的产出与维护也该入账
+        get().settleFacilities();
+        // 别家山门的账也照日往前推，各有各的进项
+        get().settleSectSites();
+        // 走过这一段路，兴许路上生变；掷中的便开一扇关不上的窗
+        void import("@/store/useAIStore")
+          .then(({ useAIStore }) => useAIStore.getState().maybeTriggerRandomEvent(hours))
+          .catch(() => {});
+        // 舆图上兴许又生出一处奇遇，落在眼前这一带
+        void import("@/store/useAIStore")
+          .then(({ useAIStore }) => useAIStore.getState().maybeSpawnAdventure(hours))
+          .catch(() => {});
+        // 重伤不愈：气血不满两成，每过一个时辰再掉一点；油尽灯枯、寿元耗尽都是终局
+        get().tickMortality(Math.max(0, Math.trunc(hours)));
+      },
+
+      payStones: (amount) => {
+        const st = get();
+        const cost = Math.max(0, Math.trunc(amount));
+        if (st.spiritStones.low < cost) return false;
+        set({ spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost } });
+        return true;
+      },
+
+      busk: (skillName) => {
+        const st = get();
+        const skill = findSkill(st.skills, skillName);
+        const level = skill?.level ?? 0;
+        let penalty = 0;
+        let reward = 0;
+        let folk = 0;
+        let passed = 0;
+        const rounds: BuskResult["rounds"] = [];
+
+        // 连考五回：摊子越往后越难招呼，失手一次，往后的场子便难做几分
+        for (let i = 1; i <= 5; i++) {
+          const dc = 10 + i;
+          const roll = 1 + Math.floor(Math.random() * 20);
+          const total = roll + level - penalty;
+          const success = total >= dc;
+          const base = 6 + i * 2;
+          const gain = success ? Math.max(1, base - penalty) : 0;
+          if (success) {
+            reward += gain;
+            passed += 1;
+          } else {
+            penalty += 3;
+            folk -= 2;
+          }
+          rounds.push({ index: i, dc, roll, level, total, success, reward: gain, penalty });
+        }
+
+        set((s) => ({
+          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) + reward },
+          reputation: shiftReputation(s.reputation, "folk", folk),
+          log: [
+            `你在街头卖艺（${skill?.name ?? skillName}），过 ${passed}/5 关，得 ${reward} 下品灵石。`,
+            ...s.log,
+          ].slice(0, 30),
+        }));
+
+        return { skill: skill?.name ?? skillName, rounds, passed, reward, folkDelta: folk, penalty };
       },
 
       getSnapshot: () => {
@@ -1102,10 +4773,35 @@ EFFECT: [效果描述]`,
             techniques: st.techniques,
             inventory: st.inventory,
             spiritStones: st.spiritStones,
+            reputation: st.reputation,
+            beast: st.beast,
             sect: st.sect,
             relations: st.relations,
+            villages: st.villages,
+            estates: st.estates,
+            manorPlots: st.manorPlots,
+            playerShops: st.playerShops,
+            sectRelations: st.sectRelations,
+            occupations: st.occupations,
             log: st.log,
+            currentPlaceId: st.currentPlaceId,
+            currentSectId: st.currentSectId,
+            currentAdventureId: st.currentAdventureId,
+            currentLocation: st.currentLocation,
+            pillCache: st.pillCache,
             currentTime: st.currentTime,
+            news: st.news,
+            districtNames: st.districtNames,
+            priceAdjusts: st.priceAdjusts,
+            rumors: st.rumors,
+            skills: st.skills,
+            checks: st.checks,
+            quests: st.quests,
+            waseShows: st.waseShows,
+            pawns: st.pawns,
+            workshops: st.workshops,
+            pacts: st.pacts,
+            adventures: st.adventures,
           }));
         } catch (e) {
           console.warn("[getSnapshot] Failed to snapshot:", e);
@@ -1114,10 +4810,29 @@ EFFECT: [效果描述]`,
             techniques: st.techniques,
             inventory: st.inventory,
             spiritStones: st.spiritStones,
+            reputation: st.reputation,
+            beast: st.beast,
             sect: st.sect,
             relations: st.relations,
             log: st.log,
+            currentPlaceId: st.currentPlaceId,
+            currentSectId: st.currentSectId,
+            currentAdventureId: st.currentAdventureId,
+            currentLocation: st.currentLocation,
+            pillCache: st.pillCache,
             currentTime: st.currentTime,
+            news: st.news,
+            districtNames: st.districtNames,
+            priceAdjusts: st.priceAdjusts,
+            rumors: st.rumors,
+            skills: st.skills,
+            checks: st.checks,
+            quests: st.quests,
+            waseShows: st.waseShows,
+            pawns: st.pawns,
+            workshops: st.workshops,
+            pacts: st.pacts,
+            adventures: st.adventures,
           };
         }
       },
@@ -1136,30 +4851,47 @@ EFFECT: [效果描述]`,
           techniques: Array.isArray(snap.techniques) ? clone(snap.techniques) : [],
           inventory: Array.isArray(snap.inventory) ? clone(snap.inventory) : [],
           spiritStones: clone(snap.spiritStones),
+          reputation: normalizeReputation(snap.reputation),
+          beast: normalizeBeast(snap.beast),
+          ending: null,
           talismanRecipes: [],
           alchemyRecipes: [],
           sect: clone(snap.sect),
           relations: Array.isArray(snap.relations) ? clone(snap.relations) : [],
-          currentPanel: "profile",
+          currentPanel: null,
           craftingTab: "talisman",
-          currentLocation: "home",
+          currentPlaceId: getMarker(snap.currentPlaceId ?? "") ? (snap.currentPlaceId as string) : getDefaultPlaceId(),
+          currentSectId: typeof snap.currentSectId === "string" ? snap.currentSectId : undefined,
+          currentAdventureId: typeof snap.currentAdventureId === "string" ? snap.currentAdventureId : undefined,
+          mapSceneId: WORLD_SCENE_ID,
+          currentLocation: resolveLocation(snap.currentLocation) ?? "home",
           log: Array.isArray(snap.log) ? clone(snap.log) : [],
           pillCache: clone(snap.pillCache || {}),
-          news: { items: [], lastUpdate: "" },
-          currentTime: snap.currentTime && typeof snap.currentTime === "object"
-            ? {
-              year: typeof snap.currentTime.year === "number" ? snap.currentTime.year : 1,
-              month: typeof snap.currentTime.month === "number" ? snap.currentTime.month : 1,
-              day: typeof snap.currentTime.day === "number" ? snap.currentTime.day : 1,
-              hour: typeof snap.currentTime.hour === "number" ? snap.currentTime.hour : 0,
-            }
-            : { year: 1, month: 1, day: 1, hour: 0 },
+          news: snap.news ? clone(snap.news) : { items: [], lastUpdate: "" },
+          villages: snap.villages ? clone(snap.villages) : {},
+          estates: Array.isArray(snap.estates) ? clone(snap.estates) : [],
+          manorPlots: Array.isArray(snap.manorPlots) ? clone(snap.manorPlots) : [],
+          playerShops: Array.isArray(snap.playerShops) ? clone(snap.playerShops) : [],
+          sectRelations: Array.isArray(snap.sectRelations) ? clone(snap.sectRelations) : [],
+          occupations: Array.isArray(snap.occupations) ? clone(snap.occupations) : [],
+          currentTime: normalizeGameTime(snap.currentTime, OPENING_GAME_TIME),
+          districtNames: snap.districtNames ? clone(snap.districtNames) : {},
+          priceAdjusts: Array.isArray(snap.priceAdjusts) ? clone(snap.priceAdjusts) : [],
+          rumors: Array.isArray(snap.rumors) ? clone(snap.rumors) : [],
+          skills: Array.isArray(snap.skills) ? clone(snap.skills) : [],
+          checks: Array.isArray(snap.checks) ? clone(snap.checks) : [],
+          quests: Array.isArray(snap.quests) ? clone(snap.quests) : [],
+          waseShows: snap.waseShows ? clone(snap.waseShows) : { day: 0, count: 0 },
+          pawns: Array.isArray(snap.pawns) ? clone(snap.pawns) : [],
+          workshops: snap.workshops ? clone(snap.workshops) : {},
+          pacts: Array.isArray(snap.pacts) ? clone(snap.pacts) : [],
+          adventures: Array.isArray(snap.adventures) ? clone(snap.adventures) : get().adventures,
         });
       },
     }),
     {
       name: "xiuxian-save",
-      version: 13,
+      version: 31,
       migrate: (state: any, version: number) => {
         if (version < 2) {
           if (state.techniques && Array.isArray(state.techniques)) {
@@ -1298,28 +5030,8 @@ EFFECT: [效果描述]`,
         }
 
         if (version < 7) {
-          const defaultElements: Record<string, Record<string, number>> = {
-            "百年灵芝": { 木: 80, 土: 20 },
-            "寒潭水精": { 水: 90, 冰: 40 },
-            "朱砂": { 火: 60, 土: 30 },
-            "黄表符纸": { 木: 70, 火: 20 },
-            "千年雪莲": { 冰: 85, 水: 50, 木: 20 },
-            "妖兽内丹": { 火: 50, 雷: 30 },
-            "聚气丹": { 水: 40, 木: 30 },
-            "筑基丹": { 火: 40, 土: 30, 金: 20 },
-            "回春丹": { 木: 50, 水: 30 },
-            "雷火符": { 雷: 60, 火: 40 },
-            "冰封符": { 冰: 70, 水: 30 },
-            "寒潭玄铁剑": { 金: 80, 水: 30 },
-            "云水佩": { 水: 60, 木: 20 },
-          };
           if (state.inventory && Array.isArray(state.inventory)) {
-            state.inventory = state.inventory.map((item: any) => {
-              if (!item.elements && defaultElements[item.name]) {
-                return { ...item, elements: defaultElements[item.name] };
-              }
-              return item;
-            });
+            state.inventory = state.inventory.map((item: any) => normalizeItemElements(item));
           }
           if (!state.pillCache) {
             state.pillCache = {};
@@ -1498,20 +5210,187 @@ EFFECT: [效果描述]`,
           }
         }
         if (version < 12) {
-          if (!state.currentTime || typeof state.currentTime !== "object") {
-            state.currentTime = { year: 1, month: 1, day: 1, hour: 0 };
-          } else {
-            if (typeof state.currentTime.year !== "number") state.currentTime.year = 1;
-            if (typeof state.currentTime.month !== "number") state.currentTime.month = 1;
-            if (typeof state.currentTime.day !== "number") state.currentTime.day = 1;
-            if (typeof state.currentTime.hour !== "number") state.currentTime.hour = 0;
-          }
+          state.currentTime = normalizeGameTime(state.currentTime, OPENING_GAME_TIME);
         }
         if (version < 13) {
           if (state.sect && typeof state.sect === "object") {
             if (typeof state.sect.appearance !== "string") state.sect.appearance = "";
             if (typeof state.sect.reputationDesc !== "string") state.sect.reputationDesc = "";
             if (typeof state.sect.surroundings !== "string") state.sect.surroundings = "";
+          }
+        }
+        if (version < 14) {
+          // 早期 dataOps 把 basePracticeSpeed 按 1~3 的比例写入，使修炼增益被压到千分之一；这里统一到 100 基准
+          if (Array.isArray(state.techniques)) {
+            state.techniques = state.techniques.map((t: any) => {
+              if (!t || typeof t !== "object") return t;
+              const speed = Number(t.basePracticeSpeed);
+              if (!Number.isFinite(speed) || speed <= 0) return { ...t, basePracticeSpeed: 100 };
+              if (speed < 10) return { ...t, basePracticeSpeed: Math.round(speed * 100) };
+              return t;
+            });
+          }
+          // 补齐材料与丹药的 elements，让炼丹炉的元素与火候判定重新可用
+          if (Array.isArray(state.inventory)) {
+            state.inventory = state.inventory.map((item: any) => normalizeItemElements(item));
+          }
+        }
+        if (version < 15) {
+          // 旧存档没有地点概念，统一落在默认城池，避免光标无处安放
+          if (!getMarker(state.currentPlaceId)) state.currentPlaceId = getDefaultPlaceId();
+          state.mapSceneId = WORLD_SCENE_ID;
+        }
+        if (version < 16) {
+          // 纪年改为修真历：开局是 514 年，旧存档的年份从 1 起算，整体平移保留已流逝的岁月
+          state.currentTime = normalizeGameTime(state.currentTime, OPENING_GAME_TIME);
+          state.currentTime.year += ERA_YEAR_OFFSET;
+        }
+        if (version < 17) {
+          // 开局时辰由子时改为卯时。只动还停在开局那一刻的存档，已经走过的日子不碰
+          const t = normalizeGameTime(state.currentTime, OPENING_GAME_TIME);
+          const atOpening = t.year === OPENING_GAME_TIME.year
+            && t.month === OPENING_GAME_TIME.month
+            && t.day === OPENING_GAME_TIME.day
+            && t.hour === 0;
+          if (atOpening) state.currentTime = { ...t, hour: OPENING_GAME_TIME.hour };
+        }
+        if (version < 18) {
+          // 城市改用编号后，旧存档里存的是拼音 slug，按编号表平移过来，保住所在地
+          if (!getMarker(state.currentPlaceId)) {
+            const migrated = LEGACY_PLACE_IDS[state.currentPlaceId];
+            if (migrated) state.currentPlaceId = migrated;
+          }
+        }
+        if (version < 19) {
+          // 街区名字是叙事后来才写得上的，旧存档没有这一项
+          if (!state.districtNames || typeof state.districtNames !== "object") {
+            state.districtNames = {};
+          }
+        }
+        if (version < 20) {
+          // 大户人家是后来才做的一层，旧存档里没有宅子，头一回推门时再掷
+          if (!state.manors || typeof state.manors !== "object") {
+            state.manors = {};
+          }
+        }
+        if (version < 21) {
+          // 坊市铺面同样是后加的，旧存档里没有，头一回进坊市时再开市
+          if (!state.markets || typeof state.markets !== "object") {
+            state.markets = {};
+          }
+        }
+        if (version < 22) {
+          // 货物的时效价格修正是随杂货铺一起加的，旧存档里没有这一项
+          if (!Array.isArray(state.priceAdjusts)) {
+            state.priceAdjusts = [];
+          }
+        }
+        if (version < 23) {
+          // 流言是随打尖一起加的，旧存档里没有这一项
+          if (!Array.isArray(state.rumors)) {
+            state.rumors = [];
+          }
+        }
+        if (version < 24) {
+          // 市井本事与判定是后加的，旧存档里没有这两项
+          if (!Array.isArray(state.skills)) {
+            state.skills = [];
+          }
+          if (!Array.isArray(state.checks)) {
+            state.checks = [];
+          }
+        }
+        if (version < 25) {
+          // 机缘是随任务系统一起加的，旧存档里没有这一项
+          if (!Array.isArray(state.quests)) {
+            state.quests = [];
+          }
+        }
+        if (version < 26) {
+          // 状态一律改按时辰算：旧档里按回合计的，折成还能顶几个时辰
+          if (state.player && Array.isArray(state.player.buffs)) {
+            const now = normalizeGameTime(state.currentTime, OPENING_GAME_TIME);
+            state.player.buffs = state.player.buffs.map((b: any) => {
+              if (!b || b.durationType !== "round") return b;
+              const hours = Math.max(1, Math.trunc(Number(b.duration) || 1));
+              return { ...b, durationType: "until", duration: undefined, until: shiftGameTime(now, hours) };
+            });
+          }
+        }
+        if (version < 27) {
+          // 瓦舍听戏与当铺押物都是后加的，旧存档里没有这两项
+          if (!state.waseShows || typeof state.waseShows !== "object") {
+            state.waseShows = { day: 0, count: 0 };
+          }
+          if (!Array.isArray(state.pawns)) {
+            state.pawns = [];
+          }
+        }
+        if (version < 28) {
+          // 日序改用开局那天作第一日：旧档里记的是真实历法上的绝对日，一并折过来
+          const shiftDay = (value: unknown): number | undefined => {
+            if (!Number.isFinite(Number(value))) return undefined;
+            return Math.max(OPENING_DAY_SERIAL, Math.trunc(Number(value)) - LEGACY_DAY_OFFSET);
+          };
+          const shiftDayFields = (obj: any, fields: string[]) => {
+            if (!obj || typeof obj !== "object") return;
+            for (const field of fields) {
+              if (obj[field] === undefined) continue;
+              const next = shiftDay(obj[field]);
+              if (next === undefined) delete obj[field];
+              else obj[field] = next;
+            }
+          };
+
+          if (Array.isArray(state.rumors)) state.rumors.forEach((r: any) => shiftDayFields(r, ["day"]));
+          if (Array.isArray(state.checks)) state.checks.forEach((c: any) => shiftDayFields(c, ["day"]));
+          if (Array.isArray(state.quests)) {
+            state.quests.forEach((q: any) => shiftDayFields(q, ["day", "dueDay", "settledDay"]));
+          }
+          if (Array.isArray(state.pacts)) {
+            state.pacts.forEach((p: any) => shiftDayFields(p, ["madeDay", "dueDay", "settledDay"]));
+          }
+          if (Array.isArray(state.pawns)) state.pawns.forEach((p: any) => shiftDayFields(p, ["day", "dueDay"]));
+          if (Array.isArray(state.priceAdjusts)) {
+            state.priceAdjusts.forEach((a: any) => shiftDayFields(a, ["untilDay"]));
+          }
+          if (Array.isArray(state.relations)) {
+            state.relations.forEach((r: any) => shiftDayFields(r, ["fixedUntilDay", "hireUntilDay"]));
+          }
+          shiftDayFields(state.waseShows, ["day"]);
+
+          if (state.markets && typeof state.markets === "object") {
+            for (const market of Object.values(state.markets) as any[]) {
+              if (!market || typeof market !== "object") continue;
+              shiftDayFields(market, ["day"]);
+              // 酒肆并入客栈：旧档里的酒肆一并改作客栈，座头等进门时再补
+              if (Array.isArray(market.shops)) {
+                market.shops = market.shops.map((s: any) =>
+                  s && s.kind === "酒肆" ? { ...s, kind: "客栈" } : s,
+                );
+              }
+            }
+          }
+
+          // 随身灵兽是后加的，旧档里空着
+          if (state.beast === undefined) state.beast = null;
+        }
+        if (version < 29) {
+          // 地图上的宗门是后加的：旧档里没有这一项，先留空，进主界面时现掷一遍
+          if (!Array.isArray(state.sectSites)) {
+            state.sectSites = [];
+          }
+        }
+        if (version < 30) {
+          // 宗门之间的交情是后加的：旧档里一张白纸
+          if (!Array.isArray(state.sectRelations)) {
+            state.sectRelations = [];
+          }
+        }
+        if (version < 31) {
+          // 城村的归属是后加的：旧档里一处未占
+          if (!Array.isArray(state.occupations)) {
+            state.occupations = [];
           }
         }
         return state;
@@ -1521,11 +5400,37 @@ EFFECT: [效果描述]`,
         techniques: s.techniques,
         inventory: s.inventory,
         spiritStones: s.spiritStones,
+        reputation: s.reputation,
+        beast: s.beast,
         sect: s.sect,
         relations: s.relations,
         log: s.log,
+        currentPlaceId: s.currentPlaceId,
+        currentSectId: s.currentSectId,
+        currentAdventureId: s.currentAdventureId,
+        currentLocation: s.currentLocation,
         pillCache: s.pillCache,
         currentTime: s.currentTime,
+        news: s.news,
+        districtNames: s.districtNames,
+        manors: s.manors,
+        markets: s.markets,
+        priceAdjusts: s.priceAdjusts,
+        rumors: s.rumors,
+        skills: s.skills,
+        checks: s.checks,
+        quests: s.quests,
+        waseShows: s.waseShows,
+        pawns: s.pawns,
+        workshops: s.workshops,
+        villages: s.villages,
+        estates: s.estates,
+        manorPlots: s.manorPlots,
+        pacts: s.pacts,
+        sectSites: s.sectSites,
+        sectRelations: s.sectRelations,
+        occupations: s.occupations,
+        adventures: s.adventures,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return state;

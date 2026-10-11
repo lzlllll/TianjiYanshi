@@ -1,0 +1,285 @@
+/* 线装古籍 UI 系统 - 主样式文件 */
+
+/* 导入子系统 */
+@import './textures.css';
+@import './ornaments.css';
+@import './animations.css';
+
+/* ===== 全局变量定义 ===== */
+:root {
+  /* 宣纸色系 */
+  --paper-fresh: #FEFBF2;
+  --paper-aged: #F8F3E8;
+  --paper-old: #F0E5D1;
+  --paper-dark: #E8DCC0;
+  --paper-spine: #2C2416;
+  
+  /* 墨色系 */
+  --ink-lightest: #8B7355;
+  --ink-light: #6B5644;
+  --ink-medium: #4A3C28;
+  --ink-dark: #2A1F12;
+  --ink-darkest: #1A1410;
+  
+  /* 朱砂色系 */
+  --cinnabar-light: #D94F3D;
+  --cinnabar: #C1432E;
+  --cinnabar-dark: #A8261F;
+  --cinnabar-darker: #8F1810;
+  
+  /* 金色系 */
+  --gold-light: #FFE4A0;
+  --gold: #D4AF37;
+  --gold-dark: #B8941F;
+  
+  /* 字体家族 */
+  --font-kai: "KaiTi", "STKaiti", serif;
+  --font-song: "Noto Serif SC", "STSong", serif;
+  --font-brush: "Ma Shan Zheng", "KaiTi", serif;
+  
+  /* 间距系统 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+  
+  /* 圆角系统 */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  
+  /* 阴影系统 */
+  --shadow-book-lift: 0 2px 8px rgba(42, 31, 18, 0.08), 0 4px 16px rgba(42, 31, 18, 0.06);
+  --shadow-book-float: 0 4px 16px rgba(42, 31, 18, 0.12), 0 8px 32px rgba(42, 31, 18, 0.08);
+  --shadow-seal-press: inset 0 2px 4px rgba(168, 38, 31, 0.6), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-seal-lift: 0 2px 6px rgba(193, 67, 46, 0.4), 0 4px 12px rgba(193, 67, 46, 0.2);
+  --shadow-ink-soft: 0 1px 3px rgba(42, 31, 18, 0.12), 0 1px 2px rgba(42, 31, 18, 0.06);
+  --shadow-spine-depth: inset -2px 0 8px rgba(26, 20, 16, 0.4), inset -4px 0 12px rgba(26, 20, 16, 0.2);
+  
+  /* 过渡时长 */
+  --duration-fast: 0.2s;
+  --duration-base: 0.3s;
+  --duration-slow: 0.5s;
+  --duration-slower: 0.8s;
+  
+  /* 缓动函数 */
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-book: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  --ease-ink: ease-out;
+}
+
+/* ===== 基础重置 ===== */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--paper-aged);
+  color: var(--ink-medium);
+  font-family: var(--font-song);
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== 排版系统 ===== */
+.text-title {
+  font-family: var(--font-kai);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--ink-dark);
+  letter-spacing: 0.15em;
+  line-height: 1.6;
+}
+
+.text-heading {
+  font-family: var(--font-kai);
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--ink-dark);
+  letter-spacing: 0.1em;
+  line-height: 1.7;
+}
+
+.text-body {
+  font-family: var(--font-song);
+  font-size: 1rem;
+  color: var(--ink-medium);
+  letter-spacing: 0.05em;
+  line-height: 1.8;
+}
+
+.text-caption {
+  font-family: var(--font-song);
+  font-size: 0.875rem;
+  color: var(--ink-light);
+  letter-spacing: 0.03em;
+  line-height: 1.6;
+}
+
+.text-label {
+  font-family: var(--font-kai);
+  font-size: 0.95rem;
+  color: var(--ink-light);
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+}
+
+/* 竖排文字 */
+.text-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+/* ===== 卡片组件 ===== */
+.book-card {
+  position: relative;
+  background: var(--paper-fresh);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  box-shadow: var(--shadow-book-lift);
+  transition: all var(--duration-base) var(--ease-smooth);
+}
+
+.book-card:hover {
+  box-shadow: var(--shadow-book-float);
+  transform: translateY(-2px);
+}
+
+.book-card-bordered {
+  border: 1px solid var(--ink-lightest);
+  border-opacity: 0.2;
+}
+
+/* ===== 输入框组件 ===== */
+.book-input {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--ink-lightest);
+  color: var(--ink-dark);
+  font-family: var(--font-kai);
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  transition: all var(--duration-base) var(--ease-ink);
+  outline: none;
+}
+
+.book-input::placeholder {
+  color: var(--ink-lightest);
+  opacity: 0.6;
+}
+
+.book-input:focus {
+  border-bottom-color: var(--ink-medium);
+  border-bottom-width: 2px;
+  background: linear-gradient(
+    to top,
+    rgba(74, 60, 40, 0.03) 0%,
+    transparent 100%
+  );
+}
+
+/* ===== 分隔线 ===== */
+.book-divider {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-lightest) 50%,
+    transparent 100%
+  );
+  opacity: 0.3;
+  margin: var(--spacing-lg) 0;
+}
+
+.book-divider-vertical {
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--ink-lightest) 50%,
+    transparent 100%
+  );
+  opacity: 0.3;
+  margin: 0 var(--spacing-md);
+}
+
+/* ===== 徽章标签 ===== */
+.book-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--paper-old);
+  border: 1px solid var(--ink-lightest);
+  border-radius: 2px;
+  color: var(--ink-dark);
+  font-family: var(--font-kai);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+}
+
+.book-badge-cinnabar {
+  background: var(--cinnabar);
+  border-color: var(--cinnabar-dark);
+  color: var(--paper-fresh);
+}
+
+.book-badge-gold {
+  background: var(--gold);
+  border-color: var(--gold-dark);
+  color: var(--ink-darkest);
+}
+
+/* ===== 遮罩层 ===== */
+.book-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26, 20, 16, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+}
+
+/* ===== 滚动条样式 ===== */
+.book-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.book-scrollbar::-webkit-scrollbar-track {
+  background: var(--paper-old);
+  border-radius: var(--radius-sm);
+}
+
+.book-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--ink-lightest);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--paper-old);
+}
+
+.book-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-light);
+}
+
+/* ===== 工具类 ===== */
+.shadow-lift { box-shadow: var(--shadow-book-lift); }
+.shadow-float { box-shadow: var(--shadow-book-float); }
+.shadow-seal { box-shadow: var(--shadow-seal-lift); }
+.shadow-ink { box-shadow: var(--shadow-ink-soft); }
+
+.bg-paper { background: var(--paper-fresh); }
+.bg-paper-aged { background: var(--paper-aged); }
+.bg-paper-old { background: var(--paper-old); }
+
+.text-ink { color: var(--ink-medium); }
+.text-ink-light { color: var(--ink-light); }
+.text-ink-dark { color: var(--ink-dark); }
+.text-cinnabar { color: var(--cinnabar); }
+.text-gold { color: var(--gold); }
+
+.border-ink { border-color: var(--ink-lightest); }
+.border-cinnabar { border-color: var(--cinnabar); }
+.border-gold { border-color: var(--gold); }

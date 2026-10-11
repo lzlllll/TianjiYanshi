@@ -1,8 +1,19 @@
 import type { AISettings } from "@/data/types";
+import { recordTokenUsage } from "@/store/useTokenStore";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+/** 取请求里最后一段用户话的开头，作为这一笔 token 账的用途备注 */
+function noteFromMessages(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") {
+      return messages[i].content.replace(/\s+/g, " ").trim().slice(0, 24);
+    }
+  }
+  return "";
 }
 
 const MAX_REQUEST_BODY_SIZE = 15 * 1024 * 1024;
@@ -14,16 +25,25 @@ const PROXY_MAP: Record<string, string> = {
   "https://dashscope.aliyuncs.com/compatible-mode/v1": "/api/qwen",
 };
 
-function isDevMode(): boolean {
-  return import.meta.env.DEV;
+/** 开发模式或本地服务版本下，通过本地代理转发请求 */
+const USE_LOCAL_PROXY = import.meta.env.DEV || import.meta.env.VITE_LOCAL_PROXY === "1";
+
+/**
+ * 本地服务版本下请求会发往同源的本地代理。
+ * 一旦本地服务窗口被关闭，浏览器只会抛出 ERR_CONNECTION_REFUSED，
+ * 这里补一句用户能直接照做的说明，而不是让人误以为是网络或 Base URL 的问题。
+ */
+function localProxyHint(endpoint: string): string {
+  if (!endpoint.startsWith("/api/")) return "";
+  return `本地服务未响应：请求发往本地代理 ${endpoint}。\n本地服务窗口可能已被关闭。请重新双击「启动游戏.bat」，保持弹出的命令行窗口开启，然后刷新页面继续。\n\n`;
 }
 
 function buildEndpoint(baseUrl: string): string {
   let url = baseUrl.trim().replace(/\/+$/, "");
 
-  if (isDevMode() && PROXY_MAP[url]) {
+  if (USE_LOCAL_PROXY && PROXY_MAP[url]) {
     url = PROXY_MAP[url];
-    console.debug(`[aiClient] Development mode detected, using proxy: ${url}`);
+    console.debug(`[aiClient] 使用本地接口代理: ${url}`);
   }
 
   if (!/\/chat\/completions$/.test(url)) {
@@ -50,6 +70,25 @@ function checkRequestSize(bodySize: number): void {
   }
 }
 
+/**
+ * 记一笔这次输出的收尾情况。
+ * 正常收尾是 stop，不必多言；若是 length，说明撞上了输出长度上限、内容被截断，
+ * 回来的 JSON 多半是半截的，这类事必须显眼地记下来，免得只看到后面「解析失败」而不知所由。
+ */
+function noteFinish(model: string, data: any, content: string): void {
+  const finish = data?.choices?.[0]?.finish_reason;
+  const completion = data?.usage?.completion_tokens;
+  if (finish === "length") {
+    console.warn(
+      `[aiClient] 输出被截断：model=${model} finish_reason=length completion_tokens=${completion ?? "?"} 正文字数=${content.length}。多半撞上了 max_tokens 上限，回来的 JSON 可能不完整。`,
+    );
+  } else {
+    console.debug(
+      `[aiClient] finish_reason=${finish ?? "?"} completion_tokens=${completion ?? "?"} 正文字数=${content.length}`,
+    );
+  }
+}
+
 /** 调用 OpenAI 兼容的 chat/completions 接口，返回助手消息文本 */
 export async function chatComplete(
   settings: AISettings,
@@ -73,7 +112,7 @@ export async function chatComplete(
       messages,
       temperature: settings.temperature,
       stream: false,
-      max_tokens: 8192,
+      max_tokens: 16384,
     };
     const bodyStr = JSON.stringify(requestBody);
     const bodySize = new Blob([bodyStr]).size;
@@ -125,6 +164,8 @@ export async function chatComplete(
     if (!content) {
       throw new Error("接口返回空内容，请检查模型名称与配额。");
     }
+    noteFinish(requestBody.model, data, content);
+    recordTokenUsage(requestBody.model, data?.usage, noteFromMessages(messages));
     if (content.length > 100000) {
       console.warn(`[aiClient] Response too large (${content.length} chars), truncating`);
       return content.slice(0, 100000);
@@ -147,6 +188,7 @@ export async function chatComplete(
       console.error("[aiClient] 4. Firewall/proxy blocking the connection");
       console.error("[aiClient] === 诊断结束 ===");
       throw new Error(
+        localProxyHint(endpoint) +
         `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. CORS 跨域限制（浏览器安全策略阻止直接调用）\n2. 网络超时（请求体过大或网络不稳定）\n3. DNS 解析失败\n4. 防火墙/代理拦截\n\n解决方案：\n- 开发环境：运行 npm run dev 使用 Vite 代理\n- 生产环境：配置支持 CORS 的反向代理\n- 更换为支持浏览器直连的 API 服务商`,
       );
     }
@@ -166,7 +208,17 @@ export async function chatWithModel(
   settings: AISettings,
   model: string,
   messages: ChatMessage[],
-  opts: { timeoutMs?: number; signal?: AbortSignal; retries?: number } = {},
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    retries?: number;
+    jsonMode?: boolean;
+    /**
+     * 单独指定温度。建档、结算这类要求输出合法 JSON 的活儿该压低些，
+     * 不必跟着设置里那个随叙事起伏的温度走。
+     */
+    temperature?: number;
+  } = {},
 ): Promise<string> {
   if (!settings.apiKey) {
     throw new Error("尚未配置 API Key，请先在设置中填写。");
@@ -183,13 +235,17 @@ export async function chatWithModel(
     }
 
     try {
-      const requestBody = {
+      const requestBody: Record<string, unknown> = {
         model,
         messages,
-        temperature: settings.temperature,
+        temperature: opts.temperature ?? settings.temperature,
         stream: false,
-        max_tokens: 8192,
+        max_tokens: 16384,
       };
+      // JSON 模式：要求模型只返回合法 JSON 对象
+      if (opts.jsonMode) {
+        requestBody.response_format = { type: "json_object" };
+      }
       const bodyStr = JSON.stringify(requestBody);
       const bodySize = new Blob([bodyStr]).size;
 
@@ -253,6 +309,8 @@ export async function chatWithModel(
       if (!content) {
         throw new Error("接口返回空内容，请检查模型名称与配额。");
       }
+      noteFinish(model, data, content);
+      recordTokenUsage(model, data?.usage, noteFromMessages(messages));
       if (content.length > 100000) {
         console.warn(`[chatWithModel] Response too large (${content.length} chars), truncating`);
         return content.slice(0, 100000);
@@ -279,8 +337,9 @@ export async function chatWithModel(
           continue;
         }
         throw new Error(
-          `网络请求失败（已重试 ${maxRetries} 次）：${e.message}\n\n目标地址：${endpoint}\n模型：${model}\n请求体大小：${(new Blob([JSON.stringify({ model, messages })]).size / 1024).toFixed(2)} KB\n\n可能原因：\n1. CORS 跨域限制（浏览器安全策略阻止直接调用）\n2. 网络超时或不稳定\n3. DNS 解析失败\n4. 防火墙/代理拦截\n\n解决方案：\n- 开发环境：使用 npm run dev 启动（已内置代理，可绕过 CORS）\n- 如果开发环境已运行但仍失败，请检查 API Key 是否正确\n- 尝试更换 Base URL 或模型`,
-        );
+        localProxyHint(endpoint) +
+        `网络请求失败（已重试 ${maxRetries} 次）：${e.message}\n\n目标地址：${endpoint}\n模型：${model}\n请求体大小：${(new Blob([JSON.stringify({ model, messages })]).size / 1024).toFixed(2)} KB\n\n可能原因：\n1. CORS 跨域限制（浏览器安全策略阻止直接调用）\n2. 网络超时或不稳定\n3. DNS 解析失败\n4. 防火墙/代理拦截\n\n解决方案：\n- 开发环境：使用 npm run dev 启动（已内置代理，可绕过 CORS）\n- 如果开发环境已运行但仍失败，请检查 API Key 是否正确\n- 尝试更换 Base URL 或模型`,
+      );
       }
 
       console.error(`[aiClient] Error (attempt ${attempt}):`, e);
@@ -299,13 +358,15 @@ async function parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
-): Promise<void> {
+  onUsage?: (usage: any) => void,
+): Promise<{ finishReason: string | null }> {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let finishReason: string | null = null;
 
   try {
     while (true) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) break;
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -322,14 +383,15 @@ async function parseSSEStream(
         if (!line.startsWith("data:")) continue;
 
         const data = line.slice(5).trim();
-        if (data === "[DONE]") return;
+        if (data === "[DONE]") return { finishReason };
 
         try {
           const json = JSON.parse(data);
-          const delta: string =
-            json?.choices?.[0]?.delta?.content ??
-            json?.choices?.[0]?.text ??
-            "";
+          if (json?.usage && onUsage) onUsage(json.usage);
+          const choice = json?.choices?.[0];
+          // 收尾原因记下来：stop 是正常收尾，length 说明撞上了输出上限、正文被截断
+          if (choice?.finish_reason) finishReason = String(choice.finish_reason);
+          const delta: string = choice?.delta?.content ?? choice?.text ?? "";
           if (delta) onDelta(delta);
         } catch {
           // 单行 JSON 解析失败时跳过，不中断流
@@ -343,6 +405,7 @@ async function parseSSEStream(
       /* noop */
     }
   }
+  return { finishReason };
 }
 
 /** 流式调用 OpenAI 兼容接口，实时回调增量文本，返回完整文本 */
@@ -368,63 +431,101 @@ export async function chatWithModelStream(
   }
 
   let full = "";
+  // 服务商常把输出截在远低于 max_tokens 的地方；撞上 length 就把已写的当作上文，
+  // 另起一段接着写，最多续两段，免得正文断在半截
+  let lastFinish: string | null = null;
+  const MAX_SEGMENTS = 3;
   try {
-    const requestBody = {
-      model,
-      messages,
-      temperature: settings.temperature,
-      stream: true,
-      max_tokens: 8192,
-    };
-    const bodyStr = JSON.stringify(requestBody);
-    const bodySize = new Blob([bodyStr]).size;
+    const convo: ChatMessage[] = [...messages];
+    for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
+      const beforeLen = full.length;
+      const requestBody = {
+        model,
+        messages: convo,
+        temperature: settings.temperature,
+        stream: true,
+        // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
+        stream_options: { include_usage: true },
+        max_tokens: 16384,
+      };
+      const bodyStr = JSON.stringify(requestBody);
+      const bodySize = new Blob([bodyStr]).size;
 
-    logRequestInfo(model, messages, bodySize, endpoint);
-    checkRequestSize(bodySize);
+      logRequestInfo(model, messages, bodySize, endpoint);
+      checkRequestSize(bodySize);
 
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${settings.apiKey}`,
-        Accept: "text/event-stream",
-      },
-      body: bodyStr,
-      signal: controller.signal,
-    });
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${settings.apiKey}`,
+          Accept: "text/event-stream",
+        },
+        body: bodyStr,
+        signal: controller.signal,
+      });
 
-    console.debug(`[aiClient][stream] Response status: ${resp.status}`);
+      console.debug(`[aiClient][stream] Response status: ${resp.status}（第 ${seg + 1} 段）`);
 
-    // 连接已建立，清除超时计时器
-    clearTimeout(timer);
+      // 连接已建立，清除超时计时器
+      clearTimeout(timer);
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
-      const errorDetail = errText.slice(0, 300) || resp.statusText;
-      console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
-      throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        const errorDetail = errText.slice(0, 300) || resp.statusText;
+        console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
+        throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
+      }
+
+      if (!resp.body) {
+        throw new Error("接口未返回流式响应体，可能不支持 stream 模式。");
+      }
+
+      const streamInfo = await parseSSEStream(
+        resp.body.getReader(),
+        (delta) => {
+          full += delta;
+          if (full.length > 200000) {
+            // 防止超长输出撑爆内存
+            controller.abort();
+            return;
+          }
+          opts.onDelta?.(delta, full);
+        },
+        controller.signal,
+        (usage) => recordTokenUsage(model, usage, noteFromMessages(messages)),
+      );
+      lastFinish = streamInfo.finishReason;
+
+      if (streamInfo.finishReason !== "length") break;
+      // 这一段落没有多出任何字，再续也是白续，就此收手
+      if (full.length === beforeLen) break;
+      console.warn(
+        `[aiClient][stream] 输出被截断：finish_reason=length 累计正文字数=${full.length}，model=${model}，正接续写第 ${seg + 2} 段。`,
+      );
+      if (controller.signal.aborted) break;
+      convo.push({ role: "assistant", content: full });
+      convo.push({
+        role: "user",
+        content:
+          "（上一段写到一半撞上了长度上限）请接着上文往下续写，从断处直接接上，不要重复已经写过的内容，也不要另起话头。",
+      });
     }
-
-    if (!resp.body) {
-      throw new Error("接口未返回流式响应体，可能不支持 stream 模式。");
-    }
-
-    await parseSSEStream(
-      resp.body.getReader(),
-      (delta) => {
-        full += delta;
-        if (full.length > 200000) {
-          // 防止超长输出撑爆内存
-          controller.abort();
-          return;
-        }
-        opts.onDelta?.(delta, full);
-      },
-      controller.signal,
-    );
 
     if (!full) {
-      throw new Error("接口返回空内容，请检查模型名称与配额。");
+      // 空正文要分辨是「被中止」还是「模型压根没吐内容」，否则只看到一句空内容不知所由
+      const why = lastFinish
+        ? `finish_reason=${lastFinish}`
+        : controller.signal.aborted
+          ? "请求已被中止，未收到任何内容"
+          : "整段流未收到任何内容片段";
+      console.warn(`[aiClient][stream] 空正文：${why}，model=${model}`);
+      throw new Error(`接口返回空内容（${why}），请检查模型名称与配额。`);
+    }
+    if (lastFinish === "length") {
+      console.warn(
+        `[aiClient][stream] 续写两段后仍被截断：正文字数=${full.length}，model=${model}，正文可能不完整。`,
+      );
     }
     if (full.length > 100000) {
       console.warn(`[aiClient][stream] Response too large (${full.length} chars), truncating`);
@@ -443,6 +544,7 @@ export async function chatWithModelStream(
     if (e instanceof TypeError) {
       console.error("[aiClient][stream] Network error:", e);
       throw new Error(
+        localProxyHint(endpoint) +
         `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. CORS 跨域限制\n2. 网络超时\n3. DNS 解析失败\n4. 防火墙/代理拦截`,
       );
     }

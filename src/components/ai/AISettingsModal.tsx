@@ -54,6 +54,8 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
   const updateSettings = useAIStore((s) => s.updateSettings);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
   const setDeveloperMode = useAIStore((s) => s.setDeveloperMode);
+  const randomEventDisabled = useAIStore((s) => s.randomEventDisabled);
+  const setRandomEventDisabled = useAIStore((s) => s.setRandomEventDisabled);
   const openCrafting = useAIStore((s) => s.openCrafting);
   const startBattle = useAIStore((s) => s.startBattle);
 
@@ -157,13 +159,13 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
       {/* 背景遮罩 */}
       <div
-        className="absolute inset-0 bg-ink-900/80 backdrop-blur-sm animate-inkSpread"
+        className="absolute inset-0 bg-ink-darkest/60 backdrop-blur-sm animate-inkSpread"
         onClick={onClose}
       />
 
@@ -181,7 +183,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
               <h2 className="font-brush text-2xl text-gold-400 tracking-widest text-shadow-ink">
                 通灵设置
               </h2>
-              <p className="font-serif text-[11px] text-paper-400/60 mt-0.5">
+              <p className="font-serif text-xs text-paper-400/60 mt-0.5">
                 配置天机接口，连通两界叙事
               </p>
             </div>
@@ -222,7 +224,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                     >
                       {p.label}
                     </div>
-                    <div className="font-serif text-[9px] text-paper-400/60 mt-0.5 leading-tight">
+                    <div className="font-serif text-xs text-paper-400/60 mt-0.5 leading-tight">
                       {p.note}
                     </div>
                   </button>
@@ -242,7 +244,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
               className="input-ink mt-2"
               spellCheck={false}
             />
-            <p className="font-serif text-[10px] text-paper-400/50 mt-1.5 leading-relaxed">
+            <p className="font-serif text-xs text-paper-400/50 mt-1.5 leading-relaxed">
               OpenAI 兼容接口根路径，将自动追加 <code className="text-gold-400/80">/chat/completions</code>。
               若遇 CORS 错误，请更换为支持浏览器直连的服务商或自建代理。
             </p>
@@ -270,7 +272,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                 {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            <p className="font-serif text-[10px] text-paper-400/50 mt-1.5">
+            <p className="font-serif text-xs text-paper-400/50 mt-1.5">
               密钥仅存储于本机 localStorage，不会上传任何第三方服务器。
             </p>
           </section>
@@ -280,7 +282,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
             <section>
               <SectionLabel>
                 Flash 模型
-                <span className="font-serif text-[10px] text-paper-400/50 ml-2">数据判断 / 压缩</span>
+                <span className="font-serif text-xs text-paper-400/50 ml-2">数据判断 / 压缩</span>
               </SectionLabel>
               <input
                 type="text"
@@ -305,7 +307,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
             <section>
               <SectionLabel>
                 Pro 模型
-                <span className="font-serif text-[10px] text-paper-400/50 ml-2">叙事生成</span>
+                <span className="font-serif text-xs text-paper-400/50 ml-2">叙事生成</span>
               </SectionLabel>
               <input
                 type="text"
@@ -364,7 +366,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
               onChange={(e) => patch({ temperature: parseFloat(e.target.value) })}
               className="fire-slider mt-3 w-full"
             />
-            <div className="flex justify-between mt-1.5 font-serif text-[10px] text-paper-400/50">
+            <div className="flex justify-between mt-1.5 font-serif text-xs text-paper-400/50">
               <span>0 · 严谨</span>
               <span>1 · 平衡</span>
               <span>2 · 奔放</span>
@@ -381,7 +383,7 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
               className="input-ink mt-2 min-h-[100px] resize-y font-serif text-xs leading-relaxed"
               spellCheck={false}
             />
-            <p className="font-serif text-[10px] text-paper-400/50 mt-1.5 leading-relaxed">
+            <p className="font-serif text-xs text-paper-400/50 mt-1.5 leading-relaxed">
               玩家自定义指令将追加到每轮叙事生成的系统提示词末尾，用于微调AI的叙事风格和偏好。留空则不追加。
             </p>
           </section>
@@ -410,9 +412,34 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
             {isDeveloperMode && (
               <div className="mt-3 space-y-2">
                 <div className="bg-cinnabar-500/5 border border-cinnabar-500/20 rounded px-3 py-2">
-                  <p className="font-serif text-[11px] text-cinnabar-300/80">
+                  <p className="font-serif text-xs text-cinnabar-300/80">
                     已启用开发者模式
                   </p>
+                  <div className="mt-2 flex items-center justify-between gap-3 rounded border border-paper-400/20 bg-ink-900/60 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="font-serif text-xs text-paper-200">关闭随机事件</p>
+                      <p className="mt-0.5 font-serif text-[11px] leading-relaxed text-paper-400/60">
+                        拨上之后，时间再往前走也不生路上的变故；退出开发者模式即自动恢复。
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setRandomEventDisabled(!randomEventDisabled)}
+                      className={cn(
+                        "relative h-6 w-12 shrink-0 rounded-full transition-colors",
+                        randomEventDisabled
+                          ? "bg-cinnabar-500/30 border border-cinnabar-400/50"
+                          : "bg-ink-700/50 border border-paper-400/20",
+                      )}
+                      aria-label="关闭随机事件"
+                    >
+                      <div
+                        className={cn(
+                          "absolute top-1 h-4 w-4 rounded-full transition-transform",
+                          randomEventDisabled ? "left-7 bg-cinnabar-400" : "left-1 bg-paper-400/50",
+                        )}
+                      />
+                    </button>
+                  </div>
                   <button
                     onClick={() => {
                       openCrafting();

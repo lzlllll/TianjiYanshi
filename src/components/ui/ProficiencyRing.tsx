@@ -55,7 +55,7 @@ export function ProficiencyRing({
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="font-number text-base text-gold-400">{pct.toFixed(0)}%</span>
-        {label && <span className="text-[9px] text-paper-400/60">{label}</span>}
+        {label && <span className="text-xs text-paper-400/60">{label}</span>}
       </div>
     </div>
   );

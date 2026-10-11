@@ -9,8 +9,13 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-local
 dist-ssr
 *.local
+
+# 本地测试与浏览器缓存产物
+.playtest/
+.ab/
 
 # Editor directories and files
 .vscode/*

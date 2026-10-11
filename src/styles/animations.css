@@ -1,0 +1,268 @@
+/* 古籍交互动画系统 */
+
+/* 翻页动画 - 3D 透视效果 */
+@keyframes pageFlip {
+  0% {
+    transform: perspective(1200px) rotateY(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: perspective(1200px) rotateY(-90deg);
+    opacity: 0.3;
+  }
+  100% {
+    transform: perspective(1200px) rotateY(-180deg);
+    opacity: 1;
+  }
+}
+
+.page-flip-enter {
+  animation: pageFlip 0.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) forwards;
+}
+
+/* 印章盖印动画 */
+@keyframes sealStamp {
+  0% {
+    transform: scale(1.1) translateY(-4px);
+    opacity: 0.8;
+  }
+  60% {
+    transform: scale(0.95);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.seal-stamp-animation {
+  animation: sealStamp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* 墨迹扩散动画 */
+@keyframes inkDiffuse {
+  0% {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.ink-diffuse-enter {
+  animation: inkDiffuse 0.6s ease-out forwards;
+}
+
+/* 侧签滑入动画 */
+@keyframes tabSlide {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.tab-slide-enter {
+  animation: tabSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 悬浮呼吸效果 */
+@keyframes cardBreathing {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(42, 31, 18, 0.08);
+  }
+  50% {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(42, 31, 18, 0.12);
+  }
+}
+
+.card-breathing {
+  animation: cardBreathing 3s ease-in-out infinite;
+}
+
+/* 文字淡入 - 模拟墨迹渗透 */
+@keyframes textFadeIn {
+  0% {
+    opacity: 0;
+    filter: blur(2px);
+    letter-spacing: 0.2em;
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    letter-spacing: 0.05em;
+  }
+}
+
+.text-fade-in {
+  animation: textFadeIn 0.5s ease-out forwards;
+}
+
+/* 卷轴展开动画 */
+@keyframes scrollUnroll {
+  0% {
+    max-height: 0;
+    opacity: 0;
+    transform: scaleY(0);
+    transform-origin: top;
+  }
+  100% {
+    max-height: 1000px;
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.scroll-unroll {
+  animation: scrollUnroll 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 装饰元素微动画 */
+@keyframes ornamentGlow {
+  0%, 100% {
+    opacity: 0.6;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 1;
+    filter: brightness(1.2);
+  }
+}
+
+.ornament-glow {
+  animation: ornamentGlow 2.5s ease-in-out infinite;
+}
+
+/* 页面加载 - 从右向左展开 */
+@keyframes panelSlideIn {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.panel-slide-in {
+  animation: panelSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 模态窗口 - 书页翻开效果 */
+@keyframes modalBookOpen {
+  0% {
+    transform: perspective(1200px) rotateX(-15deg) scale(0.9);
+    opacity: 0;
+  }
+  100% {
+    transform: perspective(1200px) rotateX(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.modal-book-open {
+  animation: modalBookOpen 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 朱砂印记闪烁 */
+@keyframes sealGlow {
+  0%, 100% {
+    box-shadow: 0 2px 6px rgba(193, 67, 46, 0.4);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(193, 67, 46, 0.6), 0 0 20px rgba(193, 67, 46, 0.3);
+    filter: brightness(1.15);
+  }
+}
+
+.seal-glow-pulse {
+  animation: sealGlow 2s ease-in-out infinite;
+}
+
+/* 金色标题闪光 */
+@keyframes goldShimmer {
+  0% {
+    background-position: -100% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.gold-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--gold-dark, #B8941F) 0%,
+    var(--gold-light, #FFE4A0) 50%,
+    var(--gold-dark, #B8941F) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: goldShimmer 3s linear infinite;
+}
+
+/* 书签飘动 */
+@keyframes ribbonSway {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  25% {
+    transform: translateX(1px) rotate(1deg);
+  }
+  75% {
+    transform: translateX(-1px) rotate(-1deg);
+  }
+}
+
+.ribbon-sway {
+  animation: ribbonSway 4s ease-in-out infinite;
+}
+
+/* 过渡效果通用类 */
+.transition-smooth {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.transition-book {
+  transition: all 0.4s cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+
+.transition-ink {
+  transition: all 0.5s ease-out;
+}
+
+/* 延迟动画类 */
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+
+/* GPU 加速优化 */
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform, opacity;
+}
+
+/* 防止动画过度 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

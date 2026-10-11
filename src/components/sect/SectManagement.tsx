@@ -2,11 +2,9 @@ import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
-import { CloudDivider } from "@/components/ui/CloudDivider";
-import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import type { SectIndustry, SectActivity, SectHall } from "@/data/types";
-import { Building2, Target, Users, Coins, TrendingDown } from "lucide-react";
+import { Building2, Target, Users, Coins } from "lucide-react";
 
 type ManagementTab = "industries" | "activities" | "halls" | "treasury";
 
@@ -86,7 +84,7 @@ function IndustryPanel({ industries }: { industries: SectIndustry[] }) {
             </div>
             <div className="grid grid-cols-2 gap-2 mb-2">
               <div>
-                <span className="font-serif text-[10px] text-paper-400/50">产出</span>
+                <span className="font-serif text-xs text-paper-400/50">产出</span>
                 <div className="font-serif text-xs text-jade-400">{ind.production}</div>
               </div>
             </div>
@@ -156,23 +154,23 @@ function HallsPanel({ halls }: { halls: SectHall[] }) {
           <div key={hall.id} className="p-3 rounded border border-paper-400/10 bg-ink-900/30">
             <div className="flex items-center justify-between mb-2">
               <span className="font-brush text-base text-paper-100">{hall.name}</span>
-              <span className="font-number text-[10px] text-gold-400/80">
+              <span className="font-number text-xs text-gold-400/80">
                 {hall.memberCount}/{hall.maxMembers}
               </span>
             </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="font-serif text-[10px] text-paper-400/50">堂主</span>
+                <span className="font-serif text-xs text-paper-400/50">堂主</span>
                 <span className="font-serif text-xs text-paper-200">
                   {hall.master} <span className="text-paper-400/60">({hall.masterRealm})</span>
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="font-serif text-[10px] text-paper-400/50">当前任务</span>
+                <span className="font-serif text-xs text-paper-400/50">当前任务</span>
                 <span className="font-serif text-xs text-jade-400">{hall.currentTask}</span>
               </div>
             </div>
-            <p className="font-serif text-[10px] text-paper-400/50 mt-2 leading-relaxed">
+            <p className="font-serif text-xs text-paper-400/50 mt-2 leading-relaxed">
               {hall.description}
             </p>
           </div>
@@ -223,7 +221,7 @@ function TreasuryPanel({ treasury, consumption }: { treasury: { spiritStones: nu
                 className="w-full bg-cinnabar-500/30 rounded-t"
                 style={{ height: `${(item.cost / 3000) * 100}%` }}
               />
-              <span className="font-serif text-[9px] text-paper-400/40 mt-1">{item.date}</span>
+              <span className="font-serif text-xs text-paper-400/40 mt-1">{item.date}</span>
             </div>
           ))}
         </div>

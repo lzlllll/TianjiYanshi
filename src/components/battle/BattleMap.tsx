@@ -78,8 +78,9 @@ export function BattleMap({ map }: BattleMapProps) {
 
   return (
     <div className="relative">
+      {/* 阵图不跟着面板的宽度一路涨大，收在一个方寸之内居中摆着，窄窗矮窗都放得下 */}
       <div
-        className="grid gap-0.5 border border-paper-400/20 rounded-lg p-2 bg-ink-900/60"
+        className="mx-auto grid w-full max-w-[340px] gap-0.5 rounded-lg border border-paper-400/20 bg-ink-900/60 p-1.5 sm:p-2"
         style={{
           gridTemplateColumns: `repeat(${map.width}, 1fr)`,
           aspectRatio: `${map.width} / ${map.height}`,
@@ -95,12 +96,15 @@ export function BattleMap({ map }: BattleMapProps) {
               )}
             >
               {getEntityIcon(entity) && (
-                <span className="text-lg font-bold">
+                <span className="text-sm font-bold sm:text-base">
                   {getEntityIcon(entity)}
                 </span>
               )}
               {getEntityName(entity) && (
-                <span className="absolute -top-1 -left-1 text-[8px] font-serif text-paper-300/80 bg-ink-900/80 px-0.5 rounded">
+                <span
+                  title={entity.name}
+                  className="absolute -top-1 -left-1 rounded bg-ink-900/80 px-0.5 font-serif text-[10px] leading-tight text-paper-300/80"
+                >
                   {getEntityName(entity).slice(0, 2)}
                 </span>
               )}
@@ -110,21 +114,21 @@ export function BattleMap({ map }: BattleMapProps) {
         )}
       </div>
 
-      <div className="flex items-center gap-4 mt-3 text-[10px] font-serif">
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 font-serif text-xs">
         <div className="flex items-center gap-1.5">
-          <span className="w-4 h-4 rounded bg-gold-500/40 border border-gold-400/60 flex items-center justify-center text-[10px]">☯</span>
+          <span className="w-4 h-4 rounded bg-gold-500/40 border border-gold-400/60 flex items-center justify-center text-xs">☯</span>
           <span className="text-paper-300/80">玩家</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-4 h-4 rounded bg-jade-500/40 border border-jade-400/60 flex items-center justify-center text-[10px]">◎</span>
+          <span className="w-4 h-4 rounded bg-jade-500/40 border border-jade-400/60 flex items-center justify-center text-xs">◎</span>
           <span className="text-paper-300/80">队友</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-4 h-4 rounded bg-cinnabar-500/40 border border-cinnabar-400/60 flex items-center justify-center text-[10px]">⚔</span>
+          <span className="w-4 h-4 rounded bg-cinnabar-500/40 border border-cinnabar-400/60 flex items-center justify-center text-xs">⚔</span>
           <span className="text-paper-300/80">敌人</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-4 h-4 rounded bg-purple-500/40 border border-purple-400/60 flex items-center justify-center text-[10px]">◉</span>
+          <span className="w-4 h-4 rounded bg-purple-500/40 border border-purple-400/60 flex items-center justify-center text-xs">◉</span>
           <span className="text-paper-300/80">障碍物</span>
         </div>
       </div>
