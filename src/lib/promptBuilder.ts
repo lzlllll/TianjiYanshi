@@ -405,6 +405,15 @@ export function buildDataSchema(state: GameState): string {
     );
   }
 
+  // 眼下这座城的铺面：叙事要写「到某家铺子买卖」时，照这里的真名写，界面才认得
+  const cityForShops = String(state.currentPlaceId ?? "");
+  const cityShopNames = Object.entries(state.markets ?? {})
+    .filter(([k]) => k.startsWith(`${cityForShops}:`))
+    .flatMap(([, m]) => (m.shops ?? []).map((s) => `${s.name}（${s.kind}）`));
+  if (cityShopNames.length > 0) {
+    lines.push(`本城铺面（叙事要写「到某家铺子买卖」时照这些真名写）＝ ${cityShopNames.join("；")}`);
+  }
+
   const positions = Array.isArray(s.positions) ? s.positions : [];
   positions.forEach((pos) => {
     const mark = pos.isCurrent ? "【现任】" : pos.unlocked ? "已达" : "未达";
@@ -812,7 +821,7 @@ export function buildProPrompt(params: {
     : "";
 
   const craftingConstraint = craftingResult
-    ? `\n\n【百艺制作结果】\n玩家本轮进行了${craftingResult.type === "alchemy" ? "炼丹" : "画符"}制作，结果如下：\n${craftingResult.summary}\n${craftingResult.details || ""}\n\n叙事中应描写制作过程的生动细节，并体现制作结果带来的影响。`
+    ? `\n\n【百艺制作结果】\n玩家本轮已由百艺系统完成了${craftingResult.type === "alchemy" ? "炼丹" : "画符"}（材料、灵力与产物系统均已当场结算入库）：\n${craftingResult.summary}${craftingResult.details ? `\n${craftingResult.details}` : ""}\n\n这一段不归你写：不要复述开炉、运笔的经过，也不要写出成色、数量与成败。只写他为何起这一炉、在什么场合、以及事罢之后的光景与旁人反应。`
     : "";
 
   // 开局头一段：地点还没定下，由叙事照玩家身世与宗门择一处落脚，须与来历相合，不可一律落在长安
@@ -843,7 +852,7 @@ export function buildProPrompt(params: {
 - 不要写标题、前言、总结或对玩家的点评，直接开始叙事
 - ${opening
     ? "开篇这一轮只立人物、铺世界，不得写成你来我往的逐回合交锋，也不得输出任何标记"
-    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>battle<<<END>>>。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。除这一行（并 battle／SECTWAR 二择其一）之外不得出现任何标记`}
+    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>battle<<<END>>>。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。战斗标记（battle／SECTWAR 二择其一）、讲价标记与铺面标记不可同时出现；除这几行之外不得出现任何标记`}
 
 ${PROSE_STYLE}
 【笔法】不做大段的解释与直接的心理独白，心境借行为与环境暗示；对话高度生活化，用来推动剧情、显露人情；环境描写要有用处，能带出时间与变化。
@@ -851,6 +860,11 @@ ${PROSE_STYLE}
 【叙事要求】以小说笔法行文，本轮必须有明确的剧情推进：写清发生了什么、谁做了什么、事情怎么收束或又起了什么新的头绪，情节要有起承转合。不可只铺陈氛围、原地打转，也不可写成梗概、提纲或流水账。
 
 【禁止罗列数据】正文严禁以条目、清单、分点、编号、表格或数值的形式罗列任何设定与数据：不得出现「灵根：金木」「修为 +10」「气血 80/100」「获得×××」这类写法，也不得逐条列举灵根、经脉、功法、物品、灵石与各项属性。凡涉及增减、得失、状态与名目，一律化作情节，由动作、对话、他人反应或环境变化自然带出，让读者从叙事里读出变化，而不是读到数字。
+
+【固定机制交由本地系统】战斗、炼丹、画符、铺面买卖这类自有定规的事，不由你替它定夺：
+- 交手：正文只写势成与两下照面，点到即止；不要写招式往来、胜负与伤亡，也不要写气血、灵力、伤害的数字。
+- 炼丹、画符：不要复述开炉、运笔的经过，也不要写丹药符箓的成色、数量与成败；这些由百艺界面当场定夺。
+- 铺面买卖：只写他寻到铺子、有意买或卖；不要写议价、成交的经过，也不要写价钱与得失，那些交给铺面界面由玩家自己经手。
 
 【世界观】灵根九系（金、木、水、火、土、风、雷、冰、暗）决定修炼速度。功法分五品（凡、灵、玄、地、天）五类（心法、炼体、神通、身法、秘术）。心性任意中文词汇，0-100分影响修炼与奇遇。经脉通畅度0-100影响气血运行。
 
@@ -914,7 +928,7 @@ export function buildOpsExtractionPrompt(params: {
   // 机缘的期限、人物的固定出没都以日序记，模型得知道今天是第几日
   const todaySerial = daySerial(now || OPENING_GAME_TIME);
   const craftingRule = craftingType
-    ? `\n【百艺制作豁免】本轮玩家通过制作系统完成了${craftingType === "alchemy" ? "炼丹" : "画符"}，产物「${craftingSummary || "丹药/符箓"}」已由制作系统自动入库。禁止在 ops 中再次 add 该产物，但仍需结算灵力消耗 player.mp 与时间推进。`
+    ? `\n【百艺制作豁免】本轮玩家通过百艺系统完成了${craftingType === "alchemy" ? "炼丹" : "画符"}：材料消耗、灵力消耗与产物「${craftingSummary || "丹药/符箓"}」都已由制作系统当场结算入库。禁止在 ops 中重复记这笔账——不要 add 该产物，也不要 modify player.mp、inventory、spiritStones；只照常记时间推进与去向。`
     : "";
 
   // 奇遇：只落在预设点位上；正文里牵出一处值得一去的野外去处才立
@@ -972,8 +986,9 @@ export function buildOpsExtractionPrompt(params: {
 
 【ops 规则】
 - modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
-- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
+- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
 - 宅地：叙事中若确有一处产业落到玩家名下（受赠、置办、承继），可用 add manorPlots 给他一处宅地，payload 只需写 {"place":"地名"}；地块一律由空地起，屋里盖什么由玩家自己张罗。寻常的落脚、借宿不要立宅地。
+- 铺面添货：叙事里若给某家铺子调来了货、补了存货（新到一批药材、庄上送来新酒、行商送来紧俏物事），用 add shop.goods，payload 写 {"shop":"铺子名","goods":[{"name":"货名","price":单价下品灵石,"stock":存货数,"desc":"一句说明"}]}；铺子名须与摘要中「本城铺面」那一行的名号一字不差，已有的货便添存量，没有的便新上一样。玩家自己去铺子挑货、出货那一类买卖不要写这一条，那由铺面界面结算。
 - delete：用 collection 与 id 两个字段，id 必须是摘要中已存在的条目 id。
 - 删人：正文里某人若当场殒命、身死、被杀、坐化、寿终，务必用 delete relations 把他从尘缘里抹去，id 从摘要中取——此条为硬规矩，纵是师长旧友也不得把已死之人留在尘缘；远走不归、恩断义绝的同样可删；只是一时不快、暂别几日的，不要删。
 
@@ -1017,6 +1032,7 @@ ${buffCatalogBrief()}
 30. 宗门关系：正文里若两处宗门结盟、交好、反目、开战，或一家为另一家所并、所臣服，用 add sectRelations 记下，payload 写 {"a":"一方门派名号","b":"另一方门派名号","stance":"附庸／结盟／友好／中立／敌对 之一","relation":-100 到 100,"note":"一句说明"}。a 与 b 只能取自摘要中「江湖上的门派」那一行，须两处都认得出、且不相同；同一对宗门再去一笔便改旧的，不另添。别家宗门之间打起来、或一家为另一家所破，也照这一条记关系，另在 news 里带一句。本门与他门的恩怨同样写在这里；但本门要不要趁势收别家做附庸、还是毁其门户，留待战后由玩家发落，叙事里不要替玩家定。
 31. 城村易主：正文里若有宗门攻下了一座城或一个村（城名取自摘要中「九州城池可往来者」那一行，村名取自摘要中的村庄），用 add occupations 记下，payload 写 {"kind":"city 或 village","targetName":"城名或村名","ownerName":"占家宗门的名号"}。ownerName 须是摘要中「江湖上的门派」里认得出的一处，本门也照它的名号写。同一处再去一笔便是易主，改旧的即可。占了便按月收贡金，正文里可顺带提一句纳贡之事。别家占的城村也照这一条记；本门要不要去夺，留待玩家自己动手。
 32. 驻城执事：正文里若某家宗门占了城、或派了人坐镇某城理事，可 add relations 添一位「执事」或「总督」，写全字段：name、title 写「执事」或「总督」、affiliation 写那家宗门的名号、cityId 写该城标点编号（见摘要中 currentPlaceId 可选值）、metAt 写「城名·官署」一类去处、persona 一段话交代其脾性与职守、fixedUntilDay 写一个较远的日序（如今日为第 ${todaySerial} 日，常驻写 ${todaySerial + 360}）。只在正文确实点到这么一个人时才添，不要凭空派官。
+33. 交付界面的事不由你记账：正文里若写到玩家动身去某家铺子买卖、与人交手、或开炉炼丹／画符，这几桩的经过与得失——钱财、货物、丹符的成色与数量、胜负与伤亡、气血与灵力——都由对应的界面或系统当场结算，你不要在 ops 里重复记这一笔（不要 modify spiritStones、inventory、player.hp、player.mp，也不要 add 产物）；只照常记时间推进与玩家去向。
 【宗门修正名录】
 ${sectModifierBrief()}`;
 

@@ -2115,6 +2115,37 @@ export interface SectWarBrief {
   role: "attacker" | "defender";
 }
 
+/**
+ * 叙事里挑起的一场讲价。
+ * 与商铺里那套讲价同源，只是由叙事点出：对方须是尘缘里认得的人，
+ * 谈定之后照商铺那一套落账——买的扣下品灵石、把物收入行囊，卖的出行囊、得灵石。
+ */
+export interface HaggleBrief {
+  /** 买还是卖 */
+  mode: "buy" | "sell";
+  /** 议的标的：买的是什么货，或卖的是哪一样 */
+  subject: string;
+  /** 件数 */
+  count: number;
+  /** 原价：铺面标价，或对方起初的出价 */
+  basePrice: number;
+  /** 对方的名号，须是尘缘里认得的人 */
+  keeper: string;
+  /** 铺子或去处，写给人看 */
+  shop: string;
+  /** 买入时这东西归哪一格行囊；缺省作杂物 */
+  itemType?: InventoryItem["type"];
+}
+
+/**
+ * 叙事里牵出的一桩买卖：玩家动身去某家铺子买或卖。
+ * 正文到此为止——买卖的经过与得失交由铺面界面，由玩家自己经手，免得与正文重复记账。
+ */
+export interface ShopBrief {
+  /** 铺子名，须是眼下城里真有的铺子 */
+  shop: string;
+}
+
 /** 已落到实处的宗门战：对手点位编号、名号与所打的路数 */
 export interface BattleSectWar {
   opponentId: string;
@@ -2144,6 +2175,10 @@ export interface Turn {
   mode?: string;
   /** 这一轮由叙事挑起的宗门战：对手是谁、我方是攻是守 */
   sectWar?: SectWarBrief;
+  /** 这一轮由叙事挑起的讲价：与谁、买还是卖、标的与价码 */
+  haggle?: HaggleBrief;
+  /** 这一轮叙事把玩家引到某家铺子买卖：铺面界面由玩家自己开 */
+  shop?: ShopBrief;
   /** 是不是开局头一段：这一轮只立人物、铺世界，不给它列数据变化 */
   opening?: boolean;
 }

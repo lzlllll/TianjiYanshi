@@ -38,6 +38,8 @@ import type {
   Technique,
   SectSite,
   SectWarBrief,
+  HaggleBrief,
+  ShopBrief,
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
@@ -860,6 +862,21 @@ interface AIStore {
   /** 开局的玩法介绍看过没有；玩家勾了「以后不再打开」便记下，往后不再自动弹 */
   introSeen: boolean;
   isCraftingOpen: boolean;
+  /**
+   * 叙事里挑起的一场讲价。
+   * 非空则那扇讲价窗开着；由 StoryPanel 读到回合上的标记后叫开，与商铺里那套讲价同源。
+   */
+  narrativeHaggle: HaggleBrief | null;
+  openNarrativeHaggle: (brief: HaggleBrief) => void;
+  closeNarrativeHaggle: () => void;
+  /**
+   * 叙事里把玩家引到某家铺子买卖。
+   * 非空则那扇铺面窗开着；由 StoryPanel 读到回合上的标记后叫开，
+   * 买卖的经过与得失全由玩家在窗里经手，正文不与它重复。
+   */
+  narrativeShop: ShopBrief | null;
+  openNarrativeShop: (brief: ShopBrief) => void;
+  closeNarrativeShop: () => void;
   /**
    * 问道窗口开着没有。
    * 摆在 store 里是因为开战之后战斗面板就在问道窗口内，
@@ -1751,9 +1768,15 @@ export const useAIStore = create<AIStore>()(
       randomEventDisabled: false,
       introSeen: false,
       isCraftingOpen: false,
+      narrativeHaggle: null,
+      narrativeShop: null,
       isStoryOpen: true,
 
       setStoryOpen: (open) => set({ isStoryOpen: open }),
+      openNarrativeHaggle: (brief) => set({ narrativeHaggle: brief }),
+      closeNarrativeHaggle: () => set({ narrativeHaggle: null }),
+      openNarrativeShop: (brief) => set({ narrativeShop: brief }),
+      closeNarrativeShop: () => set({ narrativeShop: null }),
 
       updateSettings: (patch) =>
         set((st) => ({ settings: { ...st.settings, ...patch } })),
@@ -2027,6 +2050,8 @@ export const useAIStore = create<AIStore>()(
         let narrative = "";
         let narrativeMode: string | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
+        let narrativeHaggle: HaggleBrief | null = null;
+        let narrativeShop: ShopBrief | null = null;
         let extraction = emptyExtraction();
 
         // Pro 只生成叙事正文
@@ -2065,6 +2090,8 @@ export const useAIStore = create<AIStore>()(
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
           narrativeSectWar = parsed.sectWar;
+          narrativeHaggle = parsed.haggle;
+          narrativeShop = parsed.shop;
           return parsed.narrative;
         };
 
@@ -2128,6 +2155,8 @@ export const useAIStore = create<AIStore>()(
           playerInput: ctx.decision,
           mode: narrativeMode ?? undefined,
           sectWar: narrativeSectWar ?? undefined,
+          haggle: narrativeHaggle ?? undefined,
+          shop: narrativeShop ?? undefined,
           flashPaths: ctx.flashPaths,
           flashRaw: ctx.flashRaw,
           proRequest: {
@@ -2323,6 +2352,8 @@ export const useAIStore = create<AIStore>()(
         let narrative = "";
         let narrativeMode: string | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
+        let narrativeHaggle: HaggleBrief | null = null;
+        let narrativeShop: ShopBrief | null = null;
 
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
@@ -2359,6 +2390,8 @@ export const useAIStore = create<AIStore>()(
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
           narrativeSectWar = parsed.sectWar;
+          narrativeHaggle = parsed.haggle;
+          narrativeShop = parsed.shop;
           return parsed.narrative;
         };
 
@@ -2490,6 +2523,8 @@ export const useAIStore = create<AIStore>()(
           // 免得开局便浮起一座没有敌人的空战场
           mode: isFirstTurn ? undefined : narrativeMode ?? undefined,
           sectWar: isFirstTurn ? undefined : narrativeSectWar ?? undefined,
+          haggle: isFirstTurn ? undefined : narrativeHaggle ?? undefined,
+          shop: isFirstTurn ? undefined : narrativeShop ?? undefined,
           // 开局头一段另作记号：末尾不列数据变化，路上也先不生变故
           opening: isFirstTurn,
           flashPaths,
@@ -2567,6 +2602,8 @@ export const useAIStore = create<AIStore>()(
         let proRaw = "";
         let narrativeMode: string | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
+        let narrativeHaggle: HaggleBrief | null = null;
+        let narrativeShop: ShopBrief | null = null;
         try {
           set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
           proRaw = await chatWithModelStream(
@@ -2593,6 +2630,8 @@ export const useAIStore = create<AIStore>()(
           const parsedRetry = parseModelOutput(proRaw);
           narrativeMode = parsedRetry.mode;
           narrativeSectWar = parsedRetry.sectWar;
+          narrativeHaggle = parsedRetry.haggle;
+          narrativeShop = parsedRetry.shop;
           narrative = parsedRetry.narrative;
         } catch (e) {
           if (signal.aborted) return;
@@ -2626,6 +2665,8 @@ export const useAIStore = create<AIStore>()(
             // 重演开篇那一轮同样不认战斗标记：开篇不该开打
             mode: conversation.turns.length === 1 ? undefined : narrativeMode ?? undefined,
             sectWar: conversation.turns.length === 1 ? undefined : narrativeSectWar ?? undefined,
+            haggle: conversation.turns.length === 1 ? undefined : narrativeHaggle ?? undefined,
+            shop: conversation.turns.length === 1 ? undefined : narrativeShop ?? undefined,
             narrative: narrative.slice(0, 20000),
             ops: extraction.ops.slice(0, 100),
             opsRaw: extraction.opsRaw.slice(0, 5000),
@@ -2697,6 +2738,8 @@ export const useAIStore = create<AIStore>()(
           battle: INITIAL_BATTLE,
           randomEvent: INITIAL_RANDOM_EVENT,
           adventure: INITIAL_ADVENTURE,
+          narrativeHaggle: null,
+          narrativeShop: null,
         });
       },
 
@@ -5523,11 +5566,17 @@ MODIFY player.mp - 10
        */
       merge: (persisted, current) => {
         const merged = { ...current, ...((persisted as Partial<AIStore>) || {}) } as AIStore;
+        // 讲价与铺面都是眼前这一场的事，不随存档醒来：读档时把窗关掉，免得一进来又弹出早先那一扇
+        merged.narrativeHaggle = null;
+        merged.narrativeShop = null;
         const conv = merged.conversation;
-        if (conv && Array.isArray(conv.turns) && conv.turns.some((t) => t.mode === "battle")) {
+        if (conv && Array.isArray(conv.turns) && conv.turns.some((t) => t.mode === "battle" || t.haggle || t.shop)) {
           merged.conversation = {
             ...conv,
-            turns: conv.turns.map((t) => (t.mode === "battle" ? { ...t, mode: undefined } : t)),
+            turns: conv.turns.map((t) => {
+              if (!t.mode && !t.haggle && !t.shop) return t;
+              return { ...t, mode: t.mode === "battle" ? undefined : t.mode, haggle: undefined, shop: undefined };
+            }),
           };
         }
         return merged;

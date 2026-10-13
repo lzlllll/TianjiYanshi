@@ -5,12 +5,14 @@ import type {
   GameTime,
   BattleEntity,
   BuffDurationType,
+  HaggleBrief,
   InventoryItem,
   MeridianZone,
   PriceAdjust,
   Quest,
   SectSite,
   SectWarBrief,
+  ShopBrief,
   Skill,
   SkillCheck,
   Village,
@@ -48,8 +50,13 @@ const END_MARKER = "<<<END>>>";
 const BATTLE_START = "<<<BATTLE>>>";
 const QUICK_START = "<<<QUICK>>>";
 const SECTWAR_START = "<<<SECTWAR>>>";
+const HAGGLE_START = "<<<HAGGLE>>>";
+const SHOP_START = "<<<SHOP>>>";
 
 const MAX_TOTAL_OPS = 200;
+
+/** 行囊能收的几格；叙事挑起的讲价买入时照这一列归一 */
+const ITEM_TYPES: InventoryItem["type"][] = ["材料", "丹药", "符箓", "法宝", "杂物", "灵兽"];
 
 export interface ParsedTurn {
   narrative: string;
@@ -62,6 +69,10 @@ export interface ParsedTurn {
   quickDecisions: string[];
   /** 这一轮由叙事挑起的宗门战；没挑起便是 null */
   sectWar: SectWarBrief | null;
+  /** 这一轮由叙事挑起的讲价；没挑起便是 null */
+  haggle: HaggleBrief | null;
+  /** 这一轮叙事把玩家引到某家铺子买卖；没有便是 null */
+  shop: ShopBrief | null;
 }
 
 const MODE_START = "<<<MODE>>>";
@@ -109,6 +120,30 @@ export function parseModelOutput(raw: string): ParsedTurn {
       : text.slice(0, sectWarIdx);
   }
 
+  let haggle: HaggleBrief | null = null;
+  const haggleIdx = text.indexOf(HAGGLE_START);
+  if (haggleIdx !== -1) {
+    const afterHaggle = text.slice(haggleIdx + HAGGLE_START.length);
+    const haggleEndIdx = afterHaggle.indexOf(END_MARKER);
+    const content = haggleEndIdx !== -1 ? afterHaggle.slice(0, haggleEndIdx) : afterHaggle;
+    haggle = parseHaggleBrief(content);
+    text = haggleEndIdx !== -1
+      ? text.slice(0, haggleIdx) + afterHaggle.slice(haggleEndIdx + END_MARKER.length)
+      : text.slice(0, haggleIdx);
+  }
+
+  let shop: ShopBrief | null = null;
+  const shopIdx = text.indexOf(SHOP_START);
+  if (shopIdx !== -1) {
+    const afterShop = text.slice(shopIdx + SHOP_START.length);
+    const shopEndIdx = afterShop.indexOf(END_MARKER);
+    const content = shopEndIdx !== -1 ? afterShop.slice(0, shopEndIdx) : afterShop;
+    shop = parseShopBrief(content);
+    text = shopEndIdx !== -1
+      ? text.slice(0, shopIdx) + afterShop.slice(shopEndIdx + END_MARKER.length)
+      : text.slice(0, shopIdx);
+  }
+
   let quickDecisions: string[] = [];
   const quickStartIdx = text.indexOf(QUICK_START);
   if (quickStartIdx !== -1) {
@@ -145,7 +180,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
   if (battleNarrative) narrative = battleNarrative;
   const ops = parseOpLines(opsRaw);
   _debugOps(ops);
-  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleEntities, battleIncense, quickDecisions, sectWar };
+  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop };
 }
 
 /**
@@ -173,6 +208,63 @@ function parseSectWar(content: string): SectWarBrief | null {
   }
   const name = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? "";
   return name ? { opponentName: name.slice(0, 20), targetKind: "sect", role: "attacker" } : null;
+}
+
+/**
+ * 从讲价块里认出与谁议价、买还是卖、标的与价码。
+ * 写作 JSON 最好（{"mode":"buy","subject":"药材","count":1,"basePrice":80,"keeper":"王掌柜","shop":"西市药铺"}）；
+ * 认不出、或缺了标的名与对方名号的，便当没有这一桩，不硬弹窗。
+ */
+function parseHaggleBrief(content: string): HaggleBrief | null {
+  const s = content.replace(/```[a-zA-Z]*\n?/g, "").trim();
+  if (!s) return null;
+  let obj: unknown = null;
+  try {
+    obj = JSON.parse(s);
+  } catch {
+    obj = null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+  const r = obj as Record<string, unknown>;
+  const subject = String(r.subject ?? r.name ?? "").trim();
+  const keeper = String(r.keeper ?? r.who ?? "").trim();
+  if (!subject || !keeper) return null;
+
+  const mode = r.mode === "sell" ? "sell" : "buy";
+  const count = Math.max(1, Math.min(99, Math.trunc(Number(r.count)) || 1));
+  const basePrice = Math.max(1, Math.min(999999, Math.round(Number(r.basePrice ?? r.price) || 1)));
+  const shop = String(r.shop ?? r.place ?? "").trim() || "一处铺面";
+  const rawType = String(r.itemType ?? r.type ?? "").trim();
+  const itemType = ITEM_TYPES.includes(rawType as InventoryItem["type"])
+    ? (rawType as InventoryItem["type"])
+    : undefined;
+
+  return { mode, subject: subject.slice(0, 20), count, basePrice, keeper: keeper.slice(0, 16), shop: shop.slice(0, 30), itemType };
+}
+
+/**
+ * 从铺面块里认出去的是哪一家铺子。
+ * 写作 JSON 最好（{"shop":"醉仙楼"}）；只写一行铺名也认。
+ * 认不出铺名便当没有这一桩——界面上无处可去，宁可不弹。
+ */
+function parseShopBrief(content: string): ShopBrief | null {
+  const s = content.replace(/```[a-zA-Z]*\n?/g, "").trim();
+  if (!s) return null;
+  let obj: unknown = null;
+  try {
+    obj = JSON.parse(s);
+  } catch {
+    obj = null;
+  }
+  let name = "";
+  if (obj && typeof obj === "object") {
+    const r = obj as Record<string, unknown>;
+    name = String(r.shop ?? r.name ?? r.place ?? "").trim();
+  } else {
+    name = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? "";
+  }
+  if (!name) return null;
+  return { shop: name.slice(0, 30) };
 }
 
 /** 从战斗块中取出 -- incense: 45 这一行，认作本柱香已烧到的进度 */
@@ -1950,6 +2042,103 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
   return { path: normalizedPath, value };
 }
 
+/** 一家铺子的货架至多摆这些样：再多也摊不下，界面也读不过来 */
+const SHOP_GOODS_MAX = 32;
+
+/** 认一样要摆上货架的货：名号必写，价与存量照给，缺了便按常例补 */
+function normalizeShopGood(
+  raw: unknown,
+): { name: string; base: number; stock: number; desc?: string; mystery?: boolean } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const name = String(r.name ?? r.good ?? "").trim();
+  if (!name) return null;
+  const base = Math.max(1, Math.min(999999, Math.round(Number(r.price ?? r.base) || 10)));
+  const stock = Math.max(1, Math.min(999, Math.floor(Number(r.stock ?? r.count) || 1)));
+  const desc = String(r.desc ?? "").trim();
+  return {
+    name: name.slice(0, 20),
+    base,
+    stock,
+    ...(desc ? { desc: desc.slice(0, 60) } : {}),
+    ...(r.mystery === true ? { mystery: true } : {}),
+  };
+}
+
+/**
+ * 叙事给某家铺子添货：照铺名在眼下各坊市里找那家铺子，
+ * 已有的货便添存量，没有的便新上一样；铺名认不出的便作罢，不硬安在别家头上。
+ * 铺面存在 markets 里，是对象不是数组，故不走 add 那条通用路子，单开这一处。
+ */
+function applyShopGoods(root: any, rawPayload: unknown): void {
+  const payload = typeof rawPayload === "string" ? parseMarkdownBlockToJson(rawPayload) : rawPayload;
+  if (!payload || typeof payload !== "object") return;
+  const p = payload as Record<string, unknown>;
+  const shopName = String(p.shop ?? p.shopName ?? "").trim();
+  if (!shopName) return;
+
+  // 要上的是哪几样货：goods 数组，或单一样 good／top-level 那样
+  const rawGoods: unknown[] = Array.isArray(p.goods)
+    ? (p.goods as unknown[])
+    : p.good && typeof p.good === "object"
+      ? [p.good]
+      : p.name && (p.price !== undefined || p.base !== undefined || p.stock !== undefined)
+        ? [{ ...p, name: p.name }]
+        : [];
+  const goods = rawGoods.map(normalizeShopGood).filter((g) => g !== null);
+  if (goods.length === 0) return;
+
+  const markets = root?.markets;
+  if (!markets || typeof markets !== "object") return;
+
+  // 先在本城找那家铺子，找不到再全图找
+  const cityId = String(root?.currentPlaceId ?? "");
+  const allKeys = Object.keys(markets as Record<string, unknown>);
+  const findKey = (list: string[]): string => {
+    for (const key of list) {
+      const market = (markets as Record<string, any>)[key];
+      if ((market?.shops ?? []).some((s: any) => s?.name === shopName)) return key;
+    }
+    return "";
+  };
+  const targetKey = findKey(allKeys.filter((k) => k.startsWith(`${cityId}:`))) || findKey(allKeys);
+  if (!targetKey) return;
+
+  const market = (markets as Record<string, any>)[targetKey];
+  const nextShops = (market.shops ?? []).map((shop: any) => {
+    if (shop?.name !== shopName) return shop;
+    const shelf: any[] = Array.isArray(shop.goods) ? shop.goods.map((g: any) => ({ ...g })) : [];
+    for (const g of goods) {
+      const at = shelf.findIndex((x) => x?.name === g.name);
+      if (at >= 0) {
+        shelf[at] = {
+          ...shelf[at],
+          stock: Math.max(0, Number(shelf[at].stock) || 0) + g.stock,
+          base: g.base,
+          ...(g.desc ? { desc: g.desc } : {}),
+          ...(g.mystery ? { mystery: true } : {}),
+        };
+      } else {
+        shelf.push({
+          name: g.name,
+          base: g.base,
+          stock: g.stock,
+          ...(g.desc ? { desc: g.desc } : {}),
+          ...(g.mystery ? { mystery: true } : {}),
+        });
+      }
+    }
+    if (shelf.length > SHOP_GOODS_MAX) shelf.length = SHOP_GOODS_MAX;
+    // 记下新的货架规模，隔日重新上货时不至于缩回旧数
+    return { ...shop, goods: shelf, stockScale: Math.max(Number(shop.stockScale) || 0, shelf.length) };
+  });
+
+  root.markets = {
+    ...(markets as Record<string, any>),
+    [targetKey]: { ...market, shops: nextShops },
+  };
+}
+
 function applyOne(root: any, op: DataOp): void {
   if (op.kind === "modify") {
     // 规范化路径和值
@@ -1985,6 +2174,11 @@ function applyOne(root: any, op: DataOp): void {
     }
     applyModify(parent, last, normalizedOp);
   } else if (op.kind === "add") {
+    // 给某家铺子添货：铺面存在 markets 里，是对象不是数组，故不走下面的通用路子
+    if (op.collection === "shop.goods") {
+      applyShopGoods(root, op.payload);
+      return;
+    }
     const arr = resolveCollection(root, op.collection);
     if (!Array.isArray(arr)) {
       console.warn("[applyOne] Collection is not an array:", op.collection);

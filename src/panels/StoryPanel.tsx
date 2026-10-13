@@ -55,6 +55,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const battle = useAIStore((s) => s.battle);
   const startBattle = useAIStore((s) => s.startBattle);
   const startSectWar = useAIStore((s) => s.startSectWar);
+  const openNarrativeHaggle = useAIStore((s) => s.openNarrativeHaggle);
+  const openNarrativeShop = useAIStore((s) => s.openNarrativeShop);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
 
   const quickDecisions = conversation.quickDecisions?.length
@@ -70,6 +72,10 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const isMountedRef = useRef(true);
   /** 记录已经据此开过战的回合，避免压缩/重渲染时重复 startBattle 把战斗重置回第一回合 */
   const battleTurnRef = useRef<string | null>(null);
+  /** 同理：叙事挑起的讲价，同一条回合只叫一次窗 */
+  const haggleTurnRef = useRef<string | null>(null);
+  /** 同理：叙事把玩家引到某家铺子买卖，同一条回合只开一次铺面窗 */
+  const shopTurnRef = useRef<string | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -82,6 +88,19 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     if (conversation.stage !== "done") return;
     const lastTurn = conversation.turns[conversation.turns.length - 1];
     if (!lastTurn) return;
+
+    // 叙事挑起的讲价：弹出讲价窗；同一条回合只叫一次
+    if (lastTurn.haggle && haggleTurnRef.current !== lastTurn.id) {
+      haggleTurnRef.current = lastTurn.id;
+      openNarrativeHaggle(lastTurn.haggle);
+    }
+
+    // 叙事把玩家引到某家铺子买卖：开出铺面窗由玩家自己经手；同一条回合只开一次
+    if (lastTurn.shop && shopTurnRef.current !== lastTurn.id) {
+      shopTurnRef.current = lastTurn.id;
+      openNarrativeShop(lastTurn.shop);
+    }
+
     // 叙事挑起的宗门战另算一路：照对手宗门摆开阵势，攻方还要破它的护山大阵
     const isSectWar = !!lastTurn.sectWar;
     if (!isSectWar && lastTurn.mode !== "battle") return;
@@ -136,7 +155,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         })),
       ],
     });
-  }, [conversation.stage, conversation.turns, startBattle, startSectWar]);
+  }, [conversation.stage, conversation.turns, startBattle, startSectWar, openNarrativeHaggle, openNarrativeShop]);
 
   const stage = conversation.stage;
   const isGenerating = stage === "flash" || stage === "pro";

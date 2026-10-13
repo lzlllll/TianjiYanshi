@@ -22,6 +22,8 @@ import { StoryWindow } from "@/components/layout/StoryWindow";
 import { AISettingsModal } from "@/components/ai/AISettingsModal";
 import { NPCChatModal } from "@/components/ai/NPCChatModal";
 import { RandomEventModal } from "@/components/ai/RandomEventModal";
+import { NarrativeHaggleModal } from "@/components/map/NarrativeHaggleModal";
+import { NarrativeShopModal } from "@/components/map/NarrativeShopModal";
 import { AdventureModal } from "@/components/adventure/AdventureModal";
 import { CraftOrderModal } from "@/components/ai/CraftOrderModal";
 import { CraftingModal } from "@/components/crafting/CraftingModal";
@@ -92,6 +94,10 @@ export default function Home() {
       <RandomEventModal />
       {/* 踏进一处奇遇：可随时抽身，那一处仍留在舆图上 */}
       <AdventureModal />
+      {/* 叙事里挑起的一场讲价：与商铺里那套同源，谈定即落账 */}
+      <NarrativeHaggleModal />
+      {/* 叙事把玩家引到某家铺子买卖：铺面界面由玩家自己经手 */}
+      <NarrativeShopModal />
       {/* 作坊报了价，便跳出一纸单子等玩家点头付钱；压在交谈窗口之上 */}
       <CraftOrderModal />
       <CraftingModal />

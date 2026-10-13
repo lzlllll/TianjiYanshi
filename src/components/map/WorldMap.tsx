@@ -361,6 +361,25 @@ export function WorldMap({
       }
     }
   }, [place, manorCells, scene.culture, ensureManor]);
+  // 坊市的铺面也先开出来：点坊市进屋才不会空着；叙事要写「到某家铺子买卖」时，
+  // 数据摘要里便有这城的真铺名可照抄
+  const marketCells = useMemo(
+    () =>
+      [...districtByCell.values()]
+        .filter((d) => d.nature === "坊市")
+        .map((d) => `${d.id}:${d.slots}`)
+        .join(","),
+    [districtByCell],
+  );
+  useEffect(() => {
+    if (!place || !marketCells) return;
+    for (const entry of marketCells.split(",")) {
+      const [idStr, slotStr] = entry.split(":");
+      const districtId = Number(idStr);
+      if (!Number.isFinite(districtId)) continue;
+      ensureMarket(place.id, districtId, scene.culture, Number(slotStr));
+    }
+  }, [place, marketCells, scene.culture, ensureMarket]);
   // 背景底图系统已停用，城图不再叠城市背景图
   // const bgUrl = getBackgroundImage(scene.bg);
   // 坐标探测只对带图像坐标的手绘地图有效；瓦片地图按格排布，整套坐标体系在此停用

@@ -281,6 +281,17 @@ interface GameStore extends GameState {
   setShopInfo: (key: string, shopId: string, info: string) => void;
   /** 买下一件货：扣下品灵石、入行囊、铺面减存；灵石或存货不够则不成 */
   buyGood: (args: { key: string; shopId: string; goodName: string; price: number }) => boolean;
+  /**
+   * 不限商铺的一笔买入：叙事里讲定的一桩买卖，照价扣下品灵石、把物收入行囊。
+   * 行囊里已有同名同类的摞上去；灵石不够则不成。
+   */
+  buyFromNarrative: (args: {
+    name: string;
+    price: number;
+    count?: number;
+    type?: InventoryItem["type"];
+    desc?: string;
+  }) => boolean;
   /** 卖出一样东西：行囊里减掉、灵石入袋；totalPrice 是整笔的价钱 */
   sellItem: (args: { itemId: string; totalPrice: number; count: number }) => boolean;
   /** 花掉几枚下品灵石，如打尖叫菜；不够则不成 */
@@ -4634,6 +4645,42 @@ EFFECT: [效果描述]`,
               ],
           markets: { ...st.markets, [key]: { ...market, shops: market.shops.map(patchShop) } },
           log: [`你在「${shop.name}」花了 ${taken} 下品灵石，买下${good.name}。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      buyFromNarrative: ({ name, price, count = 1, type, desc }) => {
+        const st = get();
+        const itemName = String(name ?? "").trim();
+        if (!itemName) return false;
+        const take = Math.max(1, Math.min(99, Math.trunc(count) || 1));
+        const unit = Math.max(0, Math.round(price));
+        const cost = unit * take;
+        if (st.spiritStones.low < cost) return false;
+
+        const kind = type ?? "杂物";
+        // 品阶看单价定，讲价讲下来的便宜不该把东西的品阶也压下去
+        const grade = gradeForPrice(unit);
+        // 行囊里已有同名同类的东西就摞上去，免得买几回就多出几行
+        const stacked = st.inventory.find((i) => i.name === itemName && i.type === kind);
+
+        set({
+          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost },
+          inventory: stacked
+            ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + take } : i))
+            : [
+                ...st.inventory,
+                {
+                  id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+                  name: itemName,
+                  type: kind,
+                  grade,
+                  count: take,
+                  icon: itemName.charAt(0),
+                  desc: desc || "经一番讲价买下的。",
+                },
+              ],
+          log: [`你花了 ${cost} 下品灵石，买下${itemName}${take > 1 ? ` ${take} 件` : ""}。`, ...st.log].slice(0, 30),
         });
         return true;
       },
