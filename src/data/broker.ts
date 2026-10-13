@@ -13,6 +13,7 @@ import { getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { relationWhereabout, rollQuestNpc } from "@/data/npcGen";
 import { questKindNeedsPlace } from "@/data/quests";
 import type {
+  Adventure,
   BrokerJob,
   JobCastRole,
   JobTarget,
@@ -20,6 +21,8 @@ import type {
   QuestPenaltyKind,
   QuestRewardKind,
   Relation,
+  SectSite,
+  Village,
 } from "@/data/types";
 
 /** 柜上至少挂着几桩 */
@@ -437,6 +440,48 @@ export function resolveJobTarget(
   return undefined;
 }
 
+/**
+ * 把叙事里写的去处对回一处山门建筑。
+ * 写法多是「山门名·建筑名」，故先认山门名号，余下的便是建筑名；
+ * 只写了山门、没落到具体一座建筑的不算——那是奔着整座山门去的，本系统只认具体一处。
+ */
+function resolveSectBuildingTarget(text: string, sectSites: SectSite[]): JobTarget | undefined {
+  const raw = String(text ?? "").trim();
+  if (!raw) return undefined;
+  for (const site of sectSites) {
+    const name = String(site?.name ?? "").trim();
+    if (!name || !raw.startsWith(name)) continue;
+    const rest = raw.slice(name.length).replace(/^[·•.\s]+/, "").trim();
+    if (!rest) return undefined;
+    return { cityId: "", label: `${name}·${rest}`, sectId: site.id, building: rest };
+  }
+  return undefined;
+}
+
+/** 把去处对回舆图上的一处奇遇：写明它名目的钉在那处点位上 */
+function resolveAdventureTarget(text: string, adventures: Adventure[]): JobTarget | undefined {
+  const raw = String(text ?? "").trim();
+  if (!raw) return undefined;
+  const hit = adventures.find((a) => {
+    const name = String(a?.name ?? "").trim();
+    return !!name && a.status === "open" && (raw === name || raw.includes(name));
+  });
+  if (!hit) return undefined;
+  return { cityId: hit.cityId || "", label: `${hit.name}（${hit.kind}）`, adventureId: hit.id };
+}
+
+/** 把去处对回野外的一座村庄：写明村名的钉在那座村上 */
+function resolveVillageTarget(text: string, villages: Village[]): JobTarget | undefined {
+  const raw = String(text ?? "").trim();
+  if (!raw) return undefined;
+  const hit = villages.find((v) => {
+    const name = String(v?.name ?? "").trim();
+    return !!name && (raw === name || raw.includes(name));
+  });
+  if (!hit) return undefined;
+  return { cityId: "", label: hit.name, villageKey: hit.key };
+}
+
 /** 这一桩差事眼下还接不接得：柜上没撤、也还没被人接下 */
 export function jobOpen(job: BrokerJob | undefined): boolean {
   return !!job && !job.taken;
@@ -475,6 +520,7 @@ function narrativeCastRoles(quest: Quest): JobCastRole[] {
  * 去处对得上某座城池真有的街区便钉在那儿，人照这份说明现掷一个钉在目标地块上，
  * 玩家得走到那儿才寻得着人、交得了差。
  * 去处写明是别城的，就认那一座城，不必强按在本城头上；那一座若也没画过街区，才作罢。
+ * 去处也可以是一处山门建筑、舆图上的奇遇，或野外的一座村庄——写明它们的名目便钉到那一处。
  * 已经有了去处的（先前认下或存档里带来的），就地用人，不再另认。
  */
 export function pinNarrativeQuest(args: {
@@ -484,6 +530,12 @@ export function pinNarrativeQuest(args: {
   culture?: string;
   /** 今日日序，用来定这人守在原处的期限 */
   today: number;
+  /** 眼下舆图上开着的奇遇；去处写到它便可钉过去 */
+  adventures?: Adventure[];
+  /** 眼下舆图上的村庄 */
+  villages?: Village[];
+  /** 江湖上的各处山门；去处写到某座建筑便可钉过去 */
+  sectSites?: SectSite[];
 }): { quest: Quest; people: Relation[] } {
   const { quest, currentPlaceId, districtNames, today } = args;
   if (!currentPlaceId) return { quest, people: [] };
@@ -496,7 +548,12 @@ export function pinNarrativeQuest(args: {
 
   let target = quest.target;
   if (!target) {
-    target = resolveJobTarget(text, cityId, districtNames);
+    // 去处可能是城内街区、某座山门里的建筑、舆图上的奇遇，或一座村庄，按写法依次认一遍
+    target =
+      resolveAdventureTarget(text, args.adventures ?? []) ??
+      resolveVillageTarget(text, args.villages ?? []) ??
+      resolveSectBuildingTarget(text, args.sectSites ?? []) ??
+      resolveJobTarget(text, cityId, districtNames);
     // 事件类可以没有具体去处：认不出便不钉，由叙事随缘去办，不硬安一个星标
     if (!target && !questKindNeedsPlace(quest.kind)) return { quest, people: [] };
     if (!target) {
@@ -521,12 +578,20 @@ export function pinNarrativeQuest(args: {
     return { quest: { ...quest, kind: "地点", target }, people: [] };
   }
 
-  if (typeof target.districtId !== "number") return { quest: { ...quest, target }, people: [] };
-
   const roles = narrativeCastRoles(quest);
   const until = Number(quest.dueDay) > 0 ? Number(quest.dueDay) : today + 30;
+
+  // 去处是城内街区，人便钉在那一格上；去处是山门建筑、奇遇或村庄，
+  // 人便跟着那一处的名号走（location），玩家到了那一处才寻得着
   const people = roles.map((role) => ({
-    ...rollQuestNpc(role, target!.label, target!.cityId, target!.districtId!, culture),
+    ...rollQuestNpc(
+      role,
+      target!.label,
+      target!.cityId,
+      target!.districtId,
+      culture,
+      target!.districtId === undefined ? target!.label : undefined,
+    ),
     fixedUntilDay: until,
   }));
 

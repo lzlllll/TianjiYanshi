@@ -318,6 +318,25 @@ export function WorldMap({
       .map((q) => q.target!.districtId as number);
     return new Set(ids);
   }, [quests, currentPlaceId]);
+  // 手上还没办完的差事办在哪一处奇遇、哪一座村庄：这两处在舆图上挂星标
+  const questAdventureIds = useMemo(
+    () =>
+      new Set(
+        quests
+          .filter((q) => q.status === "open" && q.target?.adventureId)
+          .map((q) => q.target!.adventureId as string),
+      ),
+    [quests],
+  );
+  const questVillageKeys = useMemo(
+    () =>
+      new Set(
+        quests
+          .filter((q) => q.status === "open" && q.target?.villageKey)
+          .map((q) => q.target!.villageKey as string),
+      ),
+    [quests],
+  );
   // 路网与水系：把相邻同类地块的中心连成线，描在格子之上；
   // 河遇上一格道路时直接穿过去，把那格当桥，免得水道被路截断
   const roadLinks = useMemo(() => buildTileLinks(tiles ?? [], ROAD_TILE), [tiles]);
@@ -961,6 +980,14 @@ export function WorldMap({
                 >
                   村
                 </span>
+                {questVillageKeys.has(v.key) && (
+                  <span
+                    className="absolute -top-1.5 -right-0.5 font-brush text-[12px] leading-none text-cinnabar-300"
+                    style={{ textShadow: "0 1px 2px rgba(0,0,0,0.95)" }}
+                  >
+                    ★
+                  </span>
+                )}
                 <span
                   className="absolute top-full whitespace-nowrap font-brush text-[10px] leading-none text-paper-100"
                   style={{ left: "50%", transform: "translateX(-50%)" }}
@@ -1102,6 +1129,14 @@ export function WorldMap({
                 >
                   遇
                 </span>
+                {questAdventureIds.has(a.id) && (
+                  <span
+                    className="absolute -top-1.5 -right-0.5 font-brush text-[12px] leading-none text-cinnabar-300"
+                    style={{ textShadow: "0 1px 2px rgba(0,0,0,0.95)" }}
+                  >
+                    ★
+                  </span>
+                )}
                 <span
                   className="absolute top-full whitespace-nowrap font-brush text-[10px] leading-none text-gold-200"
                   style={{

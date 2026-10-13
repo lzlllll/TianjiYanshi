@@ -436,6 +436,9 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
       districtNames: gs.districtNames,
       culture: getMarker(gs.currentPlaceId)?.culture,
       today,
+      adventures: Array.isArray(gs.adventures) ? gs.adventures : [],
+      villages: Object.values(gs.villages ?? {}),
+      sectSites: Array.isArray(gs.sectSites) ? gs.sectSites : [],
     });
     useGameStore.setState((s) => ({
       quests: [...s.quests, pinned.quest],

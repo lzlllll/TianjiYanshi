@@ -1,4 +1,5 @@
 import type {
+  Adventure,
   DataOp,
   GameState,
   GameTime,
@@ -12,6 +13,7 @@ import type {
   SectWarBrief,
   Skill,
   SkillCheck,
+  Village,
 } from "@/data/types";
 import { REALM_NAMES } from "@/data/mockData";
 import { getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
@@ -2103,6 +2105,9 @@ function applyOne(root: any, op: DataOp): void {
           districtNames: root?.districtNames,
           culture: getMarker(placeId)?.culture,
           today: quest.day,
+          adventures: Array.isArray(root?.adventures) ? (root.adventures as Adventure[]) : [],
+          villages: Object.values((root?.villages ?? {}) as Record<string, Village>),
+          sectSites: Array.isArray(root?.sectSites) ? (root.sectSites as SectSite[]) : [],
         });
         if (pinned.people.length > 0) {
           const relArr = resolveCollection(root, "relations");

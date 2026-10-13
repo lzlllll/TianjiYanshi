@@ -1355,7 +1355,8 @@ export interface Good {
 
 /**
  * 一桩差事要办到哪儿去。
- * 去处只从本城真有的街区里挑；要找人的，那人也是眼下确实记在尘缘里的。
+ * 去处可以是城内某条街区、某座山门里的一座建筑、舆图上的一处奇遇，或野外的一座村庄；
+ * 要找人的，那人也是眼下确实记在尘缘里的。
  */
 export interface JobTarget {
   cityId: string;
@@ -1371,6 +1372,13 @@ export interface JobTarget {
    */
   sectId?: string;
   building?: string;
+  /**
+   * 去处是舆图上的某一处奇遇时记下它的编号；人到了那一带才算到了地头。
+   * 记了奇遇的，districtId 与 sectId 都省去。
+   */
+  adventureId?: string;
+  /** 去处是野外的某一座村庄时记下它的点位身份 */
+  villageKey?: string;
 }
 
 /**
