@@ -408,7 +408,7 @@ const MANOR_STANDINGS = [
 
 /**
  * 宅里的亲眷：辈分、称谓、通常性别、年岁区间。
- * 辈分 0 为尊辈、1 为父辈、2 为子辈，同辈共用一个字辈。
+ * 辈分 0 为尊辈、1 为父辈、2 为子辈，同辈共用一个字辈；西域一脉不排字辈。
  */
 const KIN_TITLES: { gen: number; title: string; gender: string; ageLo: number; ageHi: number }[] = [
   { gen: 0, title: "老太爷", gender: "男", ageLo: 62, ageHi: 82 },
@@ -436,7 +436,7 @@ const MANOR_SERVANTS: [string, string, number, number][] = [
   ["侍女", "女", 16, 26],
 ];
 
-/** 字辈用的字，从这部「辈谱」里按辈分取，同辈第二个字都相同 */
+/** 字辈用的字，从这部「辈谱」里按辈分取，同辈第二个字都相同；西域一脉不排字辈，用不着它 */
 const GENERATION_CHARS = [
   "德", "文", "承", "宗", "永", "昌", "世", "泽",
   "毓", "秀", "钟", "灵", "光", "裕", "延", "绍",
@@ -549,7 +549,7 @@ export function rollShopkeeper(
  * 掷完就写进存档，往后每次推门进去都还是这户人家。
  *
  * 人口合计不少于十人：本家占去一半以上，同姓的按字辈排辈谱，同辈第二个字相同；
- * 余下是执事仆役，另姓。
+ * 西域一脉不排字辈，姓后直接缀名，同辈不共字。余下是执事仆役，另姓。
  */
 export function rollManor(
   cityId: string,
@@ -561,9 +561,12 @@ export function rollManor(
   const standing = pick(MANOR_STANDINGS);
   const label = `${cityName}·${surname}府`;
 
-  // 三个辈分各取一个辈字，尊辈、父辈、子辈各不同
+  // 三个辈分各取一个辈字，尊辈、父辈、子辈各不同；西域不排字辈，辈字一律留空
+  const usesGeneration = culture !== "西域";
   const charPool = GENERATION_CHARS.slice();
-  const genChars = [0, 1, 2].map(() => charPool.splice(Math.floor(Math.random() * charPool.length), 1)[0]);
+  const genChars = usesGeneration
+    ? [0, 1, 2].map(() => charPool.splice(Math.floor(Math.random() * charPool.length), 1)[0])
+    : ["", "", ""];
 
   // 尊辈两人、父辈三人固定，子辈二至四人：本家合计七到九人
   const pool = KIN_TITLES.slice();
@@ -584,7 +587,8 @@ export function rollManor(
     const appearance = pick(APPEARANCES);
     const personality = pick(PERSONALITIES);
     const origin = `${surname}家本支`;
-    // 姓 + 辈字 + 名；同辈的第二个字一律相同，第三个字各取一个不重样的
+    // 姓 + 辈字 + 名；同辈的第二个字一律相同，第三个字各取一个不重样的。
+    // 西域不排字辈，辈字是空串，姓后直接缀名。
     const mid = genChars[gen];
     let given = pickKinChar(gender, culture);
     for (let i = 0; i < 12 && usedNames.has(surname + mid + given); i++) {

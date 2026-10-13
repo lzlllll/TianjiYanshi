@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Flag, Landmark, Layers, PencilRuler, Sparkles, Trash2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { factionColor, renderTerritoryOverlay, type TerritorySeed } from "@/lib/territory";
+import { factionColor } from "@/lib/territory";
 import { occupationTribute } from "@/data/occupations";
 import { SectMapView } from "./SectMapView";
 import { useAIStore } from "@/store/useAIStore";
@@ -186,10 +186,8 @@ export function WorldMap({
   const [villageKey, setVillageKey] = useState<string | null>(null);
   // 点到城里一格空地：问一声要不要买下来做宅地
   const [plotOffer, setPlotOffer] = useState<{ index: number; label: string } | null>(null);
-  // 地图模式：寻常舆图，或按势力给领地上色的势力范围图
+  // 地图模式：寻常舆图，或按所属门派给各处图标染色的势力图
   const [mapMode, setMapMode] = useState<"normal" | "territory">("normal");
-  const [territoryUrl, setTerritoryUrl] = useState("");
-  const [territoryErr, setTerritoryErr] = useState("");
   // 点到的宗教场所或官府：这两处暂未开放，只回一句
   const [comingSoon, setComingSoon] = useState<string | null>(null);
   const dragRef = useRef<{
@@ -208,89 +206,51 @@ export function WorldMap({
   const base = { w: scene.width, h: scene.height };
   const place = getMarker(currentPlaceId);
 
-  // 势力范围的种子：各宗门各是一处；占了城村的，另在城村处为那一家生根
-  const territorySeeds: TerritorySeed[] = useMemo(() => {
-    const byId = new Map(sectSites.map((s) => [s.id, s]));
-    const list: TerritorySeed[] = [];
+  // 立了门户的各家：各取一色，本门另用一色
+  const sectFaction = useMemo(() => {
+    const m = new Map<string, { color: string; label: string; mine?: boolean }>();
     sectSites.forEach((s) => {
       if (!s?.name) return;
-      list.push({
-        x: s.x,
-        y: s.y,
-        color: factionColor(s.id, s.mine),
-        label: `${s.name}${s.mine ? "（本门）" : ""}`,
-        mine: s.mine,
+      m.set(s.id, { color: factionColor(s.id, s.mine), label: s.name, mine: s.mine });
+    });
+    return m;
+  }, [sectSites]);
+
+  // 城村归谁：占了便照占有那一家取色，图标与名下一并照标
+  const holdFaction = useMemo(() => {
+    const m = new Map<string, { color: string; label: string; mine?: boolean }>();
+    occupations.forEach((o) => {
+      const own = sectFaction.get(o.ownerSectId);
+      m.set(`${o.kind}:${o.targetId}`, {
+        color: own?.color ?? factionColor(o.ownerSectId, false),
+        label: o.ownerName || own?.label || o.ownerSectId,
+        mine: own?.mine,
       });
     });
-    occupations.forEach((o) => {
-      const owner = byId.get(o.ownerSectId);
-      if (o.kind === "city") {
-        const m = getMarker(o.targetId);
-        if (!m) return;
-        list.push({ x: m.x, y: m.y, color: factionColor(o.ownerSectId, owner?.mine), label: o.ownerName, mine: owner?.mine });
-      } else {
-        const v = villages[o.targetId];
-        if (!v) return;
-        list.push({ x: v.x, y: v.y, color: factionColor(o.ownerSectId, owner?.mine), label: o.ownerName, mine: owner?.mine });
-      }
-    });
-    return list;
-  }, [sectSites, occupations, villages]);
+    return m;
+  }, [occupations, sectFaction]);
 
-  // 切到势力范围时现画一张图：从底图取样避开蓝水，再按最近势力逐格上色
-  useEffect(() => {
-    if (mapMode !== "territory" || scene.kind !== "world") return;
-    if (!sceneImage || territorySeeds.length === 0) {
-      setTerritoryUrl("");
-      setTerritoryErr(territorySeeds.length === 0 ? "舆图上还没有立起门户，谈不上势力范围。" : "");
-      return;
-    }
-    let cancelled = false;
-    const img = new Image();
-    img.onload = () => {
-      if (cancelled) return;
-      try {
-        setTerritoryErr("");
-        setTerritoryUrl(
-          renderTerritoryOverlay({
-            img,
-            width: base.w,
-            height: base.h,
-            seeds: territorySeeds,
-            step: 4,
-          }),
-        );
-      } catch (e) {
-        setTerritoryUrl("");
-        setTerritoryErr((e as Error).message || "势力范围画不出来。");
-      }
-    };
-    img.onerror = () => {
-      if (!cancelled) setTerritoryErr("底图读取不到，势力范围画不出来。");
-    };
-    img.src = sceneImage;
-    return () => {
-      cancelled = true;
-    };
-  }, [mapMode, scene.kind, sceneImage, base.w, base.h, territorySeeds]);
+  /** 某一处图标眼下归谁；没被占便是空 */
+  const factionAt = (kind: "city" | "village", id: string) => holdFaction.get(`${kind}:${id}`);
 
   // 图例：按势力归并，本门排在前头
   const territoryLegend = useMemo(() => {
     const map = new Map<string, { key: string; label: string; color: string; mine?: boolean; holds: number }>();
-    territorySeeds.forEach((s) => {
-      const name = s.label.replace(/（本门）$/, "");
-      const cur = map.get(name);
+    const add = (f: { color: string; label: string; mine?: boolean }) => {
+      const cur = map.get(f.label);
       if (cur) {
         cur.holds += 1;
-        cur.mine = cur.mine || s.mine;
+        cur.mine = cur.mine || f.mine;
       } else {
-        map.set(name, { key: name, label: name, color: s.color, mine: s.mine, holds: 1 });
+        map.set(f.label, { key: f.label, label: f.label, color: f.color, mine: f.mine, holds: 1 });
       }
-    });
+    };
+    sectFaction.forEach(add);
+    holdFaction.forEach(add);
     return [...map.values()].sort(
       (a, b) => (b.mine ? 1 : 0) - (a.mine ? 1 : 0) || b.holds - a.holds,
     );
-  }, [territorySeeds]);
+  }, [sectFaction, holdFaction]);
 
   const selected = selectedId ? getMarker(selectedId) : undefined;
   // 点开的是城，顺带看它的拥有者与驻城执事
@@ -883,16 +843,6 @@ export function WorldMap({
               className="block w-full h-full max-w-none"
               style={{ opacity: fit.w ? 1 : 0 }}
             />
-            {/* 势力范围：另一层覆在舆图上，同样跟着地图一起缩放 */}
-            {mapMode === "territory" && territoryUrl && (
-              <img
-                src={territoryUrl}
-                alt="势力范围"
-                draggable={false}
-                className="pointer-events-none absolute inset-0 block w-full h-full max-w-none"
-                style={{ opacity: fit.w ? 1 : 0 }}
-              />
-            )}
           </>
         ) : (
           <div className="flex h-full w-full items-center justify-center font-serif text-sm text-paper-400/60">
@@ -933,11 +883,14 @@ export function WorldMap({
           const point = projectToScreen(marker.x, marker.y);
           if (!point) return null;
           const style = MARKER_STYLE[marker.kind];
+          // 势力图上：被占了的城照占有那一家染色，名下再缀一行归属
+          const faction =
+            mapMode === "territory" && marker.kind === "city" ? factionAt("city", marker.id) : undefined;
           return (
             <button
               key={marker.id}
               type="button"
-              title={marker.name}
+              title={faction ? `${marker.name} · 属${faction.label}` : marker.name}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setSelectedId(marker.id)}
               className="pointer-events-auto absolute flex items-center justify-center"
@@ -950,17 +903,30 @@ export function WorldMap({
             >
               <span
                 className={cn("block shadow-[0_0_6px_rgba(0,0,0,0.85)]", style.className)}
-                style={{ width: style.size, height: style.size }}
+                style={{
+                  width: style.size,
+                  height: style.size,
+                  ...(faction ? { backgroundColor: faction.color, borderColor: faction.color } : {}),
+                }}
               />
               <span
-                className="absolute top-full whitespace-nowrap font-brush text-xs leading-none text-paper-100"
-                style={{
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  textShadow: "0 1px 2px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.85)",
-                }}
+                className="absolute top-full flex flex-col items-center whitespace-nowrap"
+                style={{ left: "50%", transform: "translateX(-50%)" }}
               >
-                {marker.name}
+                <span
+                  className="font-brush text-xs leading-none text-paper-100"
+                  style={{ textShadow: "0 1px 2px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.85)" }}
+                >
+                  {marker.name}
+                </span>
+                {faction && (
+                  <span
+                    className="mt-0.5 rounded-sm px-1 font-brush text-[10px] leading-tight text-ink-darkest shadow-[0_0_6px_rgba(0,0,0,0.85)]"
+                    style={{ backgroundColor: faction.color }}
+                  >
+                    {faction.label}
+                  </span>
+                )}
               </span>
             </button>
           );
@@ -972,11 +938,13 @@ export function WorldMap({
           .map((v) => {
             const point = projectToScreen(v.x, v.y);
             if (!point) return null;
+            // 势力图上：被占了的村照占有那一家染色，名下再缀一行归属
+            const faction = mapMode === "territory" ? factionAt("village", v.key) : undefined;
             return (
               <button
                 key={v.key}
                 type="button"
-                title={`${v.name}${v.inquired ? "" : v.visited ? "（尚未打听）" : "（尚未前往）"}`}
+                title={`${v.name}${faction ? ` · 属${faction.label}` : ""}${v.inquired ? "" : v.visited ? "（尚未打听）" : "（尚未前往）"}`}
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
                 onClick={() => {
@@ -994,8 +962,12 @@ export function WorldMap({
                 }}
               >
                 <span
-                  className="flex items-center justify-center rounded-sm border border-pine-400 bg-pine-700 font-brush text-[10px] leading-none text-paper-50 shadow-[0_0_6px_rgba(0,0,0,0.85)]"
-                  style={{ width: SECT_MARK_SIZE, height: SECT_MARK_SIZE }}
+                  className="flex items-center justify-center rounded-sm border border-pine-400 font-brush text-[10px] leading-none text-paper-50 shadow-[0_0_6px_rgba(0,0,0,0.85)]"
+                  style={{
+                    width: SECT_MARK_SIZE,
+                    height: SECT_MARK_SIZE,
+                    ...(faction ? { backgroundColor: faction.color, borderColor: faction.color } : { backgroundColor: "#3d5a4a" }),
+                  }}
                 >
                   村
                 </span>
@@ -1008,10 +980,18 @@ export function WorldMap({
                   </span>
                 )}
                 <span
-                  className="absolute top-full whitespace-nowrap font-brush text-[10px] leading-none text-paper-100"
+                  className="absolute top-full flex flex-col items-center whitespace-nowrap"
                   style={{ left: "50%", transform: "translateX(-50%)" }}
                 >
-                  {v.name}
+                  <span className="font-brush text-[10px] leading-none text-paper-100">{v.name}</span>
+                  {faction && (
+                    <span
+                      className="mt-0.5 rounded-sm px-1 font-brush text-[10px] leading-tight text-ink-darkest"
+                      style={{ backgroundColor: faction.color }}
+                    >
+                      {faction.label}
+                    </span>
+                  )}
                 </span>
               </button>
             );
@@ -1023,6 +1003,8 @@ export function WorldMap({
           .map((site) => {
             const point = projectToScreen(site.x, site.y);
             if (!point) return null;
+            // 势力图上：各处山门照自己那一家的色，一眼看出谁家在这一带立了门户
+            const faction = mapMode === "territory" ? sectFaction.get(site.id) : undefined;
             return (
               <button
                 key={site.id}
@@ -1046,12 +1028,18 @@ export function WorldMap({
                 <span
                   className={cn(
                     "flex items-center justify-center rounded-sm border font-brush text-[10px] leading-none shadow-[0_0_6px_rgba(0,0,0,0.85)]",
-                    site.mine
-                      ? "border-gold-300 bg-gold-500 text-ink-darkest"
-                      : "border-cinnabar-400/80 bg-ink-900/85 text-cinnabar-300",
+                    faction
+                      ? "border-transparent text-ink-darkest"
+                      : site.mine
+                        ? "border-gold-300 bg-gold-500 text-ink-darkest"
+                        : "border-cinnabar-400/80 bg-ink-900/85 text-cinnabar-300",
                     site.id === sectSiteId && "ring-2 ring-gold-400/80",
                   )}
-                  style={{ width: SECT_MARK_SIZE, height: SECT_MARK_SIZE }}
+                  style={{
+                    width: SECT_MARK_SIZE,
+                    height: SECT_MARK_SIZE,
+                    ...(faction ? { backgroundColor: faction.color, borderColor: faction.color } : {}),
+                  }}
                 >
                   宗
                 </span>
@@ -1239,7 +1227,7 @@ export function WorldMap({
         <span className="rounded border border-gold-500/30 bg-ink-900/85 px-3 py-1.5 font-serif text-xs text-paper-200 backdrop-blur-sm">
           {scene.name}
         </span>
-        {/* 势力范围：只在九州舆图上开，按最近势力给领地上色 */}
+        {/* 势力图：只在九州舆图上开，按所属门派给各处图标染色 */}
         {scene.kind === "world" && (
           <button
             type="button"
@@ -1250,7 +1238,7 @@ export function WorldMap({
                 ? "border-aurora-gold bg-gold-500/25 text-gold-200"
                 : "border-gold-500/30 bg-ink-900/85 text-paper-200 hover:border-gold-400/60 hover:text-gold-400",
             )}
-            title="按最近势力给领地上色，蓝水处留白"
+            title="按所属门派给各处图标染色，名下缀明归属"
           >
             <Layers size={12} /> 势力范围
           </button>
@@ -1344,7 +1332,7 @@ export function WorldMap({
         )}
       </div>
 
-      {/* 势力范围图例：各家一色，附上占地之数；蓝水处留白 */}
+      {/* 势力图图例：各家一色，附上所占处数 */}
       {mapMode === "territory" && scene.kind === "world" && (
         <div
           className="absolute bottom-3 right-3 w-64 max-h-[46vh] overflow-y-auto rounded-lg border border-gold-500/35 bg-ink-900/90 p-3 backdrop-blur-sm"
@@ -1353,8 +1341,10 @@ export function WorldMap({
           <div className="mb-2 flex items-center gap-1.5 font-brush text-sm text-gold-300">
             <Layers size={13} /> 势力范围
           </div>
-          {territoryErr ? (
-            <p className="font-serif text-xs text-cinnabar-300 leading-relaxed">{territoryErr}</p>
+          {territoryLegend.length === 0 ? (
+            <p className="font-serif text-xs text-cinnabar-300 leading-relaxed">
+              舆图上还没有立起门户，也无人占城据村。
+            </p>
           ) : (
             <>
               <div className="space-y-1">
@@ -1377,7 +1367,7 @@ export function WorldMap({
                 ))}
               </div>
               <p className="mt-2 font-serif text-[11px] text-paper-400/50 leading-relaxed">
-                蓝水处留白；离各处势力太远的荒野，不归任何一家。
+                图标按所属门派染色，名下缀一行归属；无人占据的城村仍是原色。
               </p>
             </>
           )}
