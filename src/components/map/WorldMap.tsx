@@ -544,8 +544,9 @@ export function WorldMap({
       return;
     }
 
-    if (tiles[index] !== BLOCK_TILE) {
-      // 空地上可以置一块宅地做宅邸；已经置过的那一格不再问
+    // 置宅地只认空地：水面、山体、街道、林地都动不得
+    if (tiles[index] === EMPTY_TILE) {
+      // 已经置过的那一格不再问
       const taken = manorPlots.some((p) => p.cityId === place.id && p.districtId === index);
       if (!taken) {
         setPlotOffer({
