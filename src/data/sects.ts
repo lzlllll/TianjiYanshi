@@ -604,8 +604,12 @@ export function rollSectDraft(params: {
 
   // 名号是「前缀 + 地貌用字」拼的，撞上一处便再拼一回
   let name = pickOne(prefixes) + pickOne(suffixes);
-  for (let i = 0; i < 20 && used.has(name); i++) {
+  for (let i = 0; i < 40 && used.has(name); i++) {
     name = pickOne(prefixes) + pickOne(suffixes);
+  }
+  // 前缀与地貌字都撞满了，缀一个次序，仍不与众家重号
+  for (let n = 2; used.has(name); n++) {
+    name = `${pickOne(prefixes)}${pickOne(suffixes)}${n}`;
   }
 
   const combo = rollSectCombo(culture, rand);

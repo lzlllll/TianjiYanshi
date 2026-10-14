@@ -3894,6 +3894,9 @@ EFFECT: [效果描述]`,
 
         const cities = getCityMarkers();
         const next: Record<string, Village> = { ...(st.villages ?? {}) };
+        // 本局已经用过的村名：新立的照它剔除，一局之内不重号
+        const usedNames = new Set<string>();
+        for (const v of Object.values(st.villages ?? {})) if (v?.name) usedNames.add(v.name);
         let added = 0;
         for (const p of free) {
           if (room <= 0) break;
@@ -3904,12 +3907,14 @@ EFFECT: [效果描述]`,
           // 村庄属哪个文化圈，照离它最近的那座城来定：村名与村里人的姓名都随这一圈取，
           // 各圈各异，不至于天下村庄同一个名、同一个姓。
           const culture = presetCulture(p, cities);
+          const name = rollVillageName(culture, usedNames);
+          usedNames.add(name);
           next[key] = {
             key,
             sceneId,
             x: p.x,
             y: p.y,
-            name: rollVillageName(culture),
+            name,
             culture,
             buildings: [],
             npcs: [],
