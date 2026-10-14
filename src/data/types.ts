@@ -1997,6 +1997,10 @@ export type DataOp =
   | { kind: "delete"; collection: string; id: string };
 
 export interface AISettings {
+  /**
+   * 自定义接口。两项都填齐时，推演直接走玩家自己的接口；
+   * 留空则一律走后端转发（后端持密钥）。
+   */
   baseUrl: string;
   apiKey: string;
   flashModel: string;

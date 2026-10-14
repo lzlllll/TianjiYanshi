@@ -11,11 +11,21 @@ node_modules
 dist
 dist-local
 dist-ssr
+release
 *.local
 
 # 本地测试与浏览器缓存产物
 .playtest/
 .ab/
+
+# 额度结算服务的运行期账本
+server/data/
+
+# 游戏目录下的存档夹（运行期生成）
+saves/
+
+# 独立的 Cloudflare 转发后端项目：单独上传 GitHub，不随游戏仓库走
+tianji-ai-proxy/
 
 # Editor directories and files
 .vscode/*

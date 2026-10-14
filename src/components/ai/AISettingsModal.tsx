@@ -3,9 +3,13 @@ import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { chatWithModel } from "@/lib/aiClient";
 import type { AISettings } from "@/data/types";
+import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
+import { FREE_MODEL } from "@/data/aiQuota";
+import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
+import { CustomApiModal } from "@/components/ai/CustomApiModal";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
-import { X, Eye, EyeOff, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { X, Loader2, CheckCircle2, AlertTriangle, Plug } from "lucide-react";
 
 interface AISettingsModalProps {
   open: boolean;
@@ -18,37 +22,6 @@ type TestState =
   | { status: "ok"; msg: string; model: "flash" | "pro" }
   | { status: "error"; msg: string; model: "flash" | "pro" };
 
-const PRESETS: { label: string; baseUrl: string; flash: string; pro: string; note: string }[] = [
-  {
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    flash: "deepseek-v4-flash",
-    pro: "deepseek-v4-pro",
-    note: "默认支持浏览器直连",
-  },
-  {
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    flash: "gpt-4o-mini",
-    pro: "gpt-4o",
-    note: "需配合代理，存在 CORS 限制",
-  },
-  {
-    label: "智谱 GLM",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    flash: "glm-4-flash",
-    pro: "glm-4-plus",
-    note: "OpenAI 兼容接口",
-  },
-  {
-    label: "通义千问",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    flash: "qwen-turbo",
-    pro: "qwen-max",
-    note: "阿里云 DashScope",
-  },
-];
-
 export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
   const settings = useAIStore((s) => s.settings);
   const updateSettings = useAIStore((s) => s.updateSettings);
@@ -60,9 +33,10 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
   const startBattle = useAIStore((s) => s.startBattle);
 
   const [draft, setDraft] = useState<AISettings>(settings);
-  const [showKey, setShowKey] = useState(false);
   const [test, setTest] = useState<TestState>({ status: "idle" });
   const [saved, setSaved] = useState(false);
+  // 「自定义接口」那扇窗单独开：它自己存自己的，随此处一同关上也无妨
+  const [customApiOpen, setCustomApiOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
 
@@ -96,25 +70,28 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
 
   const patch = (p: Partial<AISettings>) => setDraft((d) => ({ ...d, ...p }));
 
-  const applyPreset = (preset: (typeof PRESETS)[number]) => {
+  // 是否已启用自定义接口；以已保存的设置为准，那扇窗自己保存自己
+  const customActive = hasCustomApi(settings);
+
+  // 当前是否正用着官方的免费模型：模型名对得上，且没另接自己的接口
+  const freeActive =
+    !hasCustomApi(draft) &&
+    draft.flashModel === FREE_MODEL.model &&
+    draft.proModel === FREE_MODEL.model;
+
+  // 选用免费模型：写回模型名，并把自定义接口让开——免费额度本就是后端供给的
+  const applyFreeModel = () => {
     setDraft((d) => ({
       ...d,
-      baseUrl: preset.baseUrl,
-      flashModel: preset.flash,
-      proModel: preset.pro,
+      baseUrl: "",
+      apiKey: "",
+      flashModel: FREE_MODEL.model,
+      proModel: FREE_MODEL.model,
     }));
     setTest({ status: "idle" });
   };
 
   const runTest = async (which: "flash" | "pro") => {
-    if (!draft.apiKey.trim()) {
-      setTest({
-        status: "error",
-        msg: "请先填写 API Key",
-        model: which,
-      });
-      return;
-    }
     setTest({ status: "testing" });
     try {
       const model = which === "flash" ? draft.flashModel : draft.proModel;
@@ -198,83 +175,36 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
         </div>
 
         <div className="px-6 py-5 space-y-5">
-          {/* 预设 */}
-          <section>
-            <SectionLabel>接口预设</SectionLabel>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
-              {PRESETS.map((p) => {
-                const active = draft.baseUrl === p.baseUrl;
-                return (
-                  <button
-                    key={p.label}
-                    onClick={() => applyPreset(p)}
-                    className={cn(
-                      "px-3 py-2 rounded text-left border transition-all",
-                      active
-                        ? "border-gold-400/60 bg-gold-400/10"
-                        : "border-paper-400/15 hover:border-gold-500/40 hover:bg-paper-400/5",
-                    )}
-                    title={p.note}
-                  >
-                    <div
-                      className={cn(
-                        "font-brush text-sm tracking-wider",
-                        active ? "text-gold-400" : "text-paper-200",
-                      )}
-                    >
-                      {p.label}
-                    </div>
-                    <div className="font-serif text-xs text-paper-400/60 mt-0.5 leading-tight">
-                      {p.note}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+          {/* 额度内购：目前只开免费模型一档，付费套餐待开 */}
+          <QuotaShopPanel freeActive={freeActive} onSelectFree={applyFreeModel} />
 
-          {/* Base URL */}
-          <section>
-            <SectionLabel>Base URL</SectionLabel>
-            <input
-              type="text"
-              value={draft.baseUrl}
-              onChange={(e) => patch({ baseUrl: e.target.value })}
-              placeholder="https://api.deepseek.com/v1"
-              className="input-ink mt-2"
-              spellCheck={false}
-            />
-            <p className="font-serif text-xs text-paper-400/50 mt-1.5 leading-relaxed">
-              OpenAI 兼容接口根路径，将自动追加 <code className="text-gold-400/80">/chat/completions</code>。
-              若遇 CORS 错误，请更换为支持浏览器直连的服务商或自建代理。
+          {/* 推演去向：默认走后端；自备接口则在此另开一扇窗 */}
+          <section className="rounded border border-paper-400/12 bg-ink-900/30 px-3 py-2.5 space-y-2">
+            <p className="font-serif text-xs leading-relaxed text-paper-300/80">
+              {customActive
+                ? "当前走你自己的接口，推演不再经游戏后端。"
+                : "当前走游戏后端：上游地址与密钥由后端统一持有，本机不保存密钥。"}
             </p>
-          </section>
-
-          {/* API Key */}
-          <section>
-            <SectionLabel>API Key</SectionLabel>
-            <div className="relative mt-2">
-              <input
-                type={showKey ? "text" : "password"}
-                value={draft.apiKey}
-                onChange={(e) => patch({ apiKey: e.target.value })}
-                placeholder="sk-..."
-                className="input-ink pr-10"
-                spellCheck={false}
-                autoComplete="off"
-              />
+            <div className="flex items-center gap-3">
               <button
-                type="button"
-                onClick={() => setShowKey((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center text-paper-400/60 hover:text-paper-100 transition"
-                aria-label={showKey ? "隐藏" : "显示"}
+                onClick={() => setCustomApiOpen(true)}
+                className="ghost-btn px-3 py-1.5 rounded text-xs flex items-center gap-1.5"
               >
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                <Plug size={12} /> 自定义接口
               </button>
+              <span
+                className={cn(
+                  "font-serif text-[11px]",
+                  customActive
+                    ? "text-jade-400"
+                    : AI_BACKEND_READY
+                      ? "text-paper-400/60"
+                      : "text-gold-400/80",
+                )}
+              >
+                {customActive ? "已启用" : AI_BACKEND_READY ? "走后端" : "后端未接通"}
+              </span>
             </div>
-            <p className="font-serif text-xs text-paper-400/50 mt-1.5">
-              密钥仅存储于本机 localStorage，不会上传任何第三方服务器。
-            </p>
           </section>
 
           {/* 双模型 */}
@@ -512,6 +442,9 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
           </SealButton>
         </div>
       </div>
+
+      {/* 自定义接口：另开一扇窗，压在本窗之上 */}
+      <CustomApiModal open={customApiOpen} onClose={() => setCustomApiOpen(false)} />
     </div>
   );
 }

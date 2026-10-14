@@ -140,6 +140,7 @@ import {
   REALMS,
   initialPlayer,
 } from "@/data/mockData";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 interface GameStore extends GameState {
   setPanel: (panel: PanelId | null) => void;
@@ -1257,7 +1258,7 @@ export const useGameStore = create<GameStore>()(
               const { useAIStore } = await import("@/store/useAIStore");
               const aiSettings = useAIStore.getState().settings;
 
-              if (aiSettings.apiKey) {
+              if (AI_BACKEND_READY) {
                 const herbsText = selectedHerbs.map((h) => `${h.name}×${h.count}`).join(",");
                 const elementsText = ELEMENTS.map((e) => `${e}:${finalElements[e]}`).join(",");
 

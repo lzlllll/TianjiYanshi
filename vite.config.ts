@@ -3,34 +3,15 @@ import react from '@vitejs/plugin-react'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { resolve, join } from 'path';
 
+/**
+ * 开发态下前端跑在 Vite 上，而推演转发、自定义接口代理与存档夹都在本地服务里，
+ * 故把 /api 整段代理到本地服务（开发时另行执行 npm run serve:local）。
+ * 构建产物不走这里：本地版与 exe 同源直达，线上版填 src/data/backend.ts 里的后端地址。
+ */
 const PROXY = {
-  '/api/deepseek': {
-    target: 'https://api.deepseek.com/v1',
+  '/api': {
+    target: 'http://127.0.0.1:5180',
     changeOrigin: true,
-    rewrite: (path: string) => path.replace(/^\/api\/deepseek/, ''),
-    secure: true,
-    timeout: 120000,
-  },
-  '/api/openai': {
-    target: 'https://api.openai.com/v1',
-    changeOrigin: true,
-    rewrite: (path: string) => path.replace(/^\/api\/openai/, ''),
-    secure: true,
-    timeout: 120000,
-  },
-  '/api/glm': {
-    target: 'https://open.bigmodel.cn/api/paas/v4',
-    changeOrigin: true,
-    rewrite: (path: string) => path.replace(/^\/api\/glm/, ''),
-    secure: true,
-    timeout: 120000,
-  },
-  '/api/qwen': {
-    target: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    changeOrigin: true,
-    rewrite: (path: string) => path.replace(/^\/api\/qwen/, ''),
-    secure: true,
-    timeout: 120000,
   },
 };
 

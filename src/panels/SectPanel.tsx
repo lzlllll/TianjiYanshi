@@ -26,6 +26,7 @@ import {
 import { facilityInfo } from "@/data/sectFacilities";
 import { sectModifierSpec } from "@/data/sectModifiers";
 import type { SectShopItem } from "@/data/types";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 type SubTab = "overview" | "position" | "task" | "shop" | "heritage" | "relations" | "management";
 
@@ -897,7 +898,7 @@ function HeritageBoard() {
   const learnHeritage = useGameStore((s) => s.learnHeritage);
   const preachScripture = useGameStore((s) => s.preachScripture);
   const narrateFacility = useAIStore((s) => s.narrateFacility);
-  const hasModel = !!useAIStore((s) => s.settings.apiKey);
+  const hasModel = AI_BACKEND_READY;
   const [topic, setTopic] = useState(PREACH_TOPICS[0]);
   const [hint, setHint] = useState("");
   // 参悟与讲经各出一段自己的叙事，与问道那一路分开

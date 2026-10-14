@@ -6,18 +6,20 @@ import { cn } from "@/lib/utils";
 import { GAME_TITLE_BOOK, GAME_VERSION } from "@/lib/gameInfo";
 import { SealButton } from "@/components/ui/SealButton";
 import {
-  Eye,
-  EyeOff,
-  Upload,
-  Download,
+  FolderOpen,
   RotateCcw,
   MoreHorizontal,
   Check,
   Zap,
   ClipboardPaste,
+  Plug,
   X,
 } from "lucide-react";
-import type { AISettings, GameSnapshot } from "@/data/types";
+import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
+import { FREE_MODEL } from "@/data/aiQuota";
+import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
+import { CustomApiModal } from "@/components/ai/CustomApiModal";
+import type { AISettings } from "@/data/types";
 
 interface PlayerSetup {
   name: string;
@@ -46,37 +48,6 @@ const REALM_NOTES: Record<string, string> = {
   渡劫: "天雷将至，成败在此一举",
   大乘: "只差一步，登临仙界",
 };
-
-const API_PRESETS: { label: string; baseUrl: string; flash: string; pro: string; note: string }[] = [
-  {
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    flash: "deepseek-v4-flash",
-    pro: "deepseek-v4-pro",
-    note: "默认支持浏览器直连",
-  },
-  {
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    flash: "gpt-4o-mini",
-    pro: "gpt-4o",
-    note: "需配合代理，存在 CORS 限制",
-  },
-  {
-    label: "智谱 GLM",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    flash: "glm-4-flash",
-    pro: "glm-4-plus",
-    note: "OpenAI 兼容接口",
-  },
-  {
-    label: "通义千问",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    flash: "qwen-turbo",
-    pro: "qwen-max",
-    note: "阿里云 DashScope",
-  },
-];
 
 type StepId = "api" | "name" | "realm" | "sect" | "self" | "seal";
 
@@ -249,12 +220,14 @@ export function StartSetup() {
   });
 
   const settings = useAIStore((s) => s.settings);
-  const configured = !!settings.apiKey.trim();
+  // 上游与密钥都由后端持有，本机只挑模型名；有后端即算已配置
+  const configured = AI_BACKEND_READY;
 
   const [stepId, setStepId] = useState<StepId>(() => (configured ? "name" : "api"));
   const [reached, setReached] = useState(0);
-  const [showApiKey, setShowApiKey] = useState(false);
   const [apiDraft, setApiDraft] = useState<AISettings>(settings);
+  // 「自定义接口」另开一扇窗；它自己存自己
+  const [customApiOpen, setCustomApiOpen] = useState(false);
   // 从后头几步点「通灵」折回来改配置时，记下原先停在哪一步，存过便送回去，不必自己再点回去
   const [apiReturn, setApiReturn] = useState<StepId | null>(null);
   const [showMenu, setShowMenu] = useState(false);
@@ -279,14 +252,7 @@ export function StartSetup() {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, [showMenu]);
 
-  // 草稿只在挂载时取过一次；若那会儿还没取到已存的设置，或别处改过通灵设置，
-  // 这里补对齐一回——否则密钥栏空着、按钮锁着，人也不知究竟为何
-  useEffect(() => {
-    if (apiDraft.apiKey.trim() || !settings.apiKey.trim()) return;
-    setApiDraft(settings);
-  }, [settings, apiDraft.apiKey]);
-
-  // 「通灵」这一步始终留着：接口配好后仍旧能点回来改——换密钥、换模型、换 Base URL。
+  // 「通灵」这一步始终留着：配好后仍旧能点回来选额度、换模型名。
   // 从前配好便把它藏起来，反倒没处可改。
   const steps = STEP_DEFS;
   const foundIndex = steps.findIndex((s) => s.id === stepId);
@@ -295,8 +261,8 @@ export function StartSetup() {
   const isLast = activeIndex === steps.length - 1;
 
   const stepValid = (id: StepId): boolean => {
-    // 以草稿为准，别让首帧没取到的旧值把这一步锁死
-    if (id === "api") return apiDraft.apiKey.trim() !== "";
+    // 「通灵」这一步不再要人填密钥，只要后端接通即可放行
+    if (id === "api") return AI_BACKEND_READY;
     if (id === "name") return setup.name.trim() !== "";
     if (id === "self") return setup.description.trim() !== "";
     return true;
@@ -338,20 +304,26 @@ export function StartSetup() {
     setReached((r) => Math.max(r, ni));
   };
 
-  const applyApiPreset = (preset: (typeof API_PRESETS)[number]) => {
+  // 是否已启用自定义接口（以草稿为准，保存后生效）
+  const customActive = hasCustomApi(apiDraft);
+
+  // 当前草稿是否正落在官方的免费模型上：模型名对得上，且没另接自己的接口
+  const freeActive =
+    !customActive &&
+    apiDraft.flashModel === FREE_MODEL.model &&
+    apiDraft.proModel === FREE_MODEL.model;
+
+  // 选用免费模型：写回模型名，并把自定义接口让开——免费额度本就是后端供给的
+  const applyFreeModel = () =>
     setApiDraft((d) => ({
       ...d,
-      baseUrl: preset.baseUrl,
-      flashModel: preset.flash,
-      proModel: preset.pro,
+      baseUrl: "",
+      apiKey: "",
+      flashModel: FREE_MODEL.model,
+      proModel: FREE_MODEL.model,
     }));
-  };
 
   const saveApiSettings = () => {
-    if (!apiDraft.apiKey.trim()) {
-      setError("请先填入接口密钥，再保存。");
-      return;
-    }
     updateSettings(apiDraft);
     setError("");
     // 由后头几步折回来改配置的，存过送回原处；余下情形顺着往下走一步，
@@ -486,41 +458,11 @@ ${OPENING_BRIEF}`,
     );
   };
 
-  const exportSave = () => {
+  // 存档交给游戏内的存档管理窗：列档、存档、读档、删档都在那里，
+  // 此处不再弹系统文件选择框
+  const openSaveManager = () => {
     setShowMenu(false);
-    const snapshot = useGameStore.getState().getSnapshot();
-    const saveData = { game: snapshot, ai: useAIStore.getState(), timestamp: Date.now() };
-    const blob = new Blob([JSON.stringify(saveData, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `save_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importSave = () => {
-    setShowMenu(false);
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const saveData = JSON.parse(text);
-        if (saveData.game) useGameStore.getState().restoreSnapshot(saveData.game as GameSnapshot);
-        if (saveData.ai?.settings) updateSettings(saveData.ai.settings);
-        if (saveData.ai?.conversation) {
-          useAIStore.getState().restoreConversation(saveData.ai.conversation);
-        }
-        window.location.reload();
-      } catch (err) {
-        setError(`导入存档失败：${(err as Error).message}`);
-      }
-    };
-    input.click();
+    useAIStore.getState().setSaveManagerOpen(true);
   };
 
   const startNewGame = () => {
@@ -609,16 +551,10 @@ ${OPENING_BRIEF}`,
                   style={{ animation: "inkSpread 0.2s ease-out" }}
                 >
                   <button
-                    onClick={exportSave}
+                    onClick={openSaveManager}
                     className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-paper-200 hover:bg-gold-500/10 transition-colors"
                   >
-                    <Download size={14} className="text-paper-400" /> 导出存档
-                  </button>
-                  <button
-                    onClick={importSave}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-paper-200 hover:bg-gold-500/10 transition-colors"
-                  >
-                    <Upload size={14} className="text-paper-400/70" /> 导入存档
+                    <FolderOpen size={14} className="text-paper-400" /> 存档管理
                   </button>
                   {turns.length > 0 && (
                     <>
@@ -864,6 +800,17 @@ ${OPENING_BRIEF}`,
 
       {/* 开局推演时的等待页 */}
       {isGenerating && <OpeningLoading />}
+
+      {/* 自定义接口：另开一扇窗；它自己存自己 */}
+      <CustomApiModal
+        open={customApiOpen}
+        onClose={() => {
+          setCustomApiOpen(false);
+          // 那扇窗保存后本机设置已变，这里把草稿重新对齐，
+          // 免得「保存并继续」拿旧草稿把刚填的接口覆盖掉
+          setApiDraft(useAIStore.getState().settings);
+        }}
+      />
     </div>
   );
 
@@ -885,70 +832,20 @@ ${OPENING_BRIEF}`,
     return (
       <div className="space-y-4">
         <p className="font-serif text-sm ps-body leading-relaxed">
-          本作的推演依赖大语言模型。请先填入接口密钥，之后的所有剧情都由它与你共同推演。
+          本作的推演由大语言模型担纲。默认走游戏后端，接口与密钥都由后端操持，本机不必填写；
+          这里选好额度与模型名即可。若你有自己的接口，也可另开「自定义接口」直接使用。
         </p>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {API_PRESETS.map((p) => {
-            const active = apiDraft.baseUrl === p.baseUrl;
-            return (
-              <button
-                key={p.label}
-                onClick={() => applyApiPreset(p)}
-                className={cn(
-                  "px-3 py-2 rounded text-left border-2 transition-all",
-                  active
-                    ? "border-cinnabar bg-cinnabar"
-                    : "border-ink-medium hover:border-cinnabar",
-                )}
-                title={p.note}
-              >
-                <div className={cn("font-brush text-sm tracking-wider", active ? "ps-accent" : "ps-body")}>
-                  {p.label}
-                </div>
-                <div className="font-serif text-xs ps-muted mt-0.5 leading-tight">{p.note}</div>
-              </button>
-            );
-          })}
-        </div>
+        <QuotaShopPanel freeActive={freeActive} onSelectFree={applyFreeModel} />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <label className="block">
-            <span className="block font-serif text-xs ps-muted mb-1">Base URL</span>
-            <input
-              type="text"
-              value={apiDraft.baseUrl}
-              onChange={(e) => setApiDraft((d) => ({ ...d, baseUrl: e.target.value }))}
-              placeholder="https://api.deepseek.com/v1"
-              className="input-paper px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="block font-serif text-xs ps-muted mb-1">API Key</span>
-            <span className="relative block">
-              <input
-                type={showApiKey ? "text" : "password"}
-                value={apiDraft.apiKey}
-                onChange={(e) => setApiDraft((d) => ({ ...d, apiKey: e.target.value }))}
-                placeholder="sk-..."
-                className="input-paper px-3 py-2 text-sm pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center ps-muted hover:ps-accent transition"
-              >
-                {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </span>
-          </label>
           <label className="block">
             <span className="block font-serif text-xs ps-muted mb-1">Flash 模型（判定与压缩）</span>
             <input
               type="text"
               value={apiDraft.flashModel}
               onChange={(e) => setApiDraft((d) => ({ ...d, flashModel: e.target.value }))}
-              placeholder="deepseek-chat"
+              placeholder="moonshotai/kimi-k3-free"
               className="input-paper px-3 py-2 text-sm"
             />
           </label>
@@ -958,10 +855,24 @@ ${OPENING_BRIEF}`,
               type="text"
               value={apiDraft.proModel}
               onChange={(e) => setApiDraft((d) => ({ ...d, proModel: e.target.value }))}
-              placeholder="deepseek-reasoner"
+              placeholder="moonshotai/kimi-k3-free"
               className="input-paper px-3 py-2 text-sm"
             />
           </label>
+        </div>
+
+        {/* 推演去向：默认走后端，也可自备接口 */}
+        <div className="flex flex-wrap items-center gap-3 rounded border border-[rgba(36,31,26,0.16)] px-3 py-2.5">
+          <button
+            type="button"
+            onClick={() => setCustomApiOpen(true)}
+            className="btn-paper px-4 py-1.5 rounded font-serif text-xs flex items-center gap-1.5"
+          >
+            <Plug size={12} /> 自定义接口
+          </button>
+          <span className="font-serif text-xs ps-muted">
+            {customActive ? "已启用：推演走你自己的接口" : "默认走后端，无需填写"}
+          </span>
         </div>
 
         <button

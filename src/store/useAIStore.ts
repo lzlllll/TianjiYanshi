@@ -137,12 +137,15 @@ import {
   recentForPrompt,
   splitForCompression,
 } from "@/lib/contextCompressor";
+import { aiReady } from "@/data/backend";
+import { FREE_MODEL } from "@/data/aiQuota";
 
 const DEFAULT_SETTINGS: AISettings = {
-  baseUrl: "https://api.deepseek.com/v1",
+  // 自定义接口默认留空，一律走后端；模型名默认即免费模型
+  baseUrl: "",
   apiKey: "",
-  flashModel: "deepseek-v4-flash",
-  proModel: "deepseek-v4-pro",
+  flashModel: FREE_MODEL.model,
+  proModel: FREE_MODEL.model,
   temperature: 0.85,
   customPrompt: "",
 };
@@ -884,6 +887,12 @@ interface AIStore {
    */
   isStoryOpen: boolean;
   setStoryOpen: (open: boolean) => void;
+  /**
+   * 存档管理窗口开着没有。
+   * 主菜单与游戏内共用同一扇窗：列档、存档、读档、删档都在游戏内完成，不弹系统文件框。
+   */
+  isSaveManagerOpen: boolean;
+  setSaveManagerOpen: (open: boolean) => void;
   updateSettings: (patch: Partial<AISettings>) => void;
   runTurn: (decision: string, opts?: { travelToAdventureId?: string }) => Promise<void>;
   regenerate: () => Promise<void>;
@@ -1771,8 +1780,10 @@ export const useAIStore = create<AIStore>()(
       narrativeHaggle: null,
       narrativeShop: null,
       isStoryOpen: true,
+      isSaveManagerOpen: false,
 
       setStoryOpen: (open) => set({ isStoryOpen: open }),
+      setSaveManagerOpen: (open) => set({ isSaveManagerOpen: open }),
       openNarrativeHaggle: (brief) => set({ narrativeHaggle: brief }),
       closeNarrativeHaggle: () => set({ narrativeHaggle: null }),
       openNarrativeShop: (brief) => set({ narrativeShop: brief }),
@@ -1822,16 +1833,16 @@ export const useAIStore = create<AIStore>()(
 
       listMartialArts: async ({ culture }) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         return listMartialArts(settings, culture);
       },
 
       narrateBusking: async (brief) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         return chatWithModel(settings, settings.proModel, buildBuskingPrompt(brief), {
           timeoutMs: 90000,
@@ -1842,8 +1853,8 @@ export const useAIStore = create<AIStore>()(
 
       narrateEstateDeal: async (brief) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         return chatWithModel(settings, settings.proModel, buildEstateDealPrompt(brief), {
           timeoutMs: 90000,
@@ -1854,8 +1865,8 @@ export const useAIStore = create<AIStore>()(
 
       judgeCrop: async ({ crop, culture }) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         const raw = await chatWithModel(settings, settings.flashModel, buildCropPrompt({ crop, culture }), {
           timeoutMs: 60000,
@@ -1874,8 +1885,8 @@ export const useAIStore = create<AIStore>()(
 
       narrateRentOut: async (brief) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         const raw = await chatWithModel(settings, settings.flashModel, buildRentOutPrompt(brief), {
           timeoutMs: 60000,
@@ -1898,8 +1909,8 @@ export const useAIStore = create<AIStore>()(
 
       manageShop: async ({ shopId, instruction }) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         const shop = (useGameStore.getState().playerShops ?? []).find((s) => s.id === shopId);
         if (!shop) throw new Error("这间铺子已经不在了。");
@@ -1939,8 +1950,8 @@ export const useAIStore = create<AIStore>()(
 
       setupNewShop: async (brief) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         const raw = await chatWithModel(settings, settings.flashModel, buildShopSetupPrompt(brief), {
           timeoutMs: 60000,
@@ -1969,8 +1980,8 @@ export const useAIStore = create<AIStore>()(
 
       designSectBuilding: async (brief) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         const raw = await chatWithModel(settings, settings.flashModel, buildSectBuildPrompt(brief), {
           timeoutMs: 60000,
@@ -1995,8 +2006,8 @@ export const useAIStore = create<AIStore>()(
 
       appraiseEnding: async (narrative) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         return chatWithModel(settings, settings.proModel, buildEndingAppraisalPrompt(narrative), {
           timeoutMs: 90000,
@@ -2029,9 +2040,9 @@ export const useAIStore = create<AIStore>()(
         const { settings, conversation } = get();
         const ctx = conversation.pendingCrafting;
         if (!ctx) return;
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
-            conversation: { ...st.conversation, stage: "error", errorMsg: "尚未配置 API Key。" },
+            conversation: { ...st.conversation, stage: "error", errorMsg: "推演接口尚未接通。" },
           }));
           return;
         }
@@ -2195,12 +2206,12 @@ export const useAIStore = create<AIStore>()(
         const trimmed = decision.trim();
         if (!trimmed) return;
         const { settings } = get();
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
             conversation: {
               ...st.conversation,
               stage: "error",
-              errorMsg: "尚未配置 API Key，请先点击右上角设置按钮填写。",
+              errorMsg: "推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。",
             },
           }));
           return;
@@ -2565,12 +2576,12 @@ export const useAIStore = create<AIStore>()(
         if (conversation.stage === "flash" || conversation.stage === "pro") return;
         const lastTurn = conversation.turns[conversation.turns.length - 1];
         if (!lastTurn) return;
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
             conversation: {
               ...st.conversation,
               stage: "error",
-              errorMsg: "尚未配置 API Key。",
+              errorMsg: "推演接口尚未接通。",
             },
           }));
           return;
@@ -2786,7 +2797,7 @@ export const useAIStore = create<AIStore>()(
         if (st.randomEventDisabled) return;
         // 正在推演、还没有接口、开局那一笔尚未落定，都不必生事
         if (st.conversation.stage === "flash" || st.conversation.stage === "pro") return;
-        if (!st.settings.apiKey) return;
+        if (!aiReady(st.settings)) return;
         // 开局头一段只立人物、铺世界，路上先不生变故：
         // 末一轮正是那一段时按住不掷，等玩家真走过一轮再说
         const lastTurn = st.conversation.turns[st.conversation.turns.length - 1];
@@ -2813,7 +2824,7 @@ export const useAIStore = create<AIStore>()(
         const gs = useGameStore.getState();
         const today = daySerial(gs.currentTime);
 
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((s) => ({
             randomEvent: {
               ...INITIAL_RANDOM_EVENT,
@@ -2871,7 +2882,7 @@ export const useAIStore = create<AIStore>()(
         const content = String(text || "").trim();
         if (!content || randomEvent.busy) return;
 
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((s) => ({ randomEvent: { ...s.randomEvent, errorMsg: "尚未配置通灵接口。" } }));
           return;
         }
@@ -2958,7 +2969,7 @@ export const useAIStore = create<AIStore>()(
 
       maybeSpawnAdventure: (hours) => {
         const st = get();
-        if (!st.settings.apiKey) return;
+        if (!aiReady(st.settings)) return;
         if (st.adventure.active || st.adventure.busy) return;
         if (st.conversation.stage === "flash" || st.conversation.stage === "pro") return;
         if (st.conversation.turns.length === 0) return;
@@ -2986,7 +2997,7 @@ export const useAIStore = create<AIStore>()(
         const today = daySerial(gs.currentTime);
         lastAdventureSpawnDay = today;
 
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           useGameStore.getState().addLog("尚未配置通灵接口，奇遇现掷不出来。");
           return;
         }
@@ -3073,13 +3084,13 @@ export const useAIStore = create<AIStore>()(
           adventure: {
             ...INITIAL_ADVENTURE,
             active: true,
-            busy: !!settings.apiKey,
+            busy: !!aiReady(settings),
             id: adv.id,
             title: adv.name,
           },
         }));
 
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((s) => ({
             adventure: {
               ...s.adventure,
@@ -3121,7 +3132,7 @@ export const useAIStore = create<AIStore>()(
         const content = String(text || "").trim();
         if (!content || adventure.busy || !adventure.opening) return;
 
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((s) => ({ adventure: { ...s.adventure, errorMsg: "尚未配置通灵接口。" } }));
           return;
         }
@@ -3267,7 +3278,7 @@ export const useAIStore = create<AIStore>()(
 
       generateTaskNpcs: async (args) => {
         const { settings } = get();
-        if (!settings.apiKey || args.npcs.length === 0) return;
+        if (!aiReady(settings) || args.npcs.length === 0) return;
         const gs = useGameStore.getState();
         const avoid = (Array.isArray(gs.relations) ? gs.relations : []).map((r) => r?.name).filter(Boolean) as string[];
 
@@ -3342,8 +3353,8 @@ export const useAIStore = create<AIStore>()(
         const existing = npcChat.profiles.find((p) => p.npcId === npcId);
         if (existing) return existing;
 
-        if (!settings.apiKey) {
-          throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通。");
         }
 
         try {
@@ -3505,9 +3516,9 @@ ${DIALOGUE_STYLE}`;
 
       sendNPCMessage: async (npcId, content) => {
         const { npcChat, conversation, settings } = get();
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
-            npcChat: { ...st.npcChat, errorMsg: "尚未配置 API Key。" },
+            npcChat: { ...st.npcChat, errorMsg: "推演接口尚未接通。" },
           }));
           return;
         }
@@ -3877,9 +3888,9 @@ ${craft ? 11 : 10}. ${isDining
         const { settings } = get();
         const party = (Array.isArray(get().npcChat.partyIds) ? get().npcChat.partyIds : []).filter(Boolean);
         if (party.length === 0) return;
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
-            npcChat: { ...st.npcChat, errorMsg: "尚未配置 API Key，请先点击右上角设置按钮填写。" },
+            npcChat: { ...st.npcChat, errorMsg: "推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。" },
           }));
           return;
         }
@@ -4003,7 +4014,7 @@ ${CRAFT_MARK}
 
       probeManor: async ({ label, standing, members }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const roster = members
@@ -4040,7 +4051,7 @@ ${checkInstruction()}`,
 
       probeShop: async ({ name, kind, market, culture }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         // 门口与伙计搭话，也可能考较到眼力耳力
@@ -4076,7 +4087,7 @@ ${checkInstruction()}`,
 
       narrateFacility: async (args) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const {
           sect,
@@ -4132,8 +4143,8 @@ ${nature ? `【宗门性质】${nature}\n` : ""}${climate ? `【宗门风气】$
 
       exploreForest: async ({ place, culture, hours }) => {
         const { settings } = get();
-        if (!settings.apiKey) {
-          throw new Error("尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。");
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
         // 时长是玩家选的参数：最短一个时辰，最长一整日十二个时辰
         const h = Math.min(12, Math.max(1, Math.round(Number(hours) || 1)));
@@ -4166,7 +4177,7 @@ ${nature ? `【宗门性质】${nature}\n` : ""}${climate ? `【宗门风气】$
 
       dineAt: async ({ shop, kind, market, culture, dish, dishDesc, guests }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const seats = guests.length > 0 ? guests.join("、") : "堂里没什么人";
@@ -4224,7 +4235,7 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
 
       lodgeAt: async ({ shop, market, culture, room, roomDesc, days, words }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
 
@@ -4259,7 +4270,7 @@ ${words ? `【睡前撂下的话】${words}\n` : ""}
 
       listenToPlay: async ({ shop, market, culture, skill }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const brief = skillBrief();
@@ -4294,7 +4305,7 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
 
       appraiseItem: async ({ shop, market, culture, itemName, itemDesc, fee }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const brief = skillBrief();
@@ -4340,7 +4351,7 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
 
       findEscort: async ({ shop, market, culture, realm, stones }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const brief = skillBrief();
@@ -4394,7 +4405,7 @@ ${ESCORT_MARK}
         mystery,
       }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const buying = mode === "buy";
@@ -4485,7 +4496,7 @@ ${mystery
 
       askGatekeeper: async ({ label, standing, gatekeeper, members, words }) => {
         const { settings } = get();
-        if (!settings.apiKey) throw new Error("尚未配置 API Key。");
+        if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
         const roster = members.map((m) => `${m.title}：${m.name}`).join("、");
@@ -4710,11 +4721,11 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
 
       runBattleTurn: async (action) => {
         const { settings } = get();
-        if (!settings.apiKey) {
+        if (!aiReady(settings)) {
           set((st) => ({
             battle: {
               ...st.battle,
-              errorMsg: "尚未配置 API Key。",
+              errorMsg: "推演接口尚未接通。",
             },
           }));
           return;
@@ -5112,8 +5123,8 @@ MODIFY player.mp - 10
         if (!body) return;
 
         const { settings } = get();
-        if (!settings.apiKey) {
-          set((st) => ({ battle: { ...st.battle, errorMsg: "尚未配置 API Key。" } }));
+        if (!aiReady(settings)) {
+          set((st) => ({ battle: { ...st.battle, errorMsg: "推演接口尚未接通。" } }));
           return;
         }
 
@@ -5270,8 +5281,8 @@ MODIFY player.mp - 10
         if (!body) return;
 
         const { settings } = get();
-        if (!settings.apiKey) {
-          set((st) => ({ battle: { ...st.battle, errorMsg: "尚未配置 API Key。" } }));
+        if (!aiReady(settings)) {
+          set((st) => ({ battle: { ...st.battle, errorMsg: "推演接口尚未接通。" } }));
           return;
         }
 
@@ -5350,8 +5361,8 @@ MODIFY player.mp - 10
         if (!body) return;
 
         const { settings } = get();
-        if (!settings.apiKey) {
-          set((st) => ({ battle: { ...st.battle, errorMsg: "尚未配置 API Key。" } }));
+        if (!aiReady(settings)) {
+          set((st) => ({ battle: { ...st.battle, errorMsg: "推演接口尚未接通。" } }));
           return;
         }
 

@@ -1,0 +1,44 @@
+# Electron 打包配置（免安装文件夹版）
+#
+# 产出：release/win-unpacked/ 下的整份游戏，双击 天机衍世.exe 即可运行，无需安装。
+# 数据与图片放在 resources/game 下，与 exe 同级目录内，可读写（编辑器回写也落在那里）。
+#
+# 打包前请先执行 npm run build:local 生成 dist-local。
+appId: com.tianjiyanshi.game
+productName: 天机衍世
+
+directories:
+  output: release
+
+# 只收进游戏本体：网页产物、内嵌本地服务与 Electron 主进程；不带 node_modules
+files:
+  - dist-local/**/*
+  # /game/ 由本地服务直接指向 resources/game，产物里这份构建期拷贝用不上，剔除以免重复占体积
+  - "!dist-local/game/**/*"
+  - electron/**/*
+  - tools/serve-local.js
+  # 本地服务转发推演请求时要用到这两份（serve-local.js 直接引它们）
+  - server/aiProxy.js
+  - server/aiProxyNode.js
+  - package.json
+  # 渲染层已由 Vite 打进 dist-local，主进程只用 Node 内置模块，运行时不需要任何依赖
+  - "!node_modules/**/*"
+
+# 游戏数据与图片随包发到 resources/game，供本地服务现读、编辑器回写
+extraResources:
+  - from: game_data
+    to: game/game_data
+  - from: image_assets
+    to: game/image_assets
+
+# 不开 asar：本地服务以 ESM 动态 import 引入，散文件最稳妥，也方便玩家自行改数据
+asar: false
+npmRebuild: false
+
+win:
+  target:
+    - target: dir
+  # 本项目暂未提供自定义图标；而给 exe 写签名/元信息会用 signtool 去碰系统目录，
+  # 在受限环境（沙箱、部分 CI）会被拦截。故先跳过这一步，构建更省心。
+  # 日后配好图标、需要正式签名时，删掉此开关即可。
+  signAndEditExecutable: false

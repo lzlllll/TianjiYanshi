@@ -2,9 +2,8 @@ import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
 import { SealButton } from "@/components/ui/SealButton";
-import type { GameSnapshot } from "@/data/types";
 import { GAME_TITLE_BOOK, GAME_SIGNATURE } from "@/lib/gameInfo";
-import { Download, Loader2, RotateCcw, ScrollText, Sparkles, Upload } from "lucide-react";
+import { Download, FolderOpen, Loader2, RotateCcw, ScrollText, Sparkles } from "lucide-react";
 
 /**
  * 终局页。
@@ -51,36 +50,9 @@ export function EndingScreen() {
     }
   };
 
+  // 读档走游戏内的存档管理窗，不再弹系统文件选择框
   const loadSave = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json,.gz,.json.gz";
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      try {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const isGzip = buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
-        let text: string;
-        if (isGzip) {
-          if (typeof DecompressionStream === "undefined") {
-            throw new Error("此存档是压缩过的，当前浏览器不支持解压，请换用较新的浏览器。");
-          }
-          const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
-          text = await new Response(stream).text();
-        } else {
-          text = new TextDecoder().decode(buf);
-        }
-        const saveData = JSON.parse(text);
-        if (saveData.game) useGameStore.getState().restoreSnapshot(saveData.game as GameSnapshot);
-        if (saveData.ai?.settings) useAIStore.getState().updateSettings(saveData.ai.settings);
-        if (saveData.ai?.conversation) useAIStore.getState().restoreConversation(saveData.ai.conversation);
-        window.location.reload();
-      } catch (err) {
-        alert(`读档失败：${(err as Error).message}`);
-      }
-    };
-    input.click();
+    useAIStore.getState().setSaveManagerOpen(true);
   };
 
   const backToMenu = () => {
@@ -103,7 +75,7 @@ export function EndingScreen() {
         <div className="flex-1 overflow-y-auto px-8 py-5">
           <div className="flex flex-wrap items-center justify-center gap-3">
             <SealButton variant="ghost" onClick={loadSave} className="px-4 py-2 text-sm">
-              <span className="flex items-center gap-1.5"><Upload size={14} /> 读档</span>
+              <span className="flex items-center gap-1.5"><FolderOpen size={14} /> 读档</span>
             </SealButton>
             <SealButton variant="ghost" onClick={exportNarrative} className="px-4 py-2 text-sm">
               <span className="flex items-center gap-1.5"><Download size={14} /> 导出叙事</span>

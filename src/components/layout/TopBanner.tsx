@@ -2,11 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
 import { REALMS } from "@/data/mockData";
-import { Settings, Download, Upload, RotateCcw, Clock, ChevronDown, MoreHorizontal } from "lucide-react";
+import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal } from "lucide-react";
 import { formatGameTime } from "@/lib/gameTime";
 import { GAME_SIGNATURE } from "@/lib/gameInfo";
 import { cn } from "@/lib/utils";
-import type { GameSnapshot } from "@/data/types";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 interface TopBannerProps {
   onOpenSettings: () => void;
@@ -17,7 +17,7 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
   const currentTime = useGameStore((s) => s.currentTime);
   const realm = REALMS[player.realmIndex];
   const nextRealm = REALMS[player.realmIndex + 1];
-  const hasApiKey = useAIStore((s) => !!s.settings.apiKey);
+  const hasApiKey = AI_BACKEND_READY;
   const stage = useAIStore((s) => s.conversation.stage);
 
   // 宗门、体魄、气运这类次要信息默认展开，玩家不必先点一下才看得到
@@ -36,78 +36,11 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, [showSaveMenu]);
 
-  const exportSave = async () => {
-    const snapshot = useGameStore.getState().getSnapshot();
-    const ai = useAIStore.getState();
-    const saveData = {
-      // 存档格式版本，日后若改结构，导入端照它判断
-      v: 2,
-      game: snapshot,
-      // 只存真正要留的东西：设置与推演记录。
-      // 早先整份 AI store 一股脑塞进去，把临时窗口状态也带了上，白占体积
-      ai: { settings: ai.settings, conversation: ai.conversation },
-      timestamp: Date.now(),
-    };
-    // 去掉缩进，再把整份存档 gzip 一道；浏览器不支持压缩就退回纯文本
-    const text = JSON.stringify(saveData);
-    let blob = new Blob([text], { type: "application/json" });
-    let name = `save_${new Date().toISOString().slice(0, 10)}.json`;
-    if (typeof CompressionStream !== "undefined") {
-      try {
-        const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
-        blob = await new Response(stream).blob();
-        name += ".gz";
-      } catch {
-        /* 压不动就用未压缩的 */
-      }
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
+  // 存档一律交给游戏内的存档管理窗：列档、存档、读档、删档都在那里，
+  // 不再从这里弹系统文件选择框
+  const openSaveManager = () => {
     setShowSaveMenu(false);
-  };
-
-  const importSave = () => {
-    setShowSaveMenu(false);
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json,.gz,.json.gz";
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      try {
-        // 存档可能被 gzip 压过：按魔数判断，压过的先解压，纯文本的照旧读
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const isGzip = buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
-        let text: string;
-        if (isGzip) {
-          if (typeof DecompressionStream === "undefined") {
-            throw new Error("此存档是压缩过的，当前浏览器不支持解压，请换用较新的浏览器导入。");
-          }
-          const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
-          text = await new Response(stream).text();
-        } else {
-          text = new TextDecoder().decode(buf);
-        }
-        const saveData = JSON.parse(text);
-        if (saveData.game) {
-          useGameStore.getState().restoreSnapshot(saveData.game as GameSnapshot);
-        }
-        if (saveData.ai?.settings) {
-          useAIStore.getState().updateSettings(saveData.ai.settings);
-        }
-        if (saveData.ai?.conversation) {
-          useAIStore.getState().restoreConversation(saveData.ai.conversation);
-        }
-        window.location.reload();
-      } catch (err) {
-        alert(`导入存档失败：${(err as Error).message}`);
-      }
-    };
-    input.click();
+    useAIStore.getState().setSaveManagerOpen(true);
   };
 
   const startNewGame = () => {
@@ -219,16 +152,10 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
                 className="!absolute top-full right-0 mt-2 w-44 book-card !p-1 modal-book-open z-50 overflow-hidden"
               >
                 <button
-                  onClick={exportSave}
+                  onClick={openSaveManager}
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-caption hover:bg-paper-old transition-smooth"
                 >
-                  <Download size={14} className="text-ink-light" /> 导出存档
-                </button>
-                <button
-                  onClick={importSave}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-caption hover:bg-paper-old transition-smooth"
-                >
-                  <Upload size={14} className="text-ink-light" /> 导入存档
+                  <FolderOpen size={14} className="text-ink-light" /> 存档管理
                 </button>
                 <div className="book-divider my-1" />
                 <button

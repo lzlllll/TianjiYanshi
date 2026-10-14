@@ -20,6 +20,7 @@ import { daySerial, shichenName } from "@/lib/gameTime";
 import { cn } from "@/lib/utils";
 import type { FacilityKindId } from "@/data/types";
 import { X } from "lucide-react";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 type FacilityTab = "manage" | "act" | "story";
 
@@ -52,7 +53,6 @@ export function SectFacilityPanel({
   const performFacilityAction = useGameStore((s) => s.performFacilityAction);
   const setCraftingTab = useGameStore((s) => s.setCraftingTab);
 
-  const settings = useAIStore((s) => s.settings);
   const narrateFacility = useAIStore((s) => s.narrateFacility);
   const openCrafting = useAIStore((s) => s.openCrafting);
   const startBattle = useAIStore((s) => s.startBattle);
@@ -73,7 +73,7 @@ export function SectFacilityPanel({
   const done = sect?.facilityDaily ?? {};
   const lv = positionLevel(sect?.positions);
   const cap = state.level >= FACILITY_LEVEL_CAP;
-  const hasModel = !!settings?.apiKey;
+  const hasModel = AI_BACKEND_READY;
 
   const yieldNow = facilityYield({
     name,

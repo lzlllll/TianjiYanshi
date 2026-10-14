@@ -1,5 +1,6 @@
 import type { AISettings } from "@/data/types";
 import { recordTokenUsage } from "@/store/useTokenStore";
+import { AI_CHAT_PATH, aiReady, backendUrl, hasCustomApi } from "@/data/backend";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -18,38 +19,67 @@ function noteFromMessages(messages: ChatMessage[]): string {
 
 const MAX_REQUEST_BODY_SIZE = 15 * 1024 * 1024;
 const DEFAULT_TIMEOUT = 300000;
+/**
+ * 单次输出上限。叙事正文已收敛到一千二百字以内（约两千 token），留四倍余量足够。
+ * 调小可防模型跑长；若卡得太死而触发续写，反倒要把上文重发一遍，更费。
+ */
+const MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * 本地服务窗口被关掉时，浏览器只会抛出 ERR_CONNECTION_REFUSED。
+ * 这里补一句用户能直接照做的说明，而不是让人误以为是模型或网络的问题。
+ */
+function localServiceHint(endpoint: string): string {
+  if (/^https?:\/\//i.test(endpoint)) return "";
+  return `本地服务未响应：请求发往 ${endpoint}。\n本地服务窗口可能已被关闭。请重新双击「启动游戏.bat」（或重启游戏），保持服务开启，然后刷新页面继续。\n\n`;
+}
+
+/** 自定义接口用：与服务商 baseUrl 一一对应的本地代理前缀，需与 tools/serve-local.js 中的 PROXY_MAP 保持一致 */
 const PROXY_MAP: Record<string, string> = {
   "https://api.deepseek.com/v1": "/api/deepseek",
   "https://api.openai.com/v1": "/api/openai",
   "https://open.bigmodel.cn/api/paas/v4": "/api/glm",
   "https://dashscope.aliyuncs.com/compatible-mode/v1": "/api/qwen",
+  "https://api.qnaigc.com/v1": "/api/qnaigc",
 };
 
-/** 开发模式或本地服务版本下，通过本地代理转发请求 */
+/** 本地服务版与 exe 下，已知服务商走本地代理，绕开浏览器跨域；其余直连 */
 const USE_LOCAL_PROXY = import.meta.env.DEV || import.meta.env.VITE_LOCAL_PROXY === "1";
 
-/**
- * 本地服务版本下请求会发往同源的本地代理。
- * 一旦本地服务窗口被关闭，浏览器只会抛出 ERR_CONNECTION_REFUSED，
- * 这里补一句用户能直接照做的说明，而不是让人误以为是网络或 Base URL 的问题。
- */
-function localProxyHint(endpoint: string): string {
-  if (!endpoint.startsWith("/api/")) return "";
-  return `本地服务未响应：请求发往本地代理 ${endpoint}。\n本地服务窗口可能已被关闭。请重新双击「启动游戏.bat」，保持弹出的命令行窗口开启，然后刷新页面继续。\n\n`;
-}
-
-function buildEndpoint(baseUrl: string): string {
+/** 自定义接口的收尾地址：已知服务商经本地代理，其余直连服务商 */
+function providerEndpoint(baseUrl: string): string {
   let url = baseUrl.trim().replace(/\/+$/, "");
-
   if (USE_LOCAL_PROXY && PROXY_MAP[url]) {
     url = PROXY_MAP[url];
-    console.debug(`[aiClient] 使用本地接口代理: ${url}`);
   }
-
   if (!/\/chat\/completions$/.test(url)) {
     url += "/chat/completions";
   }
   return url;
+}
+
+/**
+ * 请求去向：
+ *   填了自定义接口便直连玩家自己的服务商；
+ *   否则一律发往后端的转发口，密钥由后端补上，前端不经手。
+ */
+function buildEndpoint(settings: AISettings): string {
+  return hasCustomApi(settings) ? providerEndpoint(settings.baseUrl) : backendUrl(AI_CHAT_PATH);
+}
+
+/** 自定义接口时带上玩家自己的密钥；走后端则不带，密钥由后端补 */
+function authHeaders(settings: AISettings): Record<string, string> {
+  return hasCustomApi(settings)
+    ? { Authorization: `Bearer ${settings.apiKey.trim()}` }
+    : {};
+}
+
+/** 两条路都不通时，动手之前就拦住，不做静默降级 */
+function assertAiReady(settings: AISettings): void {
+  if (aiReady(settings)) return;
+  throw new Error(
+    "推演接口尚未接通：请先在后端配好模型密钥，或在「自定义接口」里填入自己的地址与密钥。",
+  );
 }
 
 function logRequestInfo(model: string, messages: ChatMessage[], bodySize: number, endpoint: string): void {
@@ -89,16 +119,14 @@ function noteFinish(model: string, data: any, content: string): void {
   }
 }
 
-/** 调用 OpenAI 兼容的 chat/completions 接口，返回助手消息文本 */
+/** 调用后端转发口（OpenAI 兼容的 chat/completions），返回助手消息文本 */
 export async function chatComplete(
   settings: AISettings,
   messages: ChatMessage[],
   opts: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string> {
-  if (!settings.apiKey) {
-    throw new Error("尚未配置 API Key，请先在设置中填写。");
-  }
-  const endpoint = buildEndpoint(settings.baseUrl);
+  assertAiReady(settings);
+  const endpoint = buildEndpoint(settings);
   const controller = new AbortController();
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT;
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -112,7 +140,7 @@ export async function chatComplete(
       messages,
       temperature: settings.temperature,
       stream: false,
-      max_tokens: 16384,
+      max_tokens: MAX_OUTPUT_TOKENS,
     };
     const bodyStr = JSON.stringify(requestBody);
     const bodySize = new Blob([bodyStr]).size;
@@ -122,10 +150,7 @@ export async function chatComplete(
 
     const resp = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${settings.apiKey}`,
-      },
+      headers: { "Content-Type": "application/json", ...authHeaders(settings) },
       body: bodyStr,
       signal: controller.signal,
     });
@@ -151,7 +176,7 @@ export async function chatComplete(
       console.error(`[aiClient] Response text (first 500 chars):`, text.slice(0, 500));
 
       if (text.startsWith("<") || text.includes("<!DOCTYPE") || text.includes("<html")) {
-        throw new Error(`接口返回非 JSON 数据（可能是错误页面）。\n\n响应内容预览：${text.slice(0, 300)}\n\n请检查：1. Base URL 是否正确 2. 模型名称是否有效 3. API Key 是否正确`);
+        throw new Error(`接口返回非 JSON 数据（可能是错误页面）。\n\n响应内容预览：${text.slice(0, 300)}\n\n请检查后端是否已配置模型密钥与上游地址。`);
       }
 
       throw new Error(`JSON 解析失败：${(jsonErr as Error).message}\n\n响应内容：${text.slice(0, 300)}`);
@@ -162,7 +187,7 @@ export async function chatComplete(
       data?.choices?.[0]?.text ??
       "";
     if (!content) {
-      throw new Error("接口返回空内容，请检查模型名称与配额。");
+      throw new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
     }
     noteFinish(requestBody.model, data, content);
     recordTokenUsage(requestBody.model, data?.usage, noteFromMessages(messages));
@@ -180,16 +205,10 @@ export async function chatComplete(
       console.error("[aiClient] Network error:", e);
       console.error("[aiClient] === 网络错误诊断 === ");
       console.error("[aiClient] Endpoint:", endpoint);
-      console.error("[aiClient] Base URL:", settings.baseUrl);
-      console.error("[aiClient] Possible causes:");
-      console.error("[aiClient] 1. CORS restriction - browser blocks direct API calls");
-      console.error("[aiClient] 2. Network timeout - request body too large");
-      console.error("[aiClient] 3. DNS resolution failure");
-      console.error("[aiClient] 4. Firewall/proxy blocking the connection");
       console.error("[aiClient] === 诊断结束 ===");
       throw new Error(
-        localProxyHint(endpoint) +
-        `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. CORS 跨域限制（浏览器安全策略阻止直接调用）\n2. 网络超时（请求体过大或网络不稳定）\n3. DNS 解析失败\n4. 防火墙/代理拦截\n\n解决方案：\n- 开发环境：运行 npm run dev 使用 Vite 代理\n- 生产环境：配置支持 CORS 的反向代理\n- 更换为支持浏览器直连的 API 服务商`,
+        localServiceHint(endpoint) +
+        `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. 后端服务未启动或已关闭\n2. 后端地址配置有误\n3. 跨域被拦截（线上后端需允许本站来源）\n\n解决办法：\n- 本地版：重新启动游戏，保持本地服务窗口开启\n- 线上版：检查 src/data/backend.ts 中的后端地址，并确认后端已放开跨域`,
       );
     }
     console.error("[aiClient] Unexpected error:", e);
@@ -220,10 +239,8 @@ export async function chatWithModel(
     temperature?: number;
   } = {},
 ): Promise<string> {
-  if (!settings.apiKey) {
-    throw new Error("尚未配置 API Key，请先在设置中填写。");
-  }
-  const endpoint = buildEndpoint(settings.baseUrl);
+  assertAiReady(settings);
+  const endpoint = buildEndpoint(settings);
   const maxRetries = opts.retries ?? 2;
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT;
 
@@ -240,7 +257,7 @@ export async function chatWithModel(
         messages,
         temperature: opts.temperature ?? settings.temperature,
         stream: false,
-        max_tokens: 16384,
+        max_tokens: MAX_OUTPUT_TOKENS,
       };
       // JSON 模式：要求模型只返回合法 JSON 对象
       if (opts.jsonMode) {
@@ -254,10 +271,7 @@ export async function chatWithModel(
 
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.apiKey}`,
-        },
+        headers: { "Content-Type": "application/json", ...authHeaders(settings) },
         body: bodyStr,
         signal: controller.signal,
       });
@@ -292,11 +306,10 @@ export async function chatWithModel(
 
         if (text.startsWith("<") || text.includes("<!DOCTYPE") || text.includes("<html")) {
           console.error(`[aiClient] Server returned HTML instead of JSON. This usually means:`);
-          console.error(`[aiClient] 1. The API endpoint is incorrect`);
-          console.error(`[aiClient] 2. The model name is not recognized by the server`);
-          console.error(`[aiClient] 3. Authentication failed`);
-          console.error(`[aiClient] 4. CORS error`);
-          throw new Error(`接口返回非 JSON 数据（可能是错误页面）。\n\n响应内容预览：${text.slice(0, 300)}\n\n请检查：1. Base URL 是否正确 2. 模型名称是否有效 3. API Key 是否正确`);
+          console.error(`[aiClient] 1. The backend endpoint is incorrect`);
+          console.error(`[aiClient] 2. The upstream model name is not recognized`);
+          console.error(`[aiClient] 3. The backend is missing its API key`);
+          throw new Error(`接口返回非 JSON 数据（可能是错误页面）。\n\n响应内容预览：${text.slice(0, 300)}\n\n请检查后端地址与上游配置。`);
         }
 
         throw new Error(`JSON 解析失败：${(jsonErr as Error).message}\n\n响应内容：${text.slice(0, 300)}`);
@@ -307,7 +320,7 @@ export async function chatWithModel(
         data?.choices?.[0]?.text ??
         "";
       if (!content) {
-        throw new Error("接口返回空内容，请检查模型名称与配额。");
+        throw new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
       }
       noteFinish(model, data, content);
       recordTokenUsage(model, data?.usage, noteFromMessages(messages));
@@ -337,9 +350,9 @@ export async function chatWithModel(
           continue;
         }
         throw new Error(
-        localProxyHint(endpoint) +
-        `网络请求失败（已重试 ${maxRetries} 次）：${e.message}\n\n目标地址：${endpoint}\n模型：${model}\n请求体大小：${(new Blob([JSON.stringify({ model, messages })]).size / 1024).toFixed(2)} KB\n\n可能原因：\n1. CORS 跨域限制（浏览器安全策略阻止直接调用）\n2. 网络超时或不稳定\n3. DNS 解析失败\n4. 防火墙/代理拦截\n\n解决方案：\n- 开发环境：使用 npm run dev 启动（已内置代理，可绕过 CORS）\n- 如果开发环境已运行但仍失败，请检查 API Key 是否正确\n- 尝试更换 Base URL 或模型`,
-      );
+          localServiceHint(endpoint) +
+          `网络请求失败（已重试 ${maxRetries} 次）：${e.message}\n\n目标地址：${endpoint}\n模型：${model}\n\n可能原因：\n1. 后端服务未启动或已关闭\n2. 后端地址配置有误\n3. 跨域被拦截\n\n解决办法：\n- 本地版：重新启动游戏，保持本地服务窗口开启\n- 线上版：检查 src/data/backend.ts 中的后端地址`,
+        );
       }
 
       console.error(`[aiClient] Error (attempt ${attempt}):`, e);
@@ -408,7 +421,7 @@ async function parseSSEStream(
   return { finishReason };
 }
 
-/** 流式调用 OpenAI 兼容接口，实时回调增量文本，返回完整文本 */
+/** 流式调用后端转发口，实时回调增量文本，返回完整文本 */
 export async function chatWithModelStream(
   settings: AISettings,
   model: string,
@@ -419,10 +432,8 @@ export async function chatWithModelStream(
     onDelta?: (delta: string, full: string) => void;
   } = {},
 ): Promise<string> {
-  if (!settings.apiKey) {
-    throw new Error("尚未配置 API Key，请先在设置中填写。");
-  }
-  const endpoint = buildEndpoint(settings.baseUrl);
+  assertAiReady(settings);
+  const endpoint = buildEndpoint(settings);
   const controller = new AbortController();
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT;
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -446,7 +457,7 @@ export async function chatWithModelStream(
         stream: true,
         // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
         stream_options: { include_usage: true },
-        max_tokens: 16384,
+        max_tokens: MAX_OUTPUT_TOKENS,
       };
       const bodyStr = JSON.stringify(requestBody);
       const bodySize = new Blob([bodyStr]).size;
@@ -458,8 +469,8 @@ export async function chatWithModelStream(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${settings.apiKey}`,
           Accept: "text/event-stream",
+          ...authHeaders(settings),
         },
         body: bodyStr,
         signal: controller.signal,
@@ -478,7 +489,7 @@ export async function chatWithModelStream(
       }
 
       if (!resp.body) {
-        throw new Error("接口未返回流式响应体，可能不支持 stream 模式。");
+        throw new Error("接口未返回流式响应体，可能上游或后端不支持 stream 模式。");
       }
 
       const streamInfo = await parseSSEStream(
@@ -520,7 +531,7 @@ export async function chatWithModelStream(
           ? "请求已被中止，未收到任何内容"
           : "整段流未收到任何内容片段";
       console.warn(`[aiClient][stream] 空正文：${why}，model=${model}`);
-      throw new Error(`接口返回空内容（${why}），请检查模型名称与配额。`);
+      throw new Error(`接口返回空内容（${why}），请检查后端的上游配置与模型名称。`);
     }
     if (lastFinish === "length") {
       console.warn(
@@ -544,8 +555,8 @@ export async function chatWithModelStream(
     if (e instanceof TypeError) {
       console.error("[aiClient][stream] Network error:", e);
       throw new Error(
-        localProxyHint(endpoint) +
-        `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. CORS 跨域限制\n2. 网络超时\n3. DNS 解析失败\n4. 防火墙/代理拦截`,
+        localServiceHint(endpoint) +
+        `网络请求失败：${e.message}\n\n目标地址：${endpoint}\n\n可能原因：\n1. 后端服务未启动或已关闭\n2. 后端地址配置有误\n3. 跨域被拦截`,
       );
     }
     console.error("[aiClient][stream] Unexpected error:", e);

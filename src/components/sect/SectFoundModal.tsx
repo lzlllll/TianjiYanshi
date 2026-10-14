@@ -9,6 +9,7 @@ import type { SectTerm, SectTermKind } from "@/data/sects";
 import type { SectSiteTerm } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { Flag, X } from "lucide-react";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 /** 玩家正在填的一格词条：手打的名字，或从池子里点的一条 */
 interface TermDraft {
@@ -29,10 +30,9 @@ export function SectFoundModal({ onClose, onFounded }: { onClose: () => void; on
   const currentPlaceId = useGameStore((s) => s.currentPlaceId);
   const lowStones = useGameStore((s) => s.spiritStones.low);
   const foundSect = useGameStore((s) => s.foundSect);
-  const settings = useAIStore((s) => s.settings);
   const runTurn = useAIStore((s) => s.runTurn);
 
-  const hasModel = !!settings?.apiKey;
+  const hasModel = AI_BACKEND_READY;
 
   const [name, setName] = useState("");
   const [spotKey, setSpotKey] = useState("");

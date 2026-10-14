@@ -19,6 +19,7 @@ import {
   Receipt,
   Home,
 } from "lucide-react";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 /** 导航里的侧拉面板入口；问道与百艺各自走独立窗口，不在导航面板内 */
 type NavId = PanelId;
@@ -64,7 +65,7 @@ export function SideNav({ storyOpen, onOpenStory }: SideNavProps) {
   const estateCount = useGameStore((s) => (s.estates ?? []).length);
 
   const aiStage = useAIStore((s) => s.conversation.stage);
-  const hasApiKey = useAIStore((s) => !!s.settings.apiKey);
+  const hasApiKey = AI_BACKEND_READY;
   const turnCount = useAIStore((s) => s.conversation.turns.length);
 
   const aiBusy = aiStage === "flash" || aiStage === "pro";

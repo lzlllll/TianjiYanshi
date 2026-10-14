@@ -18,6 +18,7 @@ import {
   Check,
   X,
 } from "lucide-react";
+import { AI_BACKEND_READY } from "@/data/backend";
 
 interface StoryPanelProps {
   onOpenSettings: () => void;
@@ -47,7 +48,6 @@ const QUICK_DECISIONS = [
 
 export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const conversation = useAIStore((s) => s.conversation);
-  const settings = useAIStore((s) => s.settings);
   const runTurn = useAIStore((s) => s.runTurn);
   const regenerate = useAIStore((s) => s.regenerate);
   const cancel = useAIStore((s) => s.cancel);
@@ -161,7 +161,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const isGenerating = stage === "flash" || stage === "pro";
   const turns = conversation.turns;
   const lastTurn = turns[turns.length - 1];
-  const hasApiKey = !!settings.apiKey;
+  const hasApiKey = AI_BACKEND_READY;
   const streamingNarrative = conversation.streamingNarrative ?? "";
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
   const streaming = stage === "pro" && !!streamingNarrative;
@@ -215,7 +215,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         <div className="mb-4 rounded-lg border border-cinnabar-500/40 bg-cinnabar-500/10 px-4 py-3 flex items-center gap-3">
           <SettingsIcon size={18} className="text-cinnabar-400 shrink-0" />
           <div className="flex-1 font-serif text-sm text-cinnabar-300">
-            尚未配置通灵接口。请先点击右上角设置按钮，填写 API Key 与模型信息。
+            推演接口尚未接通。请确认后端服务已启动，且已在后端配好模型密钥。
           </div>
           <SealButton variant="ghost" onClick={onOpenSettings} className="shrink-0">
             前往设置
