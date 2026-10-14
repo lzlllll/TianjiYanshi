@@ -359,7 +359,7 @@ export function HaggleModal({
                   placeholder={busted ? "掌柜不听价了" : "说点什么……（Ctrl/Cmd + Enter 送出）"}
                   rows={2}
                   className="flex-1 input-ink resize-none leading-relaxed text-sm"
-                  style={{ fontFamily: '"Noto Serif SC", serif' }}
+                  style={{ fontFamily: '"Noto Serif SC", serif', color: "#ffffff" }}
                 />
                 <SealButton
                   onClick={send}
