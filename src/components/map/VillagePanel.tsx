@@ -7,6 +7,7 @@ import { DiningModal } from "@/components/map/DiningModal";
 import { GeneralStoreModal } from "@/components/map/GeneralStoreModal";
 import { HOURS_PER_DAY } from "@/data/rooms";
 import { HAGGLE_DC, haggleDiscount } from "@/data/estates";
+import { occupationTribute, ownerOf } from "@/data/occupations";
 import type { Shop, Village } from "@/data/types";
 import { Home, Loader2, Store, X, Users } from "lucide-react";
 
@@ -16,6 +17,7 @@ import { Home, Loader2, Store, X, Users } from "lucide-react";
  */
 export function VillagePanel({ village, onClose }: { village: Village; onClose: () => void }) {
   const live = useGameStore((s) => s.villages?.[village.key]) ?? village;
+  const occupations = useGameStore((s) => s.occupations);
   const inquireVillage = useGameStore((s) => s.inquireVillage);
   const advanceTime = useGameStore((s) => s.advanceTime);
   const addLog = useGameStore((s) => s.addLog);
@@ -81,6 +83,8 @@ export function VillagePanel({ village, onClose }: { village: Village; onClose: 
   const spot = Math.abs(Math.round(live.x) * 1000 + Math.round(live.y));
   const label = `${live.name}`;
   const hasInn = live.buildings.some((b) => b.kind === "客栈");
+  /** 这一处眼下归谁：被占了便标出是哪一家治下，没占便不写 */
+  const owner = ownerOf(occupations, "village", live.key);
 
   /** 向村人打听这一处的情形 */
   const inquire = async () => {
@@ -131,6 +135,11 @@ export function VillagePanel({ village, onClose }: { village: Village; onClose: 
                     ? " · 尚未打听"
                     : " · 尚未前往"}
               </p>
+              {owner && (
+                <div className="mt-0.5 font-serif text-xs text-gold-400/80 truncate">
+                  已归「{owner.ownerName}」治下 · 月贡 {occupationTribute("village", live.key)} 灵石
+                </div>
+              )}
             </div>
           </div>
           <button
