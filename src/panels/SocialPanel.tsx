@@ -325,15 +325,17 @@ function RelationCard({ relation }: { relation: Relation }) {
         {!isEnemy && (
           <SealButton
             onClick={() => setTraveling(relation.id, !traveling)}
-            disabled={!traveling && partyFull}
+            disabled={!traveling && (partyFull || !samePlace)}
             variant="ghost"
             className="flex-1 py-1.5 text-xs"
             title={
               traveling
                 ? "就此作别，各走各的路"
-                : partyFull
-                  ? `至多带 ${MAX_TRAVEL_COMPANIONS} 人同行`
-                  : "邀他同行；遇上打斗他会站到你这一边"
+                : !samePlace
+                  ? "他不在近前，须先与他在一处才好同行"
+                  : partyFull
+                    ? `至多带 ${MAX_TRAVEL_COMPANIONS} 人同行`
+                    : "邀他同行；遇上打斗他会站到你这一边"
             }
           >
             <Footprints size={12} className="mr-1" />

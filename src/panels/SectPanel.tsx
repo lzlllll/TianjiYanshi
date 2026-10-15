@@ -193,9 +193,15 @@ function SectOverview() {
   const hasReputation = (sect.reputationDesc || "").length > 0;
   const hasSurroundings = (sect.surroundings || "").length > 0;
 
-  // 晋升进度：当前贡献相对下一个未达职位的需求
+  // 晋升进度：当前贡献相对下一个未达职位的需求；只往上看，已达及以下的职位不算目标
+  const currentLevel = positionLevel(sect.positions);
   const nextPosition = [...sect.positions]
-    .filter((p) => !p.isCurrent && p.contributionNeeded > sect.contribution)
+    .filter(
+      (p) =>
+        !p.isCurrent &&
+        (Number(p.level) || 1) > currentLevel &&
+        p.contributionNeeded > sect.contribution,
+    )
     .sort((a, b) => a.contributionNeeded - b.contributionNeeded)[0];
   const promotePct = nextPosition
     ? Math.min(100, Math.round((sect.contribution / nextPosition.contributionNeeded) * 100))
@@ -505,6 +511,8 @@ function PositionTree() {
   const positions = useGameStore((s) => Array.isArray(s.sect?.positions) ? s.sect.positions : []);
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const promote = useGameStore((s) => s.promote);
+  // 眼下排在第几级：此一档及以下皆视为已达，只往上领职，不往回降
+  const currentLevel = positionLevel(positions);
 
   return (
     <ScrollCard title="职位晋升" subtitle="积功累德，步步登高">
@@ -513,7 +521,9 @@ function PositionTree() {
         <div className="absolute left-6 top-4 bottom-4 w-px bg-gradient-to-b from-gold-400/40 to-gold-500/10" />
         <div className="space-y-2">
           {positions.map((pos) => {
-            const canPromote = !pos.unlocked && contribution >= pos.contributionNeeded;
+            const level = Number(pos.level) || 1;
+            const reached = pos.unlocked || pos.isCurrent || level <= currentLevel;
+            const canPromote = !reached && contribution >= pos.contributionNeeded;
             return (
               <div
                 key={pos.id}
@@ -521,7 +531,7 @@ function PositionTree() {
                   "relative flex items-center gap-4 pl-12 py-3 rounded border transition-all",
                   pos.isCurrent
                     ? "border-gold-400/50 bg-gold-400/10 shadow-glow"
-                    : pos.unlocked
+                    : reached
                       ? "border-jade-500/30 bg-jade-500/5"
                       : canPromote
                         ? "border-cinnabar-500/40 bg-cinnabar-500/5"
@@ -534,7 +544,7 @@ function PositionTree() {
                     "absolute left-3 w-7 h-7 rounded-full flex items-center justify-center font-brush text-xs border-2",
                     pos.isCurrent
                       ? "bg-gold-400 text-ink-darkest border-gold-300"
-                      : pos.unlocked
+                      : reached
                         ? "bg-jade-500/20 text-jade-400 border-jade-500/40"
                         : "bg-ink-900 text-paper-500/50 border-paper-400/20",
                   )}
@@ -550,7 +560,7 @@ function PositionTree() {
                         现任
                       </span>
                     )}
-                    {pos.unlocked && !pos.isCurrent && (
+                    {reached && !pos.isCurrent && (
                       <span className="font-serif text-xs text-jade-400">已达</span>
                     )}
                   </div>
@@ -560,7 +570,7 @@ function PositionTree() {
                   </div>
                 </div>
 
-                {!pos.unlocked && (
+                {!reached && (
                   <SealButton
                     onClick={() => promote(pos.id)}
                     disabled={!canPromote}

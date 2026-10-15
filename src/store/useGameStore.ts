@@ -67,7 +67,7 @@ import type {
 } from "@/data/types";
 import { resolveLocation } from "@/data/locations";
 import { OPENING_GAME_TIME, OPENING_DAY_SERIAL, LEGACY_DAY_OFFSET, ERA_YEAR_OFFSET, daySerial, gameDateKey, gameMonthKey, normalizeGameTime, shiftGameTime, shichenName } from "@/lib/gameTime";
-import { MAX_TRAVEL_COMPANIONS, manorKey, rollManor, rollQuestNpc, travelingCount } from "@/data/npcGen";
+import { MAX_TRAVEL_COMPANIONS, isNpcAround, manorKey, rollManor, rollQuestNpc, travelingCount } from "@/data/npcGen";
 import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
 import { brokerTargetsFor } from "@/data/broker";
 import {
@@ -2524,6 +2524,16 @@ EFFECT: [效果描述]`,
         const s = get();
         const pos = s.sect.positions.find((p) => p.id === id);
         if (!pos || pos.unlocked) return;
+        // 只能往上领职，不能主动降级：已是此一档或更高，便不再往下走
+        const lv = positionLevel(s.sect.positions);
+        if ((Number(pos.level) || 1) <= lv) {
+          const seat = (Array.isArray(s.sect?.positions) ? s.sect.positions : []).find((p) => p.isCurrent);
+          const held = seat?.name || s.player?.position || "现任";
+          set((st) => ({
+            log: [`你已位列「${held}」，不必再领「${pos.name}」这一职。`, ...st.log].slice(0, 30),
+          }));
+          return;
+        }
         if (s.sect.contribution < pos.contributionNeeded) {
           set((st) => ({
             log: [
@@ -2646,6 +2656,13 @@ EFFECT: [效果描述]`,
         const st = get();
         const rel = st.relations.find((r) => r.id === relationId);
         if (!rel) return false;
+        // 人不在近前便邀不动：同行得先与他在一处，隔着两地没法一道走
+        if (traveling && !isNpcAround(rel, { placeId: st.currentPlaceId, placeName: st.hereLabel() })) {
+          set((s2) => ({
+            log: [`「${rel.name}」不在近前，须先与他在一处，才好邀他同行。`, ...s2.log].slice(0, 30),
+          }));
+          return false;
+        }
         // 仇敌不与之同行；人数也有个数，太多人一路走不像话
         if (traveling && (rel.type === "enemy" || travelingCount(st.relations) >= MAX_TRAVEL_COMPANIONS)) {
           return false;
