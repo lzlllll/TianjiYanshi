@@ -162,19 +162,31 @@ const OPENING_WAITS = [
 ];
 
 /**
- * 建档各门落档时的一句风味话。
- * 开篇读完了，底下得有东西告诉玩家「还在忙什么、忙到哪儿了」，
- * 否则那一段建档的空等又变回盯屏幕。键与 OPENING_DOMAINS 的 id 对齐。
+ * 建档各门「正在办」时的一句风味话。
+ * 开篇读完了，底下得立刻有东西告诉玩家「此刻在忙哪一门」，
+ * 不能等第一门跑完才开口；键与 OPENING_DOMAINS 的 id 对齐。
  */
+const FILING_FLAVOR: Record<string, string> = {
+  origin: "长老正在为你测试灵根……",
+  technique: "正在为你安排合用的功法……",
+  treasure: "财神正在向阁下的行囊里装点财物……",
+  sect: "师门与同道正依次落座……",
+  bond: "正在请相识之人入尘缘……",
+  skill: "正在盘你身上那几门本事……",
+  quest: "正在记下落在你肩上的几桩事……",
+  news: "正在打听今日的江湖见闻……",
+};
+
+/** 建档各门落定后的一句风味话；键与 OPENING_DOMAINS 的 id 对齐 */
 const FILED_FLAVOR: Record<string, string> = {
-  origin: "长老正在为你测试灵根...",
-  technique: "正在为你安排绝世神功...",
-  treasure: "财神已把财物装进行囊...",
-  sect: "师门和同道正依次落座...",
-  bond: "相识之人已一一请入尘缘...",
-  skill: "正在学习你的看家本领...",
-  quest: "机缘和任务已经写进你的道途...",
-  news: "正在打听江湖上的新鲜事...",
+  origin: "灵根与经脉已勘定",
+  technique: "入门功法已入手",
+  treasure: "财神已把财物装进行囊",
+  sect: "师门与门中位次已落定",
+  bond: "相识之人已一一请入尘缘",
+  skill: "身上那几门本事已盘清",
+  quest: "落在肩上的几桩事已记下",
+  news: "今日的江湖见闻已打听回来",
 };
 
 /** 门的名目，风味话对不上时兜底 */
@@ -192,6 +204,7 @@ function OpeningLoading() {
   const narrative = useAIStore((s) => s.conversation.streamingNarrative ?? "");
   const reasoning = useAIStore((s) => s.conversation.streamingReasoning ?? "");
   const filed = useAIStore((s) => s.conversation.openingFiled ?? []);
+  const feed = useAIStore((s) => s.conversation.openingFeed ?? []);
   const [idx, setIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showNarrative, setShowNarrative] = useState(false);
@@ -217,7 +230,11 @@ function OpeningLoading() {
 
   const total = OPENING_DOMAINS.length;
   const last = filed[filed.length - 1];
+  // 流水最新的一笔：正在办的那门或刚落定的那门，等待页照它报话
+  const latestEvent = feed[feed.length - 1];
   const allFiled = filed.length >= total;
+  // 正文一收尾，八门便齐发；只要有一门开始了，底下就该立刻报话，不必等它跑完
+  const busy = filed.length > 0 || feed.length > 0;
 
   useEffect(() => {
     if (stage === "done" && allFiled) {
@@ -261,7 +278,7 @@ function OpeningLoading() {
             </article>
           </div>
           <div className="shrink-0 px-8 pb-5 space-y-2">
-            {filed.length === 0 ? (
+            {!busy ? (
               <p className="font-serif text-xs ps-muted leading-relaxed">{OPENING_WAITS[idx]}</p>
             ) : (
               <>
@@ -281,9 +298,11 @@ function OpeningLoading() {
                     ? stage === "done"
                       ? "江湖已开，一切就绪……"
                       : "底子已齐，正在收束……"
-                    : last?.ok
-                      ? `✓ ${FILED_FLAVOR[last.id] ?? `${DOMAIN_LABEL[last.id] ?? "这一门"}已落定`}`
-                      : `${DOMAIN_LABEL[last.id] ?? "这一门"}暂且空着，日后再补`}
+                    : latestEvent?.phase === "doing"
+                      ? `✦ ${FILING_FLAVOR[latestEvent.id] ?? `正在办${DOMAIN_LABEL[latestEvent.id] ?? "这一门"}……`}`
+                      : last?.ok
+                        ? `✓ ${FILED_FLAVOR[last.id] ?? `${DOMAIN_LABEL[last.id] ?? "这一门"}已落定`}`
+                        : `${DOMAIN_LABEL[last.id] ?? "这一门"}暂且空着，日后再补`}
                 </p>
               </>
             )}

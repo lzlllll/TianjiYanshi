@@ -2284,6 +2284,12 @@ export interface ConversationState {
    * ok 为假表示那一门几遍都没写全，留待后续回合补。
    */
   openingFiled: { id: string; ok: boolean }[];
+  /**
+   * 开局建档的动态流水：每门「开始返回」与「落定」各记一笔，等待页取最新一笔报话。
+   * 八门并发，光记落定便得等第一门跑完才有话可说；把起始也记下，正文一收尾便能报出正在办的那一门。
+   * phase 为 doing 表示这一门此刻在途，done 表示已落定，ok 为假即没写全。
+   */
+  openingFeed: { id: string; phase: "doing" | "done"; ok: boolean }[];
 }
 
 export type NPCChatRole = "player" | "npc";

@@ -175,6 +175,7 @@ const INITIAL_CONVERSATION: ConversationState = {
   streamingNarrative: "",
   streamingReasoning: "",
   openingFiled: [],
+  openingFeed: [],
 };
 
 const INITIAL_NPC_CHAT: NPCChatState = {
@@ -1359,6 +1360,8 @@ async function runOpeningExtraction(
   signal: AbortSignal,
   /** 每落完一门报一声，等待页照它显示进度 */
   onFiled?: (domainId: string, ok: boolean) => void,
+  /** 每门开始返回来报一声，等待页不必等一门跑完便能报出正在办的那一门 */
+  onDomainStart?: (domainId: string) => void,
 ): Promise<{ ops: DataOp[]; opsRaw: string; quickDecisions: string[] }> {
   if (!narrative.trim()) return emptyExtraction();
 
@@ -1510,6 +1513,8 @@ async function runOpeningExtraction(
       if (signal.aborted) return;
       const step = ladder[i];
       const startedAt = Date.now();
+      // 这一遍开始打过去了：先报一声，等待页好立刻报出正在办的那一门
+      onDomainStart?.(domain.id);
       try {
         const parsed = await ask(domain, step.model, step.terse);
         noteSalvage(domain, parsed.salvaged);
@@ -2400,7 +2405,7 @@ export const useAIStore = create<AIStore>()(
 
         // ===== Stage 2: pro 生成叙事正文 =====
         set((st) => ({
-          conversation: { ...st.conversation, stage: "pro", openingFiled: [] },
+          conversation: { ...st.conversation, stage: "pro", openingFiled: [], openingFeed: [] },
         }));
 
         let narrative = "";
@@ -2501,13 +2506,28 @@ export const useAIStore = create<AIStore>()(
         // 首回合要一次性建立整套角色档案，改走按领域并发建档；其余回合仍是增量结算
         const extraction =
           conv.turns.length === 0
-            ? await runOpeningExtraction(settings, gameState, narrative, signal, (id, ok) =>
-                set((st) => ({
-                  conversation: {
-                    ...st.conversation,
-                    openingFiled: [...st.conversation.openingFiled, { id, ok }],
-                  },
-                })),
+            ? await runOpeningExtraction(
+                settings,
+                gameState,
+                narrative,
+                signal,
+                // 一门落定：进已落之数，流水里也补一笔落定
+                (id, ok) =>
+                  set((st) => ({
+                    conversation: {
+                      ...st.conversation,
+                      openingFiled: [...st.conversation.openingFiled, { id, ok }],
+                      openingFeed: [...st.conversation.openingFeed, { id, phase: "done", ok }],
+                    },
+                  })),
+                // 一门开始返回：流水里记一笔，等待页不等它跑完便能报出正在办的那一门
+                (id) =>
+                  set((st) => ({
+                    conversation: {
+                      ...st.conversation,
+                      openingFeed: [...st.conversation.openingFeed, { id, phase: "doing", ok: false }],
+                    },
+                  })),
               )
             : await runOpsExtraction(settings, gameState, narrative, signal);
         if (signal.aborted) return;
@@ -2679,6 +2699,7 @@ export const useAIStore = create<AIStore>()(
               streamingNarrative: "",
               streamingReasoning: "",
               openingFiled: [],
+              openingFeed: [],
             },
           }));
           proRaw = await chatWithModelStream(
@@ -2729,13 +2750,28 @@ export const useAIStore = create<AIStore>()(
         const retryState = useGameStore.getState().getSnapshot() as any;
         const extraction =
           conversation.turns.length === 1
-            ? await runOpeningExtraction(settings, retryState, narrative, signal, (id, ok) =>
-                set((st) => ({
-                  conversation: {
-                    ...st.conversation,
-                    openingFiled: [...st.conversation.openingFiled, { id, ok }],
-                  },
-                })),
+            ? await runOpeningExtraction(
+                settings,
+                retryState,
+                narrative,
+                signal,
+                // 一门落定：进已落之数，流水里也补一笔落定
+                (id, ok) =>
+                  set((st) => ({
+                    conversation: {
+                      ...st.conversation,
+                      openingFiled: [...st.conversation.openingFiled, { id, ok }],
+                      openingFeed: [...st.conversation.openingFeed, { id, phase: "done", ok }],
+                    },
+                  })),
+                // 一门开始返回：流水里记一笔，等待页不等它跑完便能报出正在办的那一门
+                (id) =>
+                  set((st) => ({
+                    conversation: {
+                      ...st.conversation,
+                      openingFeed: [...st.conversation.openingFeed, { id, phase: "doing", ok: false }],
+                    },
+                  })),
               )
             : await runOpsExtraction(settings, retryState, narrative, signal);
         if (signal.aborted) return;
@@ -2864,6 +2900,7 @@ export const useAIStore = create<AIStore>()(
             streamingNarrative: "",
             streamingReasoning: "",
             openingFiled: [],
+            openingFeed: [],
           },
         });
       },
