@@ -32,24 +32,16 @@ const MAX_OUTPUT_TOKENS = 8192;
 const MAX_OUTPUT_TOKENS_REASONING = 32768;
 
 /**
- * 推理档做结构化活儿时的思考开关。建档、结算只是照抄，不必想。
+ * 带思维链的模型，一律按这一档收思考量：开局之后的每一次调用——叙事、交谈、讲价、
+ * 建档与结算，凡是走推理档的，口径都统一到这里，免得各条各写一种参数、迟早走岔。
+ * 压到最低是为了省时间，行文仍留一分斟酌。
  *
- * 实测（七牛云 · moonshotai/kimi-k3-free，同一句短请求走游戏后端）：
- *   原样            35.5s，256 token 全花在思维链上，正文为空（finish_reason=length）
- *   thinking 关闭    9.5s，思维链 0 token，正文正常
- *   另试过 enable_thinking:false 与 chat_template_kwargs 两种写法，七牛都不认，照旧思考。
- */
-const NO_THINKING = { type: "disabled" } as const;
-
-/**
- * 叙事那一条的思考量。建档可以完全不想，叙事却该留一分斟酌，故只压到最低档。
- *
- * 实测（七牛云 · moonshotai/kimi-k3-free，同一句叙事请求）：
- *   不加参数       53.9s，512 token 全花在思维链上，正文一个字没有
+ * 实测（七牛云 · moonshotai/kimi-k3-free，同一句请求走游戏后端）：
+ *   不加参数                53.9s，512 token 全花在思维链上，正文一个字没有
  *   reasoning_effort:"low"  30.2s，思维链降到 15 token，正文照写
  *   另试过 "minimal" 与 "medium"，上游直接 502——只有 low 与 none 可用。
  */
-const NARRATIVE_REASONING_EFFORT = "low";
+const REASONING_EFFORT = "low";
 
 /**
  * 认得出是推理模型的字样。认不出也无妨——哪一档真吐过思维链，
@@ -106,10 +98,8 @@ function buildRequestBody(params: {
   /** 这一档是不是推理模型 */
   reasoning: boolean;
   jsonMode?: boolean;
-  /** 要不要把这一档的思考量收一收；只在推理档上交这一项 */
-  reasoningEffort?: string;
 }): Record<string, unknown> {
-  const { model, messages, stream, temperature, reasoning, jsonMode, reasoningEffort } = params;
+  const { model, messages, stream, temperature, reasoning, jsonMode } = params;
   const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
   const oSeries = isOpenAiOSeries(model);
 
@@ -126,19 +116,11 @@ function buildRequestBody(params: {
     body.response_format = { type: "json_object" };
   }
   /*
-   * 结构化活儿（建档、结算这一类）只是照抄，不需要想。
-   * 推理档带上「关掉思考」这一项：模型不必换，省下的是每一趟的思考时间。
-   * 上游不认这一项时多半直接忽略，不会报错。
+   * 推理档一律交上最低档的思考量：叙事、交谈、讲价、建档与结算，口径统一到这一处。
+   * 非推理档一概不交——有些服务商对不认识的参数会直接报错。
    */
-  if (reasoning && jsonMode) {
-    body.thinking = NO_THINKING;
-  }
-  /*
-   * 叙事那条只收不收满：思考量压到最低档，省下的是时间，行文仍留一分斟酌。
-   * 非推理档一概不交这一项——有些服务商对不认识的参数会直接报错。
-   */
-  if (reasoning && reasoningEffort) {
-    body.reasoning_effort = reasoningEffort;
+  if (reasoning) {
+    body.reasoning_effort = REASONING_EFFORT;
   }
   if (stream) {
     // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
@@ -665,8 +647,6 @@ export async function chatWithModelStream(
         stream: true,
         temperature: settings.temperature,
         reasoning: isReasoningSlot(settings, slotOf(settings, model)),
-        // 这一条是叙事：建档可以完全不想，叙事只把思考压到最低档
-        reasoningEffort: NARRATIVE_REASONING_EFFORT,
       });
       const bodyStr = JSON.stringify(requestBody);
       const bodySize = new Blob([bodyStr]).size;
