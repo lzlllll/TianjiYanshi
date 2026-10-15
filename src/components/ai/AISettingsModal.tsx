@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { chatWithModel } from "@/lib/aiClient";
-import type { AISettings } from "@/data/types";
+import type { AISettings, ModelReasoningMode } from "@/data/types";
 import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
@@ -87,6 +87,9 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
       apiKey: "",
       flashModel: FREE_MODEL.model,
       proModel: FREE_MODEL.model,
+      // 免费模型不带思维链，先前那档的手动设定别跟着留下
+      flashReasoning: "auto",
+      proReasoning: "auto",
     }));
     setTest({ status: "idle" });
   };
@@ -222,6 +225,18 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                 className="input-ink mt-2"
                 spellCheck={false}
               />
+              <label className="mt-2 flex items-center gap-2 font-serif text-xs text-paper-400/60">
+                <span className="shrink-0">思维链</span>
+                <select
+                  value={draft.flashReasoning ?? "auto"}
+                  onChange={(e) => patch({ flashReasoning: e.target.value as ModelReasoningMode })}
+                  className="input-ink py-1"
+                >
+                  <option value="auto">自动判断</option>
+                  <option value="on">有</option>
+                  <option value="off">无</option>
+                </select>
+              </label>
               <button
                 onClick={() => runTest("flash")}
                 disabled={test.status === "testing"}
@@ -247,6 +262,18 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                 className="input-ink mt-2"
                 spellCheck={false}
               />
+              <label className="mt-2 flex items-center gap-2 font-serif text-xs text-paper-400/60">
+                <span className="shrink-0">思维链</span>
+                <select
+                  value={draft.proReasoning ?? "auto"}
+                  onChange={(e) => patch({ proReasoning: e.target.value as ModelReasoningMode })}
+                  className="input-ink py-1"
+                >
+                  <option value="auto">自动判断</option>
+                  <option value="on">有</option>
+                  <option value="off">无</option>
+                </select>
+              </label>
               <button
                 onClick={() => runTest("pro")}
                 disabled={test.status === "testing"}

@@ -166,6 +166,10 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
   const streaming = stage === "pro" && !!streamingNarrative;
   const displayNarrative = streaming ? streamingNarrative : lastTurn?.narrative ?? "";
+  const streamingReasoning = conversation.streamingReasoning ?? "";
+  // 推理模型先长一段思考才落笔：正文还没出、思维链已经来了，便把「正在思考」亮出来，
+  // 免得那一段长长的等待看着像是卡死了
+  const thinking = stage === "pro" && !streamingNarrative && !!streamingReasoning;
 
   useEffect(() => {
     if (narrativeRef.current) {
@@ -249,7 +253,22 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
             ref={narrativeRef}
             className="flex-1 overflow-y-auto pr-2 min-h-0"
           >
-            {turns.length === 0 && !streamingNarrative ? (
+            {thinking ? (
+              <div className="rounded border border-gold-500/25 bg-ink-800/40 px-4 py-3">
+                <div className="flex items-center gap-2 font-serif text-sm text-gold-400/90">
+                  <Loader2 size={13} className="animate-spin shrink-0" />
+                  模型正在思考…（{streamingReasoning.length} 字）
+                </div>
+                <details className="mt-2">
+                  <summary className="cursor-pointer font-serif text-xs text-paper-400/60 select-none">
+                    展开思维链
+                  </summary>
+                  <div className="mt-2 max-h-64 overflow-y-auto font-serif text-xs text-paper-400/80 leading-relaxed whitespace-pre-wrap">
+                    {streamingReasoning}
+                  </div>
+                </details>
+              </div>
+            ) : turns.length === 0 && !streamingNarrative ? (
               <EmptyState />
             ) : (
               <>

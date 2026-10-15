@@ -160,13 +160,6 @@ export function SideNav({ storyOpen, onOpenStory }: SideNavProps) {
           </div>
         </button>
       </div>
-
-      {/* 底部印章标识 */}
-      <div className="px-1 pt-4 mt-auto flex justify-center shrink-0">
-        <div className="w-10 h-10 seal-button flex items-center justify-center text-xs font-kai ribbon-sway">
-          修
-        </div>
-      </div>
     </nav>
   );
 }

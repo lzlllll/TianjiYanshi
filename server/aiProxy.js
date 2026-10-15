@@ -47,6 +47,9 @@ export async function handleAiChat(request, env = {}) {
         Accept: request.headers.get("accept") || "application/json",
       },
       body,
+      // 把客户端的取消传下去：玩家点「停」或关掉页面时，上游这一趟也随之中止，
+      // 免得这边断了、上游还在跑，白白烧额度。
+      signal: request.signal,
     });
   } catch (e) {
     return jsonResponse(502, { error: `后端转发失败：${e.message}` });

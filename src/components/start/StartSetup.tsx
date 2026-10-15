@@ -19,6 +19,7 @@ import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
 import { CustomApiModal } from "@/components/ai/CustomApiModal";
+import { OPENING_DOMAINS } from "@/lib/promptBuilder";
 import type { AISettings } from "@/data/types";
 
 interface PlayerSetup {
@@ -160,10 +161,41 @@ const OPENING_WAITS = [
   "正在写下开篇……",
 ];
 
-/** 开局推演时的全屏等待页：遮住界面，免得中途误触 */
+/**
+ * 建档各门落档时的一句风味话。
+ * 开篇读完了，底下得有东西告诉玩家「还在忙什么、忙到哪儿了」，
+ * 否则那一段建档的空等又变回盯屏幕。键与 OPENING_DOMAINS 的 id 对齐。
+ */
+const FILED_FLAVOR: Record<string, string> = {
+  origin: "长老正在为你测试灵根...",
+  technique: "正在为你安排绝世神功...",
+  treasure: "财神已把财物装进行囊...",
+  sect: "师门和同道正依次落座...",
+  bond: "相识之人已一一请入尘缘...",
+  skill: "正在学习你的看家本领...",
+  quest: "机缘和任务已经写进你的道途...",
+  news: "正在打听江湖上的新鲜事...",
+};
+
+/** 门的名目，风味话对不上时兜底 */
+const DOMAIN_LABEL: Record<string, string> = Object.fromEntries(
+  OPENING_DOMAINS.map((d) => [d.id, d.label]),
+);
+
+/**
+ * 开局推演时的全屏等待页：遮住界面，免得中途误触。
+ * 但正文一开流就不该再拿转圈盖着了——把这页换成能读的开篇，
+ * 等待的时间用来读故事，比盯着一个圈好得多；建档那几趟在背后继续跑。
+ */
 function OpeningLoading() {
   const stage = useAIStore((s) => s.conversation.stage);
+  const narrative = useAIStore((s) => s.conversation.streamingNarrative ?? "");
+  const reasoning = useAIStore((s) => s.conversation.streamingReasoning ?? "");
+  const filed = useAIStore((s) => s.conversation.openingFiled ?? []);
   const [idx, setIdx] = useState(0);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [showNarrative, setShowNarrative] = useState(false);
+  const [fadeOut, setFadeOut] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -171,6 +203,98 @@ function OpeningLoading() {
     }, 2600);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (narrative.trim() && !showNarrative) {
+      const timer = setTimeout(() => setShowNarrative(true), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [narrative, showNarrative]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [narrative]);
+
+  const total = OPENING_DOMAINS.length;
+  const last = filed[filed.length - 1];
+  const allFiled = filed.length >= total;
+
+  useEffect(() => {
+    if (stage === "done" && allFiled) {
+      const timer = setTimeout(() => setFadeOut(true), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [stage, allFiled]);
+
+  if (narrative.trim()) {
+    return (
+      <div
+        className={cn(
+          "fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-950/95 backdrop-blur-sm",
+          "transition-all duration-1000",
+          fadeOut ? "opacity-0 pointer-events-none" : showNarrative ? "opacity-100" : "opacity-0"
+        )}
+      >
+        <div
+          className={cn(
+            "paper-sheet rounded-lg w-full max-w-3xl max-h-[88vh] flex flex-col",
+            "transition-all duration-1000",
+            fadeOut
+              ? "opacity-0 scale-110 translate-y-8"
+              : showNarrative
+                ? "opacity-100 scale-100"
+                : "opacity-0 scale-95"
+          )}
+        >
+          <div className="shrink-0 flex items-baseline justify-between gap-3 px-8 pt-6 pb-3 border-b border-[#8a6a3a]/25">
+            <h3 className="font-brush text-xl ps-strong tracking-widest">开篇</h3>
+            {!allFiled && (
+              <span className="font-serif text-[11px] ps-muted">后文仍在推演，边读边等便好</span>
+            )}
+          </div>
+          <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-8 py-5">
+            <article className="font-serif text-base ps-strong leading-loose tracking-wide whitespace-pre-wrap">
+              {narrative}
+              {!allFiled && (
+                <span className="inline-block w-2 h-4 ml-0.5 bg-[#a83232]/70 animate-pulse align-middle" />
+              )}
+            </article>
+          </div>
+          <div className="shrink-0 px-8 pb-5 space-y-2">
+            {filed.length === 0 ? (
+              <p className="font-serif text-xs ps-muted leading-relaxed">{OPENING_WAITS[idx]}</p>
+            ) : (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-1 rounded-full bg-[#8a6a3a]/15 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-[#a83232]/70 transition-all duration-500"
+                      style={{ width: `${Math.round((filed.length / total) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="font-serif text-[11px] ps-muted shrink-0">
+                    已落 {filed.length} / {total}
+                  </span>
+                </div>
+                <p className="font-serif text-xs ps-muted leading-relaxed">
+                  {allFiled
+                    ? stage === "done"
+                      ? "江湖已开，一切就绪……"
+                      : "底子已齐，正在收束……"
+                    : last?.ok
+                      ? `✓ ${FILED_FLAVOR[last.id] ?? `${DOMAIN_LABEL[last.id] ?? "这一门"}已落定`}`
+                      : `${DOMAIN_LABEL[last.id] ?? "这一门"}暂且空着，日后再补`}
+                </p>
+              </>
+            )}
+            {!allFiled && (
+              <p className="font-serif text-[11px] ps-faint leading-relaxed">推演尚未收束，请勿关闭此页。</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const head = stage === "flash" ? "正在翻阅江湖档案" : stage === "error" ? "推演受阻" : "正在推演开篇";
 
@@ -189,7 +313,8 @@ function OpeningLoading() {
         <div>
           <h3 className="font-brush text-xl ps-strong tracking-[0.3em]">{head}</h3>
           <p className="font-serif text-xs ps-muted mt-2 leading-relaxed min-h-[1.2rem]">
-            {OPENING_WAITS[idx]}
+            {/* 推理模型先长一段思考才落笔：这一段也报出来，免得看着像卡住了 */}
+            {reasoning ? `模型正在思考…（${reasoning.length} 字）` : OPENING_WAITS[idx]}
           </p>
         </div>
 
@@ -818,9 +943,8 @@ ${OPENING_BRIEF}`,
   function renderSummary(id: StepId): string {
     if (id === "api") return "接口已接通";
     if (id === "name") {
-      return `${setup.name.trim()} · ${setup.title.trim() || "无名之辈"} · ${
-        setup.gender === "male" ? "男" : "女"
-      }`;
+      return `${setup.name.trim()} · ${setup.title.trim() || "无名之辈"} · ${setup.gender === "male" ? "男" : "女"
+        }`;
     }
     if (id === "realm") return setup.realm;
     if (id === "sect") return `${setup.sectName.trim() || "散修"} · ${setup.position}`;

@@ -13,7 +13,8 @@ import { EscortModal } from "@/components/map/EscortModal";
 import { MartialHallModal } from "@/components/map/MartialHallModal";
 import { PlayerShopModal } from "@/components/map/PlayerShopModal";
 import { ShopSetupModal } from "@/components/map/ShopSetupModal";
-import { manorKey, rollDistrictNpcs } from "@/data/npcGen";
+import { isAroundHere, isPinnedAt, manorKey, relationWhereabout, rollDistrictNpcs } from "@/data/npcGen";
+import { daySerial } from "@/lib/gameTime";
 import { shopLeaseCost } from "@/data/playerShops";
 import type { BuskResult, Market, Shop } from "@/data/types";
 import { Coins, Loader2, Music, Store, Users, X } from "lucide-react";
@@ -48,6 +49,9 @@ export function MarketPanel({
   const probeShop = useAIStore((s) => s.probeShop);
   const narrateBusking = useAIStore((s) => s.narrateBusking);
   const openNPCChat = useAIStore((s) => s.openNPCChat);
+  const relations = useGameStore((s) => s.relations);
+  const quests = useGameStore((s) => s.quests);
+  const currentTime = useGameStore((s) => s.currentTime);
 
   const [busyId, setBusyId] = useState("");
   const [note, setNote] = useState("");
@@ -74,6 +78,37 @@ export function MarketPanel({
     () => rollDistrictNpcs(label, cityId, districtId, culture, 3),
     [label, cityId, districtId, culture],
   );
+  const today = daySerial(currentTime);
+
+  // 落脚在这一坊市里的人：钉在这儿的排在前面，只知道在这座城、说不准哪一处的也一并算上。
+  // 与平民住宅那扇窗同一个规矩——先前漏了这一段，接了差事要寻的人落在坊市便寻不着
+  const known = useMemo(() => {
+    const here = relations.filter((r) => isAroundHere(r, cityId, districtId));
+    return [
+      ...here.filter((r) => isPinnedAt(r, cityId, districtId, today)),
+      ...here.filter((r) => !isPinnedAt(r, cityId, districtId, today)),
+    ];
+  }, [relations, cityId, districtId, today]);
+
+  // 这一坊市里还挂着的差事：要寻的人星标出来，免得在街上白转
+  const wanted = useMemo(
+    () =>
+      new Set(
+        quests
+          .filter(
+            (q) => q.status === "open" && q.target?.cityId === cityId && q.target.districtId === districtId,
+          )
+          .map((q) => q.target?.person)
+          .filter((n): n is string => !!n),
+      ),
+    [quests, cityId, districtId],
+  );
+
+  // 认下过的就不再当生面孔挂一遍
+  const fresh = useMemo(() => {
+    const taken = new Set(known.map((r) => r.name));
+    return streetNpcs.filter((s) => !taken.has(s.name));
+  }, [streetNpcs, known]);
 
   /** 街头卖艺：选一门本事考教五场，成败与钱财由代码定下，再写一段叙事 */
   const perform = async () => {
@@ -303,11 +338,35 @@ export function MarketPanel({
             )}
           </ScrollCard>
 
+          {/* 这一坊市里的人：钉在这儿的、以及只知在城中的人都在这儿露面。
+              接下的差事要找的人若正落在此处，星标出来 */}
+          {known.length > 0 && (
+            <ScrollCard title="这一坊市里的人" subtitle="认下过的旧识，攀谈两句无妨" className="mt-4">
+              <div className="flex flex-wrap gap-2">
+                {known.map((npc) => (
+                  <button
+                    key={npc.id}
+                    onClick={() => {
+                      meetNpc(npc);
+                      openNPCChat(npc.id);
+                    }}
+                    title={`${npc.name}（${npc.title}）· 现在在${relationWhereabout(npc)}`}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded border-2 border-ink-lightest/40 bg-paper-old/50 font-serif text-xs text-ink-dark transition hover:border-gold-500"
+                  >
+                    <Users size={12} />
+                    {npc.name} · {npc.title}
+                    {wanted.has(npc.name) && <span className="text-gold-500" title="你要找的人">★</span>}
+                  </button>
+                ))}
+              </div>
+            </ScrollCard>
+          )}
+
           {/* 街上的人：与平民住宅一样，认下便可攀谈 */}
-          {streetNpcs.length > 0 && (
+          {fresh.length > 0 && (
             <ScrollCard title="街上的人" subtitle="坊市里走动的人，攀谈两句无妨" className="mt-4">
               <div className="flex flex-wrap gap-2">
-                {streetNpcs.map((npc) => (
+                {fresh.map((npc) => (
                   <button
                     key={npc.id}
                     onClick={() => {

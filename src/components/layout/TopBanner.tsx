@@ -106,7 +106,7 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
           )}
 
           <div className="text-right">
-            <div className="text-label">寿元</div>
+            <div className="text-label">所剩寿元</div>
             <div className="font-number text-base text-jade-400 whitespace-nowrap">
               {player.lifespanCurrent}
               <span className="text-ink-light text-xs"> / {player.lifespanMax}</span>

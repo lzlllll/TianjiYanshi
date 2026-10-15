@@ -58,7 +58,7 @@ import { clampCustomFacility } from "@/data/sectFacilities";
 import { pinNarrativeQuest } from "@/data/broker";
 import { OPENING_GAME_TIME, daySerial, formatGameTime } from "@/lib/gameTime";
 import { advanceIncense } from "@/lib/battleTime";
-import { chatWithModel, chatWithModelStream } from "@/lib/aiClient";
+import { chatWithModel, chatWithModelStream, isReasoningSlot } from "@/lib/aiClient";
 import type { DataOp, GameState } from "@/data/types";
 import {
   buildDataSchema,
@@ -146,9 +146,20 @@ const DEFAULT_SETTINGS: AISettings = {
   apiKey: "",
   flashModel: FREE_MODEL.model,
   proModel: FREE_MODEL.model,
+  // 是不是带思维链的推理模型，默认由模型名与运行时表现自行判断
+  flashReasoning: "auto",
+  proReasoning: "auto",
   temperature: 0.85,
   customPrompt: "",
 };
+
+/** 叙事那一档的总时限：非推理档两分钟够用，推理档先长一段思考才落笔，留宽一档 */
+const PRO_TIMEOUT_MS = 120000;
+const PRO_TIMEOUT_REASONING_MS = 300000;
+
+function proTimeoutMs(settings: AISettings): number {
+  return isReasoningSlot(settings, "pro") ? PRO_TIMEOUT_REASONING_MS : PRO_TIMEOUT_MS;
+}
 
 const INITIAL_CONVERSATION: ConversationState = {
   turns: [],
@@ -162,6 +173,8 @@ const INITIAL_CONVERSATION: ConversationState = {
   pendingChatSummary: "",
   pendingCrafting: null,
   streamingNarrative: "",
+  streamingReasoning: "",
+  openingFiled: [],
 };
 
 const INITIAL_NPC_CHAT: NPCChatState = {
@@ -1344,6 +1357,8 @@ async function runOpeningExtraction(
   state: GameState,
   narrative: string,
   signal: AbortSignal,
+  /** 每落完一门报一声，等待页照它显示进度 */
+  onFiled?: (domainId: string, ok: boolean) => void,
 ): Promise<{ ops: DataOp[]; opsRaw: string; quickDecisions: string[] }> {
   if (!narrative.trim()) return emptyExtraction();
 
@@ -1383,7 +1398,11 @@ async function runOpeningExtraction(
   // 哪几门的这一遍是「整段 JSON 没成篇、只从残文里捡回几条」的：这类多半还漏着条目，
   // 不能当它已齐，得让后面的补档再跑一遍
   const salvagedDomains = new Set<string>();
-  const raws: string[] = [];
+  // 各门各留一份原始输出与各遍耗时，末了照领域次序拼回去——
+  // 并发之下完成先后不定，若随完成次序堆叠，日志与原始输出都会乱掉
+  const rawsByDomain = new Map<string, string[]>();
+  const timingsByDomain = new Map<string, number[]>();
+  const openingStart = Date.now();
   let quickDecisions: string[] = [];
   let dropped = 0;
 
@@ -1393,7 +1412,9 @@ async function runOpeningExtraction(
   };
 
   const take = (domain: (typeof OPENING_DOMAINS)[number], parsed: { ops: DataOp[]; opsRaw: string; quickDecisions: string[] }) => {
-    raws.push(`【${domain.label}】\n${parsed.opsRaw}`);
+    const ownRaws = rawsByDomain.get(domain.id) ?? [];
+    ownRaws.push(`【${domain.label}】\n${parsed.opsRaw}`);
+    rawsByDomain.set(domain.id, ownRaws);
     const kept: DataOp[] = [];
     let domainDropped = 0;
     for (const op of parsed.ops) {
@@ -1467,63 +1488,61 @@ async function runOpeningExtraction(
     return ops.length > 0;
   };
 
-  // 第一遍：八门齐发。开局建档本就是一次铺开，一次打通才省时；
-  // 偶有被接口限流的，交由下面两遍补上
-  const firstPass = await Promise.allSettled(OPENING_DOMAINS.map((domain) => ask(domain)));
-  firstPass.forEach((result, k) => {
-    const domain = OPENING_DOMAINS[k];
-    if (result.status === "fulfilled") {
-      noteSalvage(domain, result.value.salvaged);
-      take(domain, result.value);
-    } else if (!signal.aborted) {
-      console.warn(`[openingExtraction] ${domain.label} 首遍未成：`, result.reason);
-    }
-  });
-
   const proModel =
     settings.proModel && settings.proModel !== settings.flashModel ? settings.proModel : settings.flashModel;
 
-  // 第二遍：头一遍没成、或成了却一条也没落下的那几门，换强模型再齐发一遍。
-  // 开局最怕功法、财宝、尘缘、本事几门空着，故这一遍不省
-  const missing = OPENING_DOMAINS.filter((d) => !domainSatisfied(d));
-  if (missing.length > 0 && !signal.aborted) {
-    await waitMs(OPENING_PAUSE_MS);
-    // 补档换手气：快模型若不成，改用稍强的那一档再试；仍旧并发，不再逐个等
-    const retried = await Promise.allSettled(missing.map((domain) => ask(domain, proModel)));
-    retried.forEach((result, k) => {
-      const domain = missing[k];
-      if (result.status === "fulfilled") {
-        noteSalvage(domain, result.value.salvaged);
-        const count = take(domain, result.value);
-        console.info(`[openingExtraction] ${domain.label} 补档得 ${count} 条`);
-      } else if (!signal.aborted) {
-        console.warn(`[openingExtraction] ${domain.label} 补档仍不成：`, result.reason);
+  /**
+   * 一门的重试梯子：先快模型，未写齐便歇一口气换强模型再试，仍不齐则改「减负」版再试一遍。
+   * 各门各跑各的梯子、互不等待——哪一门没写齐便是哪一门自己接着补，不必等最慢的那一门先落定，
+   * 故整段耗时由「最慢的一门」而非「各遍之和」决定；落空得早的门也能更早开始补档。
+   * 一门之内始终只有一次调用在途，故同时在途的请求数不会超过门数，接口不至于被一轮轰满。
+   */
+  const runDomain = async (domain: (typeof OPENING_DOMAINS)[number]) => {
+    const ladder = [
+      { model: settings.flashModel, terse: false, note: "首遍" },
+      { model: proModel, terse: false, note: "补档" },
+      { model: proModel, terse: true, note: "减负补档" },
+    ];
+    for (let i = 0; i < ladder.length; i++) {
+      if (signal.aborted) return;
+      // 前一遍刚打过去，歇一口气再续
+      if (i > 0) await waitMs(OPENING_PAUSE_MS);
+      if (signal.aborted) return;
+      const step = ladder[i];
+      const startedAt = Date.now();
+      try {
+        const parsed = await ask(domain, step.model, step.terse);
+        noteSalvage(domain, parsed.salvaged);
+        const count = take(domain, parsed);
+        if (i > 0) console.info(`[openingExtraction] ${domain.label} ${step.note}得 ${count} 条`);
+        if (domainSatisfied(domain)) return;
+      } catch (e) {
+        if (!signal.aborted) console.warn(`[openingExtraction] ${domain.label} ${step.note}未成：`, e);
+      } finally {
+        const ownTimes = timingsByDomain.get(domain.id) ?? [];
+        ownTimes.push(Date.now() - startedAt);
+        timingsByDomain.set(domain.id, ownTimes);
       }
-    });
-  }
+    }
+  };
 
-  // 第三遍：仍空着的那几门改「减负」再齐发一次。
-  // 前面两回都空，多半不是模型不会写，而是条目写得太长、JSON 半途截断，
-  // 这一遍只求条数够、字段全，描述从简，把 JSON 收得住
-  const stillBlank = OPENING_DOMAINS.filter((d) => !domainSatisfied(d));
-  if (stillBlank.length > 0 && !signal.aborted) {
-    await waitMs(OPENING_PAUSE_MS);
-    const tersePass = await Promise.allSettled(stillBlank.map((domain) => ask(domain, proModel, true)));
-    tersePass.forEach((result, k) => {
-      const domain = stillBlank[k];
-      if (result.status === "fulfilled") {
-        noteSalvage(domain, result.value.salvaged);
-        const count = take(domain, result.value);
-        console.info(`[openingExtraction] ${domain.label} 减负补档得 ${count} 条`);
-      } else if (!signal.aborted) {
-        console.warn(`[openingExtraction] ${domain.label} 减负补档仍不成：`, result.reason);
-      }
-    });
-  }
+  /**
+   * 开局落脚之处：先照正文自己认出落脚之城，认得出便不走模型。
+   * 开局提示词本就要求起笔写清身在何处，正文里最先提到的那座城便是落脚地，
+   * 由代码认领又快又准；只有正文一处城池也没写时，才花一趟调用去问模型。
+   */
+  const recognizePlace = async (): Promise<DataOp[]> => {
+    if (signal.aborted) return [];
+    const own: DataOp[] = [];
 
-  // 开局落脚之处：分段建档不管这一项，另从开篇里认一回，认出来便落成一条 currentPlaceId
-  let placeOps: DataOp[] = [];
-  if (!signal.aborted) {
+    const guess = findFirstMarkerInText(narrative);
+    if (guess) {
+      // 认得出就省下这一趟：一趟调用就是一段完整的思考，开局能省则省
+      console.info(`[openingExtraction] 落脚之地认作正文首见之地：${guess.name}（不另走一趟模型）`);
+      own.push({ kind: "modify", path: "currentPlaceId", op: "=", value: guess.id });
+      return own;
+    }
+
     let modelPlace = "";
     let location = "";
     try {
@@ -1541,32 +1560,39 @@ async function runOpeningExtraction(
       if (!signal.aborted) console.warn("[openingExtraction] 场所识别未成：", e);
     }
 
-    // 落脚之城以正文为准：开篇照例起笔便写清身在何处，正文里最先提到的那座城便是落脚地，
-    // 由代码认领，免得模型这一趟认空或认错；正文一处城池也没写，才退而听模型所认
-    const guess = findFirstMarkerInText(narrative);
-    const place = guess?.id ?? modelPlace;
-    if (guess) {
-      console.info(`[openingExtraction] 落脚之地认作正文首见之地：${guess.name}`);
-    } else if (modelPlace) {
-      console.info(`[openingExtraction] 落脚之地取自模型所认：${modelPlace}`);
-    } else {
+    if (!modelPlace) {
       console.warn("[openingExtraction] 开篇里没认出落脚之地，暂留默认城池");
+      return own;
     }
-
-    if (place) placeOps.push({ kind: "modify", path: "currentPlaceId", op: "=", value: place });
+    console.info(`[openingExtraction] 落脚之地取自模型所认：${modelPlace}`);
+    own.push({ kind: "modify", path: "currentPlaceId", op: "=", value: modelPlace });
     // 场所只认表里有的，认不出这一条自会被丢掉
-    if (location) placeOps.push({ kind: "modify", path: "currentLocation", op: "=", value: location });
-  }
+    if (location) own.push({ kind: "modify", path: "currentLocation", op: "=", value: location });
+    return own;
+  };
+
+  // 八门建档与落脚识别一并铺开：这一批便是开局并发的上限（门数 + 1）。
+  // 各门自跑梯子、先落定的不再等后来的；落脚识别只跑一趟，随第一批同起。
+  const placePromise = recognizePlace();
+  await Promise.allSettled(
+    OPENING_DOMAINS.map(async (domain) => {
+      await runDomain(domain);
+      // 这一门跑完了（成与不成都要报），等待页照它报进度
+      onFiled?.(domain.id, domainSatisfied(domain));
+    }),
+  );
+  const placeOps = await placePromise;
 
   const ops = [...OPENING_DOMAINS.flatMap((d) => byDomain.get(d.id) ?? []), ...placeOps];
+  const opsRaw = OPENING_DOMAINS.flatMap((d) => rawsByDomain.get(d.id) ?? []).join("\n\n");
   const stillEmpty = OPENING_DOMAINS.filter((d) => !domainSatisfied(d)).map((d) => d.label);
 
-  // 开局背包是不是空的，一眼能从日志看出来；空着时把三遍分别解出多少一并附上
+  // 开局背包是不是空的，一眼能从日志看出来；空着时把各遍分别解出多少一并附上
   const invFinal = ops.filter((op) => op.kind === "add" && op.collection === "inventory").length;
   const stoneFinal = ops.filter((op) => op.kind === "modify" && op.path.startsWith("spiritStones.")).length;
   console.info(
     `[openingExtraction] 财宝定档：随身之物 ${invFinal} 件、灵石条目 ${stoneFinal} 条${
-      invFinal === 0 ? "——三遍都没写出随身之物，开局背包会是空的" : ""
+      invFinal === 0 ? "——各遍都没写出随身之物，开局背包会是空的" : ""
     }`,
   );
 
@@ -1574,11 +1600,20 @@ async function runOpeningExtraction(
     console.warn(`[openingExtraction] 已丢弃 ${dropped} 条越界操作`);
   }
   if (stillEmpty.length > 0) {
-    console.warn(`[openingExtraction] 以下领域三遍都没建档，数据留待后续回合补全：${stillEmpty.join("、")}`);
+    console.warn(`[openingExtraction] 以下领域几遍都没建档，数据留待后续回合补全：${stillEmpty.join("、")}`);
   }
+
+  // 建档耗时分布：逐门报出各遍各耗多久，一眼看出这一局卡在哪一门、哪一遍
+  const timingText = OPENING_DOMAINS.map((d) => {
+    const list = timingsByDomain.get(d.id) ?? [];
+    return `${d.label}[${list.length > 0 ? list.map((ms) => `${(ms / 1000).toFixed(1)}s`).join("+") : "未发"}]`;
+  }).join(" ");
+  console.info(
+    `[openingExtraction] 建档总耗时 ${((Date.now() - openingStart) / 1000).toFixed(1)}s（八门并发，含落脚识别），逐门各遍：${timingText}`,
+  );
   console.debug(`[openingExtraction] 合计 ${ops.length} 条数据操作`);
 
-  return { ops, opsRaw: raws.join("\n\n"), quickDecisions };
+  return { ops, opsRaw, quickDecisions };
 }
 
 /**
@@ -1809,6 +1844,7 @@ export const useAIStore = create<AIStore>()(
             errorMsg: "已取消生成。",
             pendingCrafting: null,
             streamingNarrative: "",
+            streamingReasoning: "",
           },
           isCraftingOpen: false,
           npcChat: {
@@ -2068,7 +2104,9 @@ export const useAIStore = create<AIStore>()(
         // Pro 只生成叙事正文
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
-          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          set((st) => ({
+            conversation: { ...st.conversation, streamingNarrative: "", streamingReasoning: "" },
+          }));
           const proRaw = await chatWithModelStream(
             settings,
             model,
@@ -2088,6 +2126,10 @@ export const useAIStore = create<AIStore>()(
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+              onReasoning: (_delta, fullReasoning) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingReasoning: fullReasoning } }));
               },
             },
           );
@@ -2195,6 +2237,7 @@ export const useAIStore = create<AIStore>()(
             pendingChatSummary: "",
             pendingCrafting: null,
             streamingNarrative: "",
+            streamingReasoning: "",
           },
         }));
         abortController = null;
@@ -2357,7 +2400,7 @@ export const useAIStore = create<AIStore>()(
 
         // ===== Stage 2: pro 生成叙事正文 =====
         set((st) => ({
-          conversation: { ...st.conversation, stage: "pro" },
+          conversation: { ...st.conversation, stage: "pro", openingFiled: [] },
         }));
 
         let narrative = "";
@@ -2368,7 +2411,9 @@ export const useAIStore = create<AIStore>()(
 
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
-          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          set((st) => ({
+            conversation: { ...st.conversation, streamingNarrative: "", streamingReasoning: "" },
+          }));
           const proRaw = await chatWithModelStream(
             settings,
             model,
@@ -2383,11 +2428,15 @@ export const useAIStore = create<AIStore>()(
               opening: isFirstTurn,
             }),
             {
-              timeoutMs: 120000,
+              timeoutMs: proTimeoutMs(settings),
               signal,
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+              onReasoning: (_delta, fullReasoning) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingReasoning: fullReasoning } }));
               },
             },
           );
@@ -2452,7 +2501,14 @@ export const useAIStore = create<AIStore>()(
         // 首回合要一次性建立整套角色档案，改走按领域并发建档；其余回合仍是增量结算
         const extraction =
           conv.turns.length === 0
-            ? await runOpeningExtraction(settings, gameState, narrative, signal)
+            ? await runOpeningExtraction(settings, gameState, narrative, signal, (id, ok) =>
+                set((st) => ({
+                  conversation: {
+                    ...st.conversation,
+                    openingFiled: [...st.conversation.openingFiled, { id, ok }],
+                  },
+                })),
+              )
             : await runOpsExtraction(settings, gameState, narrative, signal);
         if (signal.aborted) return;
 
@@ -2564,6 +2620,7 @@ export const useAIStore = create<AIStore>()(
             errorMsg: "",
             pendingChatSummary: "",
             streamingNarrative: "",
+            streamingReasoning: "",
           },
         }));
         abortController = null;
@@ -2616,7 +2673,14 @@ export const useAIStore = create<AIStore>()(
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
         try {
-          set((st) => ({ conversation: { ...st.conversation, streamingNarrative: "" } }));
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              streamingNarrative: "",
+              streamingReasoning: "",
+              openingFiled: [],
+            },
+          }));
           proRaw = await chatWithModelStream(
             settings,
             settings.proModel,
@@ -2629,11 +2693,15 @@ export const useAIStore = create<AIStore>()(
               customPrompt: settings.customPrompt,
             }),
             {
-              timeoutMs: 120000,
+              timeoutMs: proTimeoutMs(settings),
               signal,
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
+              },
+              onReasoning: (_delta, fullReasoning) => {
+                if (signal.aborted) return;
+                set((st) => ({ conversation: { ...st.conversation, streamingReasoning: fullReasoning } }));
               },
             },
           );
@@ -2661,7 +2729,14 @@ export const useAIStore = create<AIStore>()(
         const retryState = useGameStore.getState().getSnapshot() as any;
         const extraction =
           conversation.turns.length === 1
-            ? await runOpeningExtraction(settings, retryState, narrative, signal)
+            ? await runOpeningExtraction(settings, retryState, narrative, signal, (id, ok) =>
+                set((st) => ({
+                  conversation: {
+                    ...st.conversation,
+                    openingFiled: [...st.conversation.openingFiled, { id, ok }],
+                  },
+                })),
+              )
             : await runOpsExtraction(settings, retryState, narrative, signal);
         if (signal.aborted) return;
 
@@ -2692,6 +2767,7 @@ export const useAIStore = create<AIStore>()(
               stage: "done",
               lastRawOutput: proRaw,
               streamingNarrative: "",
+              streamingReasoning: "",
             },
           };
         });
@@ -2786,6 +2862,8 @@ export const useAIStore = create<AIStore>()(
             pendingChatSummary: "",
             pendingCrafting: null,
             streamingNarrative: "",
+            streamingReasoning: "",
+            openingFiled: [],
           },
         });
       },

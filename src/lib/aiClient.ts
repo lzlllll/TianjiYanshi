@@ -26,6 +26,128 @@ const DEFAULT_TIMEOUT = 300000;
 const MAX_OUTPUT_TOKENS = 8192;
 
 /**
+ * 推理档的输出上限。思维链与正文共用这一份额度，
+ * 8192 常被思考过程整段吃掉、正文一个字都留不下，故另放宽一档。
+ */
+const MAX_OUTPUT_TOKENS_REASONING = 32768;
+
+/**
+ * 推理档做结构化活儿时的思考开关。建档、结算只是照抄，不必想。
+ *
+ * 实测（七牛云 · moonshotai/kimi-k3-free，同一句短请求走游戏后端）：
+ *   原样            35.5s，256 token 全花在思维链上，正文为空（finish_reason=length）
+ *   thinking 关闭    9.5s，思维链 0 token，正文正常
+ *   另试过 enable_thinking:false 与 chat_template_kwargs 两种写法，七牛都不认，照旧思考。
+ */
+const NO_THINKING = { type: "disabled" } as const;
+
+/**
+ * 叙事那一条的思考量。建档可以完全不想，叙事却该留一分斟酌，故只压到最低档。
+ *
+ * 实测（七牛云 · moonshotai/kimi-k3-free，同一句叙事请求）：
+ *   不加参数       53.9s，512 token 全花在思维链上，正文一个字没有
+ *   reasoning_effort:"low"  30.2s，思维链降到 15 token，正文照写
+ *   另试过 "minimal" 与 "medium"，上游直接 502——只有 low 与 none 可用。
+ */
+const NARRATIVE_REASONING_EFFORT = "low";
+
+/**
+ * 认得出是推理模型的字样。认不出也无妨——哪一档真吐过思维链，
+ * 运行时自会记下，往后便按推理档办。
+ * kimi-k3 是官方免费额度那档（moonshotai/kimi-k3-free）：它带思维链，
+ * 若不认出来，便会照普通档只给 8192 的额度，被思考过程吃光、正文一个字都留不下。
+ */
+const REASONING_NAME_PATTERN = /reason|think|z1|qwq|r1\b|o[1-9]-|kimi-k3/i;
+
+/** 运行时见过的推理档模型名；见过一次便记住，往后自动按推理档办 */
+const reasonedModels = new Set<string>();
+
+/** 照名字看这模型像不像带思维链的 */
+function looksLikeReasoning(model: string): boolean {
+  return REASONING_NAME_PATTERN.test(String(model ?? ""));
+}
+
+/** 记下这一档吐过思维链，往后同一档自动按推理档办 */
+function noteReasoningModel(model: string): void {
+  if (model) reasonedModels.add(model);
+}
+
+/** 按模型名认它归哪一档：先照 flash 比，认不出当 pro */
+function slotOf(settings: AISettings, model: string): "flash" | "pro" {
+  return model === settings.flashModel ? "flash" : "pro";
+}
+
+/**
+ * 这一档是不是推理模型：玩家手动指的 on/off 优先，
+ * auto 则看模型名，外加运行时见过的记录。
+ */
+export function isReasoningSlot(settings: AISettings, slot: "flash" | "pro"): boolean {
+  const mode = slot === "pro" ? settings.proReasoning : settings.flashReasoning;
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  const model = String((slot === "pro" ? settings.proModel : settings.flashModel) ?? "");
+  return reasonedModels.has(model) || looksLikeReasoning(model);
+}
+
+/** 该模型是不是 OpenAI 的 o 系：那一系只认 max_completion_tokens，也不认温度 */
+function isOpenAiOSeries(model: string): boolean {
+  return /^o[1-9](-|$)/.test(String(model ?? "").trim());
+}
+
+/**
+ * 请求体只在这一处生成。三处调用各写一份，参数适配迟早走岔。
+ * 推理档与非推理档的差别全在这里收口：输出额度放宽、不硬要 response_format。
+ */
+function buildRequestBody(params: {
+  model: string;
+  messages: ChatMessage[];
+  stream: boolean;
+  temperature: number;
+  /** 这一档是不是推理模型 */
+  reasoning: boolean;
+  jsonMode?: boolean;
+  /** 要不要把这一档的思考量收一收；只在推理档上交这一项 */
+  reasoningEffort?: string;
+}): Record<string, unknown> {
+  const { model, messages, stream, temperature, reasoning, jsonMode, reasoningEffort } = params;
+  const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
+  const oSeries = isOpenAiOSeries(model);
+
+  const body: Record<string, unknown> = { model, messages, stream };
+  // o 系改名成 max_completion_tokens，且不认 temperature（传了会报错）
+  if (oSeries) {
+    body.max_completion_tokens = maxTokens;
+  } else {
+    body.max_tokens = maxTokens;
+    body.temperature = temperature;
+  }
+  // 部分推理模型不认 response_format，硬要 JSON 反倒报错；提示词里已写明「只输出 JSON」
+  if (jsonMode && !reasoning) {
+    body.response_format = { type: "json_object" };
+  }
+  /*
+   * 结构化活儿（建档、结算这一类）只是照抄，不需要想。
+   * 推理档带上「关掉思考」这一项：模型不必换，省下的是每一趟的思考时间。
+   * 上游不认这一项时多半直接忽略，不会报错。
+   */
+  if (reasoning && jsonMode) {
+    body.thinking = NO_THINKING;
+  }
+  /*
+   * 叙事那条只收不收满：思考量压到最低档，省下的是时间，行文仍留一分斟酌。
+   * 非推理档一概不交这一项——有些服务商对不认识的参数会直接报错。
+   */
+  if (reasoning && reasoningEffort) {
+    body.reasoning_effort = reasoningEffort;
+  }
+  if (stream) {
+    // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
+    body.stream_options = { include_usage: true };
+  }
+  return body;
+}
+
+/**
  * 本地服务窗口被关掉时，浏览器只会抛出 ERR_CONNECTION_REFUSED。
  * 这里补一句用户能直接照做的说明，而不是让人误以为是模型或网络的问题。
  */
@@ -119,6 +241,40 @@ function noteFinish(model: string, data: any, content: string): void {
   }
 }
 
+/** 非流式回包里的思维链；没有便是空串 */
+function reasoningOf(data: any): string {
+  const message = data?.choices?.[0]?.message ?? {};
+  const raw = message?.reasoning_content ?? message?.reasoning;
+  return typeof raw === "string" ? raw : "";
+}
+
+/**
+ * 非流式回包里正文为空时，给一句对症的话。
+ * 带思维链的模型把思考过程写在 message.reasoning_content / reasoning 里，正文另走 content；
+ * 只吐了思维链、没写正文的情形要认出来并说清楚，别只丢一句「空内容」让人摸不着头脑。
+ */
+function emptyContentError(model: string, data: any): Error {
+  if (reasoningOf(data)) {
+    const finish = data?.choices?.[0]?.finish_reason;
+    return new Error(
+      `接口只吐了思维链、没写正文${finish ? `（finish_reason=${finish}）` : ""}。模型「${model}」多半是带思维链的推理模型，` +
+        `思考过程把输出额度占满，正文便没写出来——请在设置里换一档不带思维链的模型。`,
+    );
+  }
+  return new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
+}
+
+/**
+ * 「只吐了思维链、没写正文」报的那一句。
+ * 流式的两条路（正常收尾、到点被断）都要用它，口径须一致。
+ */
+function reasoningOnlyError(model: string, why: string): Error {
+  return new Error(
+    `接口只吐了思维链、没写正文（${why}）。模型「${model}」多半是带思维链的推理模型，` +
+      `思考过程把输出额度占满，正文便没写出来——请在设置里换一档不带思维链的模型来生成叙事。`,
+  );
+}
+
 /** 调用后端转发口（OpenAI 兼容的 chat/completions），返回助手消息文本 */
 export async function chatComplete(
   settings: AISettings,
@@ -135,17 +291,18 @@ export async function chatComplete(
   }
 
   try {
-    const requestBody = {
-      model: messages[0]?.role === "system" ? inferModel(messages, settings) : settings.proModel,
+    const model = messages[0]?.role === "system" ? inferModel(messages, settings) : settings.proModel;
+    const requestBody = buildRequestBody({
+      model,
       messages,
-      temperature: settings.temperature,
       stream: false,
-      max_tokens: MAX_OUTPUT_TOKENS,
-    };
+      temperature: settings.temperature,
+      reasoning: isReasoningSlot(settings, slotOf(settings, model)),
+    });
     const bodyStr = JSON.stringify(requestBody);
     const bodySize = new Blob([bodyStr]).size;
 
-    logRequestInfo(requestBody.model, messages, bodySize, endpoint);
+    logRequestInfo(model, messages, bodySize, endpoint);
     checkRequestSize(bodySize);
 
     const resp = await fetch(endpoint, {
@@ -186,11 +343,13 @@ export async function chatComplete(
       data?.choices?.[0]?.message?.content ??
       data?.choices?.[0]?.text ??
       "";
+    // 吐过思维链便记下这一档，往后自动按推理档办
+    if (reasoningOf(data)) noteReasoningModel(model);
     if (!content) {
-      throw new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
+      throw emptyContentError(model, data);
     }
-    noteFinish(requestBody.model, data, content);
-    recordTokenUsage(requestBody.model, data?.usage, noteFromMessages(messages));
+    noteFinish(model, data, content);
+    recordTokenUsage(model, data?.usage, noteFromMessages(messages));
     if (content.length > 100000) {
       console.warn(`[aiClient] Response too large (${content.length} chars), truncating`);
       return content.slice(0, 100000);
@@ -252,17 +411,14 @@ export async function chatWithModel(
     }
 
     try {
-      const requestBody: Record<string, unknown> = {
+      const requestBody = buildRequestBody({
         model,
         messages,
-        temperature: opts.temperature ?? settings.temperature,
         stream: false,
-        max_tokens: MAX_OUTPUT_TOKENS,
-      };
-      // JSON 模式：要求模型只返回合法 JSON 对象
-      if (opts.jsonMode) {
-        requestBody.response_format = { type: "json_object" };
-      }
+        temperature: opts.temperature ?? settings.temperature,
+        reasoning: isReasoningSlot(settings, slotOf(settings, model)),
+        jsonMode: opts.jsonMode,
+      });
       const bodyStr = JSON.stringify(requestBody);
       const bodySize = new Blob([bodyStr]).size;
 
@@ -319,8 +475,10 @@ export async function chatWithModel(
         data?.choices?.[0]?.message?.content ??
         data?.choices?.[0]?.text ??
         "";
+      // 吐过思维链便记下这一档，往后自动按推理档办
+      if (reasoningOf(data)) noteReasoningModel(model);
       if (!content) {
-        throw new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
+        throw emptyContentError(model, data);
       }
       noteFinish(model, data, content);
       recordTokenUsage(model, data?.usage, noteFromMessages(messages));
@@ -372,10 +530,34 @@ async function parseSSEStream(
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
   onUsage?: (usage: any) => void,
-): Promise<{ finishReason: string | null }> {
+  /** 思维链另走这一条：它不算正文，只用来在界面上显示「正在思考」 */
+  onReasoning?: (delta: string) => void,
+): Promise<{ finishReason: string | null; sawReasoning: boolean }> {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let finishReason: string | null = null;
+  // 带思维链的那几档模型，把思考过程放在 reasoning_content 或 reasoning 里，正文另走 content。
+  // 思维链不算正文，故不并进 full，只记一笔「模型确实吐过东西」——
+  // 免得收尾时把「只吐了思维链、没写正文」误报成「整段流一片空白」。
+  let sawReasoning = false;
+  // 正文有没有收到过；顺带把「分片里到底出现过哪些字段」记下来，
+  // 收尾若一字未见，靠它把上游的真实写法报出来，省得凭猜
+  let sawContent = false;
+  const deltaKeys = new Set<string>();
+  let firstChunk = "";
+
+  /**
+   * 收尾一字正文都没收到，就把上游的真实写法报出来：分片里出现过哪些 delta 字段、
+   * 第一片长什么样。各家把内容放在哪个字段上不尽相同，猜不如看。
+   */
+  const reportIfSilent = () => {
+    if (sawContent) return;
+    console.warn(
+      `[aiClient][stream] 一字正文都没收到（finish_reason=${finishReason ?? "?"}）。` +
+        `分片里见过的 delta 字段：${deltaKeys.size > 0 ? [...deltaKeys].join("、") : "（一个都没有）"}；` +
+        `首个分片原文：${firstChunk.slice(0, 400) || "（没收到任何分片）"}`,
+    );
+  };
 
   try {
     while (true) {
@@ -396,7 +578,10 @@ async function parseSSEStream(
         if (!line.startsWith("data:")) continue;
 
         const data = line.slice(5).trim();
-        if (data === "[DONE]") return { finishReason };
+        if (data === "[DONE]") {
+          reportIfSilent();
+          return { finishReason, sawReasoning };
+        }
 
         try {
           const json = JSON.parse(data);
@@ -404,8 +589,19 @@ async function parseSSEStream(
           const choice = json?.choices?.[0];
           // 收尾原因记下来：stop 是正常收尾，length 说明撞上了输出上限、正文被截断
           if (choice?.finish_reason) finishReason = String(choice.finish_reason);
-          const delta: string = choice?.delta?.content ?? choice?.text ?? "";
-          if (delta) onDelta(delta);
+          const piece = choice?.delta ?? {};
+          for (const k of Object.keys(piece)) deltaKeys.add(k);
+          if (!firstChunk && choice) firstChunk = data;
+          const reasoning = piece.reasoning_content ?? piece.reasoning;
+          if (typeof reasoning === "string" && reasoning) {
+            sawReasoning = true;
+            onReasoning?.(reasoning);
+          }
+          const delta: string = piece.content ?? choice?.text ?? "";
+          if (delta) {
+            sawContent = true;
+            onDelta(delta);
+          }
         } catch {
           // 单行 JSON 解析失败时跳过，不中断流
         }
@@ -418,7 +614,8 @@ async function parseSSEStream(
       /* noop */
     }
   }
-  return { finishReason };
+  reportIfSilent();
+  return { finishReason, sawReasoning };
 }
 
 /** 流式调用后端转发口，实时回调增量文本，返回完整文本 */
@@ -430,13 +627,21 @@ export async function chatWithModelStream(
     timeoutMs?: number;
     signal?: AbortSignal;
     onDelta?: (delta: string, full: string) => void;
+    /** 思维链增量；推理模型先长思考才落笔，这一段不并入正文 */
+    onReasoning?: (delta: string, fullReasoning: string) => void;
   } = {},
 ): Promise<string> {
   assertAiReady(settings);
   const endpoint = buildEndpoint(settings);
   const controller = new AbortController();
   const timeout = opts.timeoutMs ?? DEFAULT_TIMEOUT;
-  const timer = setTimeout(() => controller.abort(), timeout);
+  // 流式是「头一到便回、正文靠后续续传」，故这个钟不提前撤，一路架到整段读完，
+  // 作整段的硬上限：到点即断，宁可报一句超时，也不让玩家对着屏幕干等。
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeout);
   if (opts.signal) {
     opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
@@ -445,20 +650,24 @@ export async function chatWithModelStream(
   // 服务商常把输出截在远低于 max_tokens 的地方；撞上 length 就把已写的当作上文，
   // 另起一段接着写，最多续两段，免得正文断在半截
   let lastFinish: string | null = null;
+  // 全程有没有收到过思维链；收尾若正文为空，靠它分辨是「只有思维链」还是「整段空」
+  let sawReasoning = false;
+  // 思维链全文，只用于回调给界面显示「正在思考」，绝不并入正文
+  let reasoningText = "";
   const MAX_SEGMENTS = 3;
   try {
     const convo: ChatMessage[] = [...messages];
     for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
       const beforeLen = full.length;
-      const requestBody = {
+      const requestBody = buildRequestBody({
         model,
         messages: convo,
-        temperature: settings.temperature,
         stream: true,
-        // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
-        stream_options: { include_usage: true },
-        max_tokens: MAX_OUTPUT_TOKENS,
-      };
+        temperature: settings.temperature,
+        reasoning: isReasoningSlot(settings, slotOf(settings, model)),
+        // 这一条是叙事：建档可以完全不想，叙事只把思考压到最低档
+        reasoningEffort: NARRATIVE_REASONING_EFFORT,
+      });
       const bodyStr = JSON.stringify(requestBody);
       const bodySize = new Blob([bodyStr]).size;
 
@@ -478,8 +687,8 @@ export async function chatWithModelStream(
 
       console.debug(`[aiClient][stream] Response status: ${resp.status}（第 ${seg + 1} 段）`);
 
-      // 连接已建立，清除超时计时器
-      clearTimeout(timer);
+      // 这里不撤那个钟：撤了便只剩「建连」这一段受约束，正文能无限拖下去——
+      // 慢的推理模型一口气吐十几分钟思维链也不会有个头。让它架到整段读完为止。
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");
@@ -505,8 +714,15 @@ export async function chatWithModelStream(
         },
         controller.signal,
         (usage) => recordTokenUsage(model, usage, noteFromMessages(messages)),
+        (delta) => {
+          // 收到思维链即可断定这一档是推理模型，往后自动按推理档办
+          noteReasoningModel(model);
+          reasoningText += delta;
+          opts.onReasoning?.(delta, reasoningText);
+        },
       );
       lastFinish = streamInfo.finishReason;
+      sawReasoning = sawReasoning || streamInfo.sawReasoning;
 
       if (streamInfo.finishReason !== "length") break;
       // 这一段落没有多出任何字，再续也是白续，就此收手
@@ -524,14 +740,26 @@ export async function chatWithModelStream(
     }
 
     if (!full) {
-      // 空正文要分辨是「被中止」还是「模型压根没吐内容」，否则只看到一句空内容不知所由
-      const why = lastFinish
-        ? `finish_reason=${lastFinish}`
-        : controller.signal.aborted
-          ? "请求已被中止，未收到任何内容"
-          : "整段流未收到任何内容片段";
-      console.warn(`[aiClient][stream] 空正文：${why}，model=${model}`);
+      // 空正文要分辨是「超时被断」「只吐了思维链」还是「模型压根没吐内容」，
+      // 否则只看到一句空内容不知所由
+      const why = timedOut
+        ? `已等满 ${Math.round(timeout / 1000)} 秒仍未见到正文`
+        : lastFinish
+          ? `finish_reason=${lastFinish}`
+          : controller.signal.aborted
+            ? "请求已被中止，未收到任何内容"
+            : "整段流未收到任何内容片段";
+      console.warn(`[aiClient][stream] 空正文：${why}，model=${model}${sawReasoning ? "，且只收到思维链" : ""}`);
+      if (sawReasoning) {
+        throw reasoningOnlyError(model, why);
+      }
       throw new Error(`接口返回空内容（${why}），请检查后端的上游配置与模型名称。`);
+    }
+    if (timedOut) {
+      // 断在半路：已收到的这些先按残篇收下，至少别让这一回合空着
+      console.warn(
+        `[aiClient][stream] 已等满 ${Math.round(timeout / 1000)} 秒仍未写完，按残篇收下 ${full.length} 字，model=${model}。`,
+      );
     }
     if (lastFinish === "length") {
       console.warn(
@@ -545,6 +773,20 @@ export async function chatWithModelStream(
     return full;
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === "AbortError") {
+      // 到点自动断的：与「用户主动取消」分开说，别让人以为是自己的操作
+      if (timedOut) {
+        const secs = Math.round(timeout / 1000);
+        if (full) {
+          console.warn(
+            `[aiClient][stream] 已等满 ${secs} 秒仍未写完，按残篇收下 ${full.length} 字，model=${model}。`,
+          );
+          return full;
+        }
+        if (sawReasoning) throw reasoningOnlyError(model, `已等满 ${secs} 秒`);
+        throw new Error(
+          `已等满 ${secs} 秒仍未收到正文，已中断，model=${model}。请检查模型是否可用，或换一档更快的模型。`,
+        );
+      }
       // 用户主动取消时，返回已收到的内容（若有）
       if (full) {
         console.warn("[aiClient][stream] Request aborted, returning partial content");

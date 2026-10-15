@@ -1996,6 +1996,12 @@ export type DataOp =
   | { kind: "add"; collection: string; payload: string | Record<string, unknown> }
   | { kind: "delete"; collection: string; id: string };
 
+/**
+ * 某档模型是不是带思维链的推理模型。
+ * auto 由模型名与运行时表现自行判断；on/off 是玩家手动定死。
+ */
+export type ModelReasoningMode = "auto" | "on" | "off";
+
 export interface AISettings {
   /**
    * 自定义接口。两项都填齐时，推演直接走玩家自己的接口；
@@ -2005,6 +2011,13 @@ export interface AISettings {
   apiKey: string;
   flashModel: string;
   proModel: string;
+  /**
+   * 带思维链的推理模型另有一套：思维链与正文共用输出额度，
+   * 且多半不认 response_format。标出来才好照推理档办。
+   * 缺省按 auto 算，老存档不会因此失效。
+   */
+  flashReasoning?: ModelReasoningMode;
+  proReasoning?: ModelReasoningMode;
   temperature: number;
   /** 玩家自定义提示词，追加到系统提示词末尾 */
   customPrompt: string;
@@ -2261,6 +2274,16 @@ export interface ConversationState {
   pendingCrafting?: CraftingContext | null;
   /** Pro 阶段流式输出的实时叙事文本，用于打字机效果展示 */
   streamingNarrative: string;
+  /**
+   * Pro 阶段流式收到的思维链。
+   * 推理模型先长一段思考才落笔，这一段不并入正文，只用来在界面上显示「正在思考」。
+   */
+  streamingReasoning: string;
+  /**
+   * 开局建档这一局落到哪一步了：每跑完一门便记一笔，等待页照它报进度。
+   * ok 为假表示那一门几遍都没写全，留待后续回合补。
+   */
+  openingFiled: { id: string; ok: boolean }[];
 }
 
 export type NPCChatRole = "player" | "npc";

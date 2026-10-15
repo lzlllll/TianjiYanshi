@@ -10,6 +10,13 @@ export async function serveAiChatNode(req, res, env = process.env) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
 
+  // Node 这边 request.signal 不会自己中止，须自接一根：
+  // 客户端断开（点「停」、关页面）时把上游那一趟也一并掐掉。
+  const ac = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) ac.abort();
+  });
+
   const request = new Request("http://localhost/api/ai/chat/completions", {
     method: req.method,
     headers: {
@@ -17,6 +24,7 @@ export async function serveAiChatNode(req, res, env = process.env) {
       accept: req.headers["accept"] || "application/json",
     },
     body: chunks.length ? Buffer.concat(chunks) : undefined,
+    signal: ac.signal,
   });
 
   const response = await handleAiChat(request, env);
