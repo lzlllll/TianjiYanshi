@@ -41,7 +41,9 @@ export function StoryWindow({ open, onClose, onOpenSettings }: StoryWindowProps)
         onClick={onClose}
       />
 
-      <div className="relative w-full max-w-6xl h-[88vh] book-card paper-texture paper-aged shadow-book-float rounded-lg overflow-hidden flex flex-col modal-book-open motion-reduce:animate-none corner-ornament">
+      {/* 高度取满外层（外层已留 p-4 内边距），不用 88vh：主区高度含表头与底栏，
+          vh 算出来的窗口会比主区还高，顶上被 overflow-hidden 裁掉，右上角的关闭按钮正好落进裁掉的那一段，鼠标便点不着 */}
+      <div className="relative w-full max-w-6xl h-full book-card paper-texture paper-aged shadow-book-float rounded-lg overflow-hidden flex flex-col modal-book-open motion-reduce:animate-none corner-ornament">
         <StoryPanel onOpenSettings={onOpenSettings} onClose={onClose} />
       </div>
     </div>

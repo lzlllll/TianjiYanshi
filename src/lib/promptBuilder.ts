@@ -1089,7 +1089,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - 气血上限：modify player.hpMax 与 player.hp，两者设为同值
 - 灵力上限：modify player.mpMax 与 player.mp，两者设为同值
 - 神识上限：modify player.spiritMax 与 player.spirit，两者设为同值
-- 修为：modify player.cultivation，整数，数额须与摘要里既有的境界相称；境界已在摘要中写明，不要产出更低的 realmIndex，也不得编出「境界下跌」「修为倒退」这类设定
+- 修为：modify player.cultivation，整数，数额须与摘要里既有的境界相称，且不得超过本境界的门槛（即跨入这一境所耗的修为）——刚入此境的人不该比门槛更多；境界已在摘要中写明，不要产出更低的 realmIndex，也不得编出「境界下跌」「修为倒退」这类设定
 - 四维：modify player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility
 - 身世背景：modify player.background，200 字以上的出身来历
 - 心性：modify player.personality，简短中文描述其性情

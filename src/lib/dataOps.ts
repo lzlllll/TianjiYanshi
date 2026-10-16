@@ -2643,6 +2643,49 @@ const OP_COLLECTION_LABEL: Record<string, string> = {
 /** 行文里的脚手架，不算玩家在意的数据变化，末尾不报 */
 const QUIET_OP_PATH = /^(currentTime|district\.|price\.|check\.|demand|news\.)/;
 
+/** 同上，只是这些脚手架走的是 add 而不是 modify */
+const QUIET_OP_COLLECTION = new Set(["checks", "price", "demand", "district"]);
+
+/** 光写一个语气助词的值等于没写，列出来只会是「某某 变为了」这样的半句话 */
+const TAIL_PARTICLE_ONLY = /^[了的着过罢吧呢啊吗]$/;
+
+/** 随身物件路径里那截字段名，写成人话 */
+const INVENTORY_FIELD_LABEL: Record<string, string> = {
+  count: "数量",
+  quality: "品相",
+  durability: "耐久",
+  element: "属性",
+};
+
+/** 认得出的名字才往「」里搁：模型偶尔自造 item_fasting_pill 这类拉丁串，写出来白占地方 */
+function readableEntryId(id: string): string {
+  return /[\u4e00-\u9fa5]/.test(id) ? id : "";
+}
+
+/**
+ * 把一条路径写成人话。表里点过名的照表写；表外的按前缀认一认（机缘、随身物件、宗门），
+ * 认不出的才照原样写出来——至少不会把 quest.xxx、inventory[xxx].count 这类内部键名直愣愣摆给玩家看。
+ */
+function opPathLabel(path: string): string {
+  const named = OP_PATH_LABEL[path];
+  if (named) return named;
+
+  const quest = /^quests?\.(.+)$/.exec(path);
+  if (quest) return `机缘「${quest[1]}」`;
+
+  const inventory = /^inventory\[(.+?)\](?:\.(.+))?$/.exec(path);
+  if (inventory) {
+    const id = readableEntryId(inventory[1]);
+    const field = inventory[2] ? INVENTORY_FIELD_LABEL[inventory[2]] ?? "" : "";
+    return `随身之物${id ? `「${id}」` : ""}${field ? ` ${field}` : ""}`;
+  }
+
+  const sect = /^sect\.(.+)$/.exec(path);
+  if (sect) return `宗门 · ${sect[1]}`;
+
+  return path;
+}
+
 /** 从一条增删的 payload 里挑一个写给人看的名字 */
 function entryName(payload: unknown): string {
   let data = payload;
@@ -2670,21 +2713,31 @@ export function describeOps(ops: DataOp[]): OpChange[] {
   const changes: OpChange[] = [];
   for (const op of Array.isArray(ops) ? ops : []) {
     if (op.kind === "add") {
+      if (QUIET_OP_COLLECTION.has(op.collection)) continue;
       const label = OP_COLLECTION_LABEL[op.collection] ?? op.collection;
       const name = entryName(op.payload);
       changes.push({ text: `新增 ${label}${name ? `「${name}」` : ""}`, tone: "gain" });
       continue;
     }
     if (op.kind === "delete") {
+      if (QUIET_OP_COLLECTION.has(op.collection)) continue;
       const label = OP_COLLECTION_LABEL[op.collection] ?? op.collection;
-      changes.push({ text: `失去 ${label}${op.id ? `「${op.id}」` : ""}`, tone: "loss" });
+      const id = readableEntryId(String(op.id ?? ""));
+      changes.push({ text: `失去 ${label}${id ? `「${id}」` : ""}`, tone: "loss" });
       continue;
     }
 
     const path = String(op.path || "").trim();
-    if (!path || QUIET_OP_PATH.test(path)) continue;
-    const label = OP_PATH_LABEL[path] ?? path;
+    // 空路径、脚手架路径、以及模型把整句话写成路径的（如「quest.某某 变为了」）都不值得摆出来；
+    // 正经路径里不会有空白
+    if (!path || QUIET_OP_PATH.test(path) || /\s/.test(path)) continue;
+
     const value = formatValue(op.value);
+    // 没写出值的那几条本就残缺，宁可不报，也别在界面上留半句话；
+    // 模型偶尔还把「变为」的值写成一个语气助词（「了」），一并当作没写
+    if (!value.trim() || TAIL_PARTICLE_ONLY.test(value.trim())) continue;
+
+    const label = opPathLabel(path);
     if (op.op === "+") changes.push({ text: `${label} +${value}`, tone: "gain" });
     else if (op.op === "-") changes.push({ text: `${label} -${value}`, tone: "loss" });
     else changes.push({ text: `${label} 变为 ${value}`, tone: "flat" });

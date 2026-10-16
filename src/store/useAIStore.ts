@@ -104,7 +104,7 @@ import {
 import { parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
 import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
 import { isNpcAround, migrateRelation, relationTags } from "@/data/npcGen";
-import { REALM_NAMES, canTalkTo } from "@/data/mockData";
+import { REALMS, REALM_NAMES, canTalkTo } from "@/data/mockData";
 import {
   EVENT_END_MARK,
   EVENT_QUICK_MARK,
@@ -1353,6 +1353,27 @@ const OPENING_PAUSE_MS = 300;
 
 const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 开局的修为由所选境界定档，不该由推演随手填。
+ * 模型偶尔会写出远超本境界的数（如引气初期给 350），玩家一开局就能连破两境，早期养成便没了；
+ * 这里把开局的修为压在本境界的门槛之内——门槛即「跨进这一境所耗」，刚入此境者不该比它更多。
+ */
+function clampOpeningCultivation(ops: DataOp[], realmIndex: number, baseCultivation: number): DataOp[] {
+  const ceiling = Number(REALMS[realmIndex]?.cultivationNeeded);
+  if (!Number.isFinite(ceiling)) return ops;
+
+  const cap = Math.max(0, ceiling);
+  let carried = Number.isFinite(baseCultivation) ? baseCultivation : 0;
+  return ops.map((op) => {
+    if (op.kind !== "modify" || op.path !== "player.cultivation") return op;
+    const raw = Number(op.value);
+    if (!Number.isFinite(raw)) return op;
+    const next = op.op === "+" ? carried + raw : op.op === "-" ? carried - raw : raw;
+    carried = Math.max(0, Math.min(next, cap));
+    return { ...op, op: "=" as const, value: String(carried) };
+  });
+}
+
 async function runOpeningExtraction(
   settings: AISettings,
   state: GameState,
@@ -1618,7 +1639,10 @@ async function runOpeningExtraction(
   );
   console.debug(`[openingExtraction] 合计 ${ops.length} 条数据操作`);
 
-  return { ops, opsRaw, quickDecisions };
+  // 开局的修为照所选境界压一道，免得推演把数值抬到与本境界不相称的地步
+  const finalOps = clampOpeningCultivation(ops, state.player.realmIndex ?? 0, Number(state.player.cultivation) || 0);
+
+  return { ops: finalOps, opsRaw, quickDecisions };
 }
 
 /**

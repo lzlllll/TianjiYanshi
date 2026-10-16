@@ -911,7 +911,7 @@ export function WorldMap({
                 }}
               />
               <span
-                className="absolute top-full flex flex-col items-center whitespace-nowrap"
+                className="pointer-events-none absolute top-full flex flex-col items-center whitespace-nowrap"
                 style={{ left: "50%", transform: "translateX(-50%)" }}
               >
                 <span
