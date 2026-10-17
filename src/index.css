@@ -51,7 +51,7 @@ body {
 }
 
 /* 所有按钮的文字统一为黑色；按钮内的图标保留原色。
-   开局界面是深底朱墨屏，自成一套配色，不在此列 */
+   落笔成身那一屏自有一套纸面配色（含金、朱砂等强调色），不在此列 */
 button:not(.start-screen *),
 button *:not([class*="lucide"]):not(.start-screen *) {
   color: #000 !important;
@@ -364,6 +364,29 @@ input[type="range"].fire-slider::-webkit-slider-thumb {
     0 8px 32px rgba(0, 0, 0, 0.5),
     inset 0 0 60px rgba(90, 138, 114, 0.1);
   backdrop-filter: blur(2px);
+}
+
+/* 玉牌面板 · 浅色：名目照旧，底换成素纸，边角染一层青玉 */
+.jade-tablet-light {
+  background:
+    linear-gradient(160deg, rgba(63, 107, 88, 0.14) 0%, rgba(254, 251, 242, 0.94) 55%),
+    #FEFBF2;
+  border: 1px solid rgba(90, 138, 114, 0.38);
+  box-shadow:
+    0 2px 10px rgba(42, 31, 18, 0.08),
+    0 10px 30px rgba(42, 31, 18, 0.10),
+    inset 0 0 40px rgba(90, 138, 114, 0.06);
+}
+
+/* 落笔成身那一屏的浅色底：素纸为地，边角略染青玉与旧金。
+   收边一律用同色透明（rgba(...,0)），不能用 transparent——后者等于透明黑，
+   过渡中段会泛出一圈灰，纸上看着像一道脏边 */
+.start-screen-bg {
+  background:
+    radial-gradient(ellipse 130% 95% at 10% 2%, rgba(90, 138, 114, 0.10) 0%, rgba(90, 138, 114, 0) 58%),
+    radial-gradient(ellipse 115% 85% at 90% 6%, rgba(201, 162, 39, 0.09) 0%, rgba(201, 162, 39, 0) 55%),
+    radial-gradient(ellipse 130% 95% at 50% 106%, rgba(139, 115, 85, 0.10) 0%, rgba(139, 115, 85, 0) 62%),
+    #FEFBF2;
 }
 
 /* 灵气粒子效果层 */

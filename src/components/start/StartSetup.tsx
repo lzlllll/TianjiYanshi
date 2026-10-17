@@ -247,7 +247,7 @@ function OpeningLoading() {
     return (
       <div
         className={cn(
-          "fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-950/95 backdrop-blur-sm",
+          "fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-darkest/45 backdrop-blur-sm",
           "transition-all duration-1000",
           fadeOut ? "opacity-0 pointer-events-none" : showNarrative ? "opacity-100" : "opacity-0"
         )}
@@ -318,7 +318,7 @@ function OpeningLoading() {
   const head = stage === "flash" ? "正在翻阅江湖档案" : stage === "error" ? "推演受阻" : "正在推演开篇";
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-950/95 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-ink-darkest/45 backdrop-blur-sm">
       <div className="paper-sheet rounded-lg w-full max-w-md px-8 py-10 flex flex-col items-center text-center gap-5">
         {/* 一枚转着的印 */}
         <div className="relative w-20 h-20">
@@ -621,17 +621,17 @@ ${OPENING_BRIEF}`,
   const sealBase = "w-9 h-9 rounded-sm flex items-center justify-center font-brush text-sm";
 
   return (
-    <div className="start-screen h-screen w-screen overflow-y-auto ink-bg py-10 px-6">
+    <div className="start-screen start-screen-bg h-screen w-screen overflow-y-auto py-10 px-6">
       <div className="w-full max-w-6xl mx-auto">
         {/* 顶部：题名与菜单 */}
         <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
           <div>
-            <h1 className="font-brush text-3xl text-gold-400 text-shadow-ink tracking-widest">
+            <h1 className="font-brush text-3xl text-ink-darkest tracking-widest">
               {GAME_TITLE_BOOK}
             </h1>
-            <p className="font-serif text-sm text-paper-400/60 mt-1">
+            <p className="font-serif text-sm text-ink-light mt-1">
               落笔成身，一念入江湖
-              <span className="ml-3 font-number text-xs text-paper-400/40">{GAME_VERSION}</span>
+              <span className="ml-3 font-number text-xs text-ink-lightest/70">{GAME_VERSION}</span>
             </p>
           </div>
 
@@ -642,8 +642,8 @@ ${OPENING_BRIEF}`,
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-full border font-serif text-xs transition",
                 isGenerating
-                  ? "border-gold-500/20 text-paper-400/40 cursor-not-allowed"
-                  : "border-gold-500/40 bg-gold-500/10 text-gold-400 hover:border-gold-400/70 hover:bg-gold-500/20",
+                  ? "border-ink-lightest/30 text-ink-lightest/50 cursor-not-allowed"
+                  : "border-gold-500/60 bg-paper-fresh/80 text-ink-dark hover:border-gold-600 hover:bg-paper-old",
               )}
               title="粘贴一整段开局文字，直接把这一段交给推演开局"
             >
@@ -655,8 +655,8 @@ ${OPENING_BRIEF}`,
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-full border font-serif text-xs transition",
                 isGenerating
-                  ? "border-gold-500/20 text-paper-400/40 cursor-not-allowed"
-                  : "border-cinnabar-500/50 bg-[rgba(168,50,50,0.10)] text-cinnabar-400 hover:border-cinnabar-400/80 hover:bg-[rgba(168,50,50,0.18)]",
+                  ? "border-ink-lightest/30 text-ink-lightest/50 cursor-not-allowed"
+                  : "border-cinnabar-500/45 bg-[rgba(168,50,50,0.07)] text-cinnabar-600 hover:border-cinnabar-500/80 hover:bg-[rgba(168,50,50,0.14)]",
               )}
               title="随机填一份人物设定，落在「落印」一步，可逐项改过再开局"
             >
@@ -665,13 +665,13 @@ ${OPENING_BRIEF}`,
             <button
               type="button"
               onClick={() => goTo(steps.findIndex((s) => s.id === "api"))}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-ink-800 border-2 border-gold-500 transition hover:border-gold-400 hover:bg-gold-500/10"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-paper-fresh border-2 border-gold-500/70 transition hover:border-gold-600 hover:bg-gold-500/10"
               title="通灵设置：修改接口密钥、模型与 Base URL"
             >
               <span
                 className={cn("w-2 h-2 rounded-full", configured ? "bg-jade-400" : "bg-cinnabar-500")}
               />
-              <span className="font-serif text-xs text-paper-400/70">
+              <span className="font-serif text-xs text-ink-light">
                 {configured ? "通灵已接 · 修改" : "尚未通灵 · 配置"}
               </span>
             </button>
@@ -682,8 +682,8 @@ ${OPENING_BRIEF}`,
                 className={cn(
                   "w-9 h-9 rounded flex items-center justify-center border-2 transition",
                   showMenu
-                    ? "border-gold-400 bg-gold-400 text-gold-400"
-                    : "border-gold-500 text-paper-300 hover:border-gold-400 hover:bg-gold-400 hover:text-gold-400",
+                    ? "border-gold-500 bg-gold-500 text-paper-fresh"
+                    : "border-gold-500/60 text-ink-dark hover:border-gold-600 hover:bg-gold-500/15",
                 )}
                 title="存档管理"
               >
@@ -691,21 +691,21 @@ ${OPENING_BRIEF}`,
               </button>
               {showMenu && (
                 <div
-                  className="absolute top-full right-0 mt-2 w-40 rounded-lg border border-gold-500/20 bg-ink-900/95 backdrop-blur-sm shadow-xl z-50 overflow-hidden"
+                  className="absolute top-full right-0 mt-2 w-40 rounded-lg border border-ink-lightest/25 bg-paper-fresh/95 backdrop-blur-sm shadow-book-float z-50 overflow-hidden"
                   style={{ animation: "inkSpread 0.2s ease-out" }}
                 >
                   <button
                     onClick={openSaveManager}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-paper-200 hover:bg-gold-500/10 transition-colors"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-ink-dark hover:bg-gold-500/10 transition-colors"
                   >
-                    <FolderOpen size={14} className="text-paper-400" /> 存档管理
+                    <FolderOpen size={14} className="text-ink-lightest" /> 存档管理
                   </button>
                   {turns.length > 0 && (
                     <>
-                      <div className="h-px bg-gold-500" />
+                      <div className="h-px bg-ink-lightest/25" />
                       <button
                         onClick={startNewGame}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-cinnabar-400 hover:bg-cinnabar-500/10 transition-colors"
+                        className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-cinnabar-600 hover:bg-cinnabar-500/10 transition-colors"
                       >
                         <RotateCcw size={14} /> 新游戏
                       </button>
@@ -719,30 +719,30 @@ ${OPENING_BRIEF}`,
 
         <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr] gap-6 items-start">
           {/* 左：玉牌，实时显示角色卡与步骤进度 */}
-          <aside className="jade-tablet rounded-lg p-5 sticky top-10">
+          <aside className="jade-tablet-light rounded-lg p-5 sticky top-10">
             <div className="flex items-center gap-3">
-              <div className={cn(sealBase, "bg-cinnabar-500 text-paper-50 w-12 h-12 text-lg")}>
+              <div className={cn(sealBase, "bg-cinnabar-500 text-paper-fresh w-12 h-12 text-lg")}>
                 {setup.name.trim().charAt(0) || "道"}
               </div>
               <div className="min-w-0">
-                <div className="font-brush text-lg text-paper-50 tracking-wider truncate">
+                <div className="font-brush text-lg text-ink-darkest tracking-wider truncate">
                   {setup.name.trim() || "无名之辈"}
                 </div>
-                <div className="font-serif text-xs text-gold-400/80 truncate">
+                <div className="font-serif text-xs text-gold-600 truncate">
                   「{setup.title.trim() || "尚未取号"}」
                 </div>
               </div>
             </div>
 
             <div className="mt-4 space-y-1.5">
-              <div className="font-serif text-xs text-cinnabar-400">
+              <div className="font-serif text-xs text-cinnabar-600">
                 {setup.realm}
-                <span className="text-gold-400 ml-1">初期</span>
+                <span className="text-gold-600 ml-1">初期</span>
               </div>
-              <div className="font-serif text-xs text-paper-400 truncate">
+              <div className="font-serif text-xs text-ink-medium truncate">
                 {setup.sectName.trim() || "散修"} · {setup.position}
               </div>
-              <div className="font-serif text-xs text-paper-500">
+              <div className="font-serif text-xs text-ink-lightest">
                 {setup.gender === "male" ? "男" : "女"}
               </div>
             </div>
@@ -761,16 +761,16 @@ ${OPENING_BRIEF}`,
                     disabled={!clickable}
                     className={cn(
                       "w-full flex items-center gap-2.5 px-2 py-1.5 rounded text-left transition-colors",
-                      current && "bg-gold-400/10",
-                      clickable ? "cursor-pointer hover:bg-paper-400/5" : "cursor-default",
+                      current && "bg-gold-500/15",
+                      clickable ? "cursor-pointer hover:bg-ink-darkest/5" : "cursor-default",
                     )}
                   >
                     <span
                       className={cn(
                         "w-5 h-5 rounded-sm flex items-center justify-center text-xs shrink-0 border-2 font-brush",
-                        done && "bg-cinnabar-500 border-cinnabar-400 text-paper-50",
-                        current && "border-gold-400 text-gold-400",
-                        !done && !current && "border-paper-400 text-paper-400",
+                        done && "bg-cinnabar-500 border-cinnabar-500 text-paper-fresh",
+                        current && "border-gold-500 text-gold-600",
+                        !done && !current && "border-ink-lightest/60 text-ink-lightest",
                       )}
                     >
                       {done ? <Check size={11} /> : i + 1}
@@ -779,12 +779,12 @@ ${OPENING_BRIEF}`,
                       <span
                         className={cn(
                           "block font-brush text-sm tracking-wider",
-                          current ? "text-gold-400" : done ? "text-paper-200" : "text-paper-400/40",
+                          current ? "text-gold-600" : done ? "text-ink-dark" : "text-ink-lightest/70",
                         )}
                       >
                         {s.label}
                       </span>
-                      <span className="block font-serif text-xs text-paper-500/45 truncate">
+                      <span className="block font-serif text-xs text-ink-lightest/70 truncate">
                         {s.hint}
                       </span>
                     </span>
@@ -888,7 +888,7 @@ ${OPENING_BRIEF}`,
 
       {/* 整段开局：贴一大段自述，直接交给推演写下开篇 */}
       {showPaste && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-ink-900/80 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-ink-darkest/45 backdrop-blur-sm">
           <div className="paper-sheet rounded-lg p-5 sm:p-6 w-full max-w-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1074,7 +1074,7 @@ ${OPENING_BRIEF}`,
                 className={cn(
                   "px-6 py-2 rounded font-serif text-sm border-2 transition-colors",
                   setup.gender === g.value
-                    ? "border-cinnabar bg-cinnabar ps-accent"
+                    ? "border-cinnabar bg-cinnabar text-paper-fresh"
                     : "border-ink-medium ps-body hover:border-cinnabar",
                 )}
               >

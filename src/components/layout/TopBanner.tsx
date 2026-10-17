@@ -3,7 +3,7 @@ import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
 import { useTutorialStore } from "@/store/useTutorialStore";
 import { REALMS } from "@/data/mockData";
-import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal, Compass } from "lucide-react";
+import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal, Compass, LogOut } from "lucide-react";
 import { formatGameTime } from "@/lib/gameTime";
 import { GAME_SIGNATURE } from "@/lib/gameInfo";
 import { cn } from "@/lib/utils";
@@ -11,9 +11,10 @@ import { AI_BACKEND_READY } from "@/data/backend";
 
 interface TopBannerProps {
   onOpenSettings: () => void;
+  onReturnToMenu?: () => void;
 }
 
-export function TopBanner({ onOpenSettings }: TopBannerProps) {
+export function TopBanner({ onOpenSettings, onReturnToMenu }: TopBannerProps) {
   const player = useGameStore((s) => s.player);
   const currentTime = useGameStore((s) => s.currentTime);
   const realm = REALMS[player.realmIndex];
@@ -58,6 +59,13 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
   const replayTutorial = () => {
     setShowSaveMenu(false);
     useTutorialStore.getState().start("map", true);
+  };
+
+  const returnToMenu = () => {
+    setShowSaveMenu(false);
+    if (confirm("返回主菜单？当前未保存的进度将丢失。")) {
+      onReturnToMenu?.();
+    }
   };
 
   return (
@@ -180,6 +188,17 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
                 >
                   <RotateCcw size={14} /> 新游戏
                 </button>
+                {onReturnToMenu && (
+                  <>
+                    <div className="book-divider my-1" />
+                    <button
+                      onClick={returnToMenu}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-caption text-ink-light hover:bg-paper-old transition-smooth"
+                    >
+                      <LogOut size={14} /> 返回主菜单
+                    </button>
+                  </>
+                )}
                 <div className="book-divider my-1" />
                 <p className="px-4 py-1.5 font-number text-[10px] text-ink-light/70">{GAME_SIGNATURE}</p>
               </div>

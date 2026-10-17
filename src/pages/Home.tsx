@@ -32,7 +32,7 @@ import { GameIntroModal } from "@/components/start/GameIntroModal";
 import { GuidedTutorial } from "@/components/tutorial/GuidedTutorial";
 import { useTutorialStore } from "@/store/useTutorialStore";
 
-export default function Home() {
+export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const storyOpen = useAIStore((s) => s.isStoryOpen);
   const setStoryOpen = useAIStore((s) => s.setStoryOpen);
@@ -78,7 +78,7 @@ export default function Home() {
         showMainUI ? "opacity-100" : "opacity-0"
       }`}
     >
-      <TopBanner onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBanner onOpenSettings={() => setSettingsOpen(true)} onReturnToMenu={onReturnToMenu} />
       <div className="flex-1 flex overflow-hidden">
         <SideNav storyOpen={storyOpen} onOpenStory={() => setStoryOpen(true)} />
 

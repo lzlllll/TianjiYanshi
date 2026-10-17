@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "main": "electron/main.cjs",
-  "description": "天机衍世 - 江湖人情世故模拟器",
+  "description": "天机衍世：AI修仙模拟器",
   "author": "天机衍世",
   "scripts": {
     "dev": "vite",

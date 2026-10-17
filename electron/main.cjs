@@ -14,7 +14,7 @@
 
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require("electron");
 
 /** @type {{ server: import("node:http").Server | null }} */
 let localServer = null;
@@ -67,6 +67,7 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
@@ -96,6 +97,18 @@ app.whenReady().then(createWindow).catch((err) => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// 监听渲染进程的退出请求
+ipcMain.on("app-quit", () => {
+  if (localServer?.server) {
+    localServer.server.close();
+  }
+  app.quit();
 });
 
 app.on("activate", () => {
