@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
+import { useTutorialStore } from "@/store/useTutorialStore";
 import { REALMS } from "@/data/mockData";
-import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal } from "lucide-react";
+import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal, Compass } from "lucide-react";
 import { formatGameTime } from "@/lib/gameTime";
 import { GAME_SIGNATURE } from "@/lib/gameInfo";
 import { cn } from "@/lib/utils";
@@ -53,8 +54,14 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
     }
   };
 
+  /** 重新看一遍主界面引导：菜单收起，从第一步走起 */
+  const replayTutorial = () => {
+    setShowSaveMenu(false);
+    useTutorialStore.getState().start("map", true);
+  };
+
   return (
-    <header className="mainui-black relative shrink-0 border-b border-ink-lightest/20 bg-paper-aged paper-texture">
+    <header data-tutorial="top-banner" className="mainui-black relative shrink-0 border-b border-ink-lightest/20 bg-paper-aged paper-texture">
       {/* 界栏装饰线 */}
       <div className="absolute top-2 left-8 right-8 h-px bg-gradient-to-r from-transparent via-ink-light/30 to-transparent" />
       <div className="absolute bottom-2 left-8 right-8 h-px bg-gradient-to-r from-transparent via-ink-light/30 to-transparent" />
@@ -81,7 +88,9 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
           </div>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-5 gap-y-2 min-w-0 z-10">
+        {/* 这一层若只给 z-10，会和下面的次要信息行同档；本行的下拉菜单被关在这层叠层里，
+            同档时后出现的次要信息行反而压在上面，存档菜单就被遮住了，故抬一档到 z-20 */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-5 gap-y-2 min-w-0 z-20">
           <div className="text-right">
             <div className="text-label">修为</div>
             <div className="font-number text-base text-gold whitespace-nowrap">
@@ -136,7 +145,7 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
             <ChevronDown size={16} className={cn("transition-transform", showDetails && "rotate-180")} />
           </button>
 
-          <div className="relative" ref={saveMenuRef}>
+          <div className="relative" ref={saveMenuRef} data-tutorial="top-save">
             <button
               onClick={() => setShowSaveMenu((v) => !v)}
               className={cn(
@@ -156,6 +165,13 @@ export function TopBanner({ onOpenSettings }: TopBannerProps) {
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-caption hover:bg-paper-old transition-smooth"
                 >
                   <FolderOpen size={14} className="text-ink-light" /> 存档管理
+                </button>
+                <div className="book-divider my-1" />
+                <button
+                  onClick={replayTutorial}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-caption hover:bg-paper-old transition-smooth"
+                >
+                  <Compass size={14} className="text-ink-light" /> 新手引导
                 </button>
                 <div className="book-divider my-1" />
                 <button

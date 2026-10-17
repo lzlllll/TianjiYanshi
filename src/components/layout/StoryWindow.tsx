@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
+import { useTutorialStore } from "@/store/useTutorialStore";
 import { StoryPanel } from "@/panels/StoryPanel";
 
 interface StoryWindowProps {
@@ -26,6 +27,17 @@ export function StoryWindow({ open, onClose, onOpenSettings }: StoryWindowProps)
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, upperModalOpen, drawerOpen, onClose]);
+
+  // 头一回摊开问道时，把这一窗的引导走一遍；主界面那一套走完才轮到它
+  const tutorialSeen = useTutorialStore((s) => s.seen);
+  const activeTutorial = useTutorialStore((s) => s.activeId);
+  const startTutorial = useTutorialStore((s) => s.start);
+
+  useEffect(() => {
+    if (!open || drawerOpen || activeTutorial || !tutorialSeen.map || tutorialSeen.story) return;
+    const timer = setTimeout(() => startTutorial("story"), 450);
+    return () => clearTimeout(timer);
+  }, [open, drawerOpen, activeTutorial, tutorialSeen.map, tutorialSeen.story, startTutorial]);
 
   if (!open) return null;
 

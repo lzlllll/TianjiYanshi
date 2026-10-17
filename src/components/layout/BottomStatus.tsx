@@ -23,7 +23,7 @@ export function BottomStatus() {
   }, [showLog]);
 
   return (
-    <footer className="mainui-black h-[76px] shrink-0 border-t border-ink-lightest/20 bg-paper-aged paper-texture flex items-stretch relative">
+    <footer data-tutorial="bottom-status" className="mainui-black h-[76px] shrink-0 border-t border-ink-lightest/20 bg-paper-aged paper-texture flex items-stretch relative">
       {/* 顶部装饰线 */}
       <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-ink-light to-transparent" />
 

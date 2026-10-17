@@ -736,6 +736,7 @@ export function WorldMap({
   return (
     <div
       ref={containerRef}
+      data-tutorial="world-map"
       className={cn("mainui-black absolute inset-0 overflow-hidden touch-none select-none", cursorClass)}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

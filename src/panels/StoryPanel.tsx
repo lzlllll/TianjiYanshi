@@ -251,6 +251,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         >
           <div
             ref={narrativeRef}
+            data-tutorial="story-narrative"
             className="flex-1 overflow-y-auto pr-2 min-h-0"
           >
             {thinking ? (
@@ -311,6 +312,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
 
           <textarea
             ref={decisionRef}
+            data-tutorial="story-input"
             value={decision}
             onChange={(e) => setDecision(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -327,7 +329,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
           </div>
 
           {/* 操作按钮 */}
-          <div className="mt-3 flex gap-2 shrink-0">
+          <div className="mt-3 flex gap-2 shrink-0" data-tutorial="story-evolve">
             {isGenerating ? (
               <SealButton variant="ghost" onClick={cancel} className="flex-1">
                 <span className="flex items-center justify-center gap-1.5">

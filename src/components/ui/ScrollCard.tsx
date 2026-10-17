@@ -17,6 +17,8 @@ interface ScrollCardProps {
   aged?: boolean;
   /** 是否显示虫蛀斑点 */
   foxing?: boolean;
+  /** 新手引导的锚点，写在根节点上供教程按 data-tutorial 认出来 */
+  anchor?: string;
 }
 
 export function ScrollCard({ 
@@ -30,10 +32,12 @@ export function ScrollCard({
   paperTexture = true,
   aged = false,
   foxing = false,
+  anchor,
 }: ScrollCardProps) {
   if (bookStyle) {
     return (
       <div 
+        data-tutorial={anchor}
         className={cn(
           "book-card relative overflow-hidden",
           paperTexture && "paper-texture",

@@ -106,7 +106,7 @@ export function FatePanel() {
     <div className="paper-texture">
       <PanelTitle title="机缘" poem="相逢皆有缘，受人之托，忠人之事。" />
 
-      <div className="flex items-center gap-1.5 mb-4 flex-wrap">
+      <div className="flex items-center gap-1.5 mb-4 flex-wrap" data-tutorial="fate-tabs">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -128,7 +128,7 @@ export function FatePanel() {
       </div>
 
       {(tab === "chances" || tab === "tasks") && (
-        <ScrollCard>
+        <ScrollCard anchor="fate-list" className="quest-ink">
           <div className="flex items-center gap-2 mb-3">
             {isTask ? (
               <ScrollText size={15} className="text-gold-400" />

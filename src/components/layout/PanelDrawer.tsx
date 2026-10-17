@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
+import { useTutorialStore } from "@/store/useTutorialStore";
+import { playerSectName } from "@/data/sectSites";
 import type { PanelId } from "@/data/types";
 import { X } from "lucide-react";
 import { ProfilePanel } from "@/panels/ProfilePanel";
@@ -61,6 +63,22 @@ export function PanelDrawer() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [currentPanel, upperModalOpen, setPanel]);
 
+  // 头一回翻开「机缘」「宗门」时，把这一页的引导摊开；主界面那一套走完才轮到它们
+  const seen = useTutorialStore((s) => s.seen);
+  const activeTutorial = useTutorialStore((s) => s.activeId);
+  const startTutorial = useTutorialStore((s) => s.start);
+  // 散修的宗门页只有「开宗立派」一屏，讲弟子名册、差事榜都对不上，故不引导
+  const hasSect = useGameStore((s) => Boolean(playerSectName(s.player.sectName) || s.sect?.name));
+
+  useEffect(() => {
+    if (!currentPanel || activeTutorial || !seen.map) return;
+    const id =
+      currentPanel === "fate" ? "fate" : currentPanel === "sect" && hasSect ? "sect" : null;
+    if (!id || seen[id]) return;
+    const timer = setTimeout(() => startTutorial(id), 450);
+    return () => clearTimeout(timer);
+  }, [currentPanel, activeTutorial, seen.map, seen.fate, seen.sect, hasSect, startTutorial]);
+
   if (!currentPanel) return null;
 
   return (
@@ -75,7 +93,7 @@ export function PanelDrawer() {
         onClick={() => setPanel(null)}
       />
 
-      <aside className="relative h-full w-[min(920px,94vw)] bg-paper-fresh paper-texture paper-aged border-l-2 border-ink-medium shadow-book-float flex flex-col animate-drawerIn motion-reduce:animate-none corner-ornament">
+      <aside data-tutorial="panel-drawer" className="relative h-full w-[min(920px,94vw)] bg-paper-fresh paper-texture paper-aged border-l-2 border-ink-medium shadow-book-float flex flex-col animate-drawerIn motion-reduce:animate-none corner-ornament">
         <div className="shrink-0 h-11 flex items-center justify-end gap-3 px-4 border-b-2 border-ink-lightest cloud-border">
           <span className="text-caption text-ink-dark">Esc 关闭</span>
           <button

@@ -118,7 +118,7 @@ export function SectPanel() {
       />
 
       {/* 门派横幅 */}
-      <ScrollCard className="mb-4 bg-gradient-to-r from-paper-aged to-paper-dark">
+      <ScrollCard anchor="sect-header" className="mb-4 bg-gradient-to-r from-paper-aged to-paper-dark">
         <div className="flex items-center gap-6">
           <div className="w-16 h-16 red-seal rounded-lg text-2xl">{sectName.charAt(0)}</div>
           <div className="flex-1 min-w-0">
@@ -151,7 +151,7 @@ export function SectPanel() {
       </ScrollCard>
 
       {/* 子页签 */}
-      <div className="flex gap-1 mb-4 border-b border-gold-500/20">
+      <div className="flex gap-1 mb-4 border-b border-gold-500/20" data-tutorial="sect-tabs">
         {TABS.map((t) => (
           <button
             key={t.id}

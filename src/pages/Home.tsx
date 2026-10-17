@@ -29,6 +29,8 @@ import { CraftOrderModal } from "@/components/ai/CraftOrderModal";
 import { CraftingModal } from "@/components/crafting/CraftingModal";
 import { EndingScreen } from "@/components/ending/EndingScreen";
 import { GameIntroModal } from "@/components/start/GameIntroModal";
+import { GuidedTutorial } from "@/components/tutorial/GuidedTutorial";
+import { useTutorialStore } from "@/store/useTutorialStore";
 
 export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -46,6 +48,20 @@ export default function Home() {
   const [workshop, setWorkshop] = useState<WorkshopTarget | null>(null);
   const [forest, setForest] = useState<ForestTarget | null>(null);
   const [showMainUI, setShowMainUI] = useState(false);
+
+  const tutorialSeen = useTutorialStore((s) => s.seen);
+  const activeTutorial = useTutorialStore((s) => s.activeId);
+  const startTutorial = useTutorialStore((s) => s.start);
+  // 开篇那一段落定之后摊一次玩法说明；说明还开着时先不走引导，免得两页叠在一起
+  const introVisible = !introSeen && !introClosed && turnCount >= 1;
+
+  // 头一回落定之后，把主界面的引导摊开：圈着舆图、问道、书脊、顶栏、底栏讲一遍
+  useEffect(() => {
+    if (turnCount < 1 || introVisible) return;
+    if (activeTutorial || tutorialSeen.map) return;
+    const timer = setTimeout(() => startTutorial("map"), 600);
+    return () => clearTimeout(timer);
+  }, [turnCount, introVisible, activeTutorial, tutorialSeen.map, startTutorial]);
 
   useEffect(() => {
     useGameStore.getState().ensureSectSites();
@@ -127,7 +143,7 @@ export default function Home() {
       <EndingScreen />
 
       {/* 开篇那一段落定之后，摊一次玩法说明 */}
-      {!introSeen && !introClosed && turnCount >= 1 && (
+      {introVisible && (
         <GameIntroModal
           onClose={(dontShow) => {
             setIntroClosed(true);
@@ -135,6 +151,9 @@ export default function Home() {
           }}
         />
       )}
+
+      {/* 新手引导：压在最上层，圈着界面上的真东西一步一步讲 */}
+      <GuidedTutorial />
     </div>
   );
 }

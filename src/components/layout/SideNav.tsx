@@ -102,7 +102,7 @@ export function SideNav({ storyOpen, onOpenStory }: SideNavProps) {
   const storyHint = turnCount > 0 ? `第 ${turnCount} 回` : "尚未演算";
 
   return (
-    <nav className="mainui-black w-20 shrink-0 spine-texture flex flex-col py-4 relative shadow-spine-depth">
+    <nav data-tutorial="side-nav" className="mainui-black w-20 shrink-0 spine-texture flex flex-col py-4 relative shadow-spine-depth">
       {/* 书脊装饰线 */}
       <div className="absolute inset-y-0 left-0 w-px bg-gold-light" />
       <div className="absolute inset-y-0 right-0 w-px bg-ink-darkest" />
@@ -136,6 +136,7 @@ export function SideNav({ storyOpen, onOpenStory }: SideNavProps) {
         <div className="h-px bg-gold mb-3" />
         <button
           onClick={onOpenStory}
+          data-tutorial="nav-story"
           title={`问道 - ${storyHint}`}
           className={cn(
             "spine-tab text-vertical group shrink-0",
