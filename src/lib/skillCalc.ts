@@ -36,6 +36,10 @@ export interface SkillCast {
   skillId: string;
   skillName: string;
   mpCost: number;
+  /** 这一招耗掉的气血：心法催运专用，其余招式一律为 0 */
+  hpCost: number;
+  /** 这一招回复的灵力，已按灵力上限截断 */
+  mpRestore: number;
   damage: number;
   debuffs: SkillDebuff[];
   /** 一项项列出这一招的判定依据，如「境界 ×1.24」「心性 ×1.08」 */
@@ -210,6 +214,17 @@ export function primaryStatOf(category: TechniqueCategory): keyof CombatActor["s
 }
 
 /**
+ * 是不是「心法催运」那一招：拿气血换灵力。
+ * 只有心法类功法能走这一路，且耗血与回灵都得写正数——少一样便当普通招式处理。
+ */
+export function isHeartConversion(technique: Technique, skill: TechniqueSkill): boolean {
+  if (technique.category !== "心法") return false;
+  const hp = Number(skill.hpCost) || 0;
+  const restore = Number(skill.mpRestore) || 0;
+  return hp > 0 && restore > 0;
+}
+
+/**
  * 确定性算一招的伤害、耗灵与负面效果。全部取整，不得随机。
  */
 export function computeSkillCast(args: {
@@ -258,17 +273,43 @@ export function computeSkillCast(args: {
     `经脉 通畅 ${Math.round(avgClarity)}${damagedCount > 0 ? ` 带伤 ${damagedCount} 条` : ""} ×${meridianFactor.toFixed(2)}`,
   ];
 
+  // 心法催运：以气血换灵力。这一路不耗灵力，反过来补灵力
+  const heartConvert = isHeartConversion(technique, skill);
+  const wantHp = heartConvert ? Math.max(1, Math.round(Number(skill.hpCost) || 0)) : 0;
+  const wantRestore = heartConvert ? Math.max(1, Math.round(Number(skill.mpRestore) || 0)) : 0;
+
   const base: SkillCast = {
     techniqueId: technique.id,
     techniqueName: technique.name,
     skillId: skill.id,
     skillName: skill.name,
-    mpCost: Math.max(0, Math.round(skill.mpCost || 0)),
+    mpCost: heartConvert ? 0 : Math.max(0, Math.round(skill.mpCost || 0)),
+    hpCost: 0,
+    mpRestore: 0,
     damage: 0,
     debuffs: [],
     breakdown,
     summary: "",
   };
+
+  // 心法催运那一路：不看灵力够不够，只看气血撑不撑得住、灵力是不是已经满了
+  if (heartConvert) {
+    if (actor.mp >= actor.maxMp) {
+      return { ...base, summary: `你欲运转「${skill.name}」补气，然灵力已满，不必再耗气血。` };
+    }
+    // 扣完须留一口气，见底便是拿命换气，不做
+    if (actor.hp <= wantHp) {
+      return { ...base, summary: `你欲运转「${skill.name}」，然气血不足，这一门运不起来。` };
+    }
+    const restored = Math.min(wantRestore, Math.max(0, actor.maxMp - actor.mp));
+    return {
+      ...base,
+      hpCost: wantHp,
+      mpRestore: restored,
+      breakdown: [...breakdown, `心法催运 气血 -${wantHp} → 灵力 +${restored}`],
+      summary: `你运转「${skill.name}」，耗气血 ${wantHp}，回复灵力 ${restored}。`,
+    };
+  }
 
   // 灵力不足：此招施展不出，伤害与负面效果都清空
   if (actor.mp < base.mpCost) {
@@ -346,6 +387,10 @@ export interface BattleLocalResult {
   owned: string[];
   /** 本次实际扣掉的灵力 */
   mpSpent: number;
+  /** 本次实际扣掉的气血：心法催运专用，其余招式一律为 0 */
+  hpSpent: number;
+  /** 本次实际回复的灵力：心法催运专用，其余招式一律为 0 */
+  mpRestored: number;
 }
 
 /**
@@ -384,6 +429,23 @@ export function applyBattleCast(args: {
 
   // 施展不出（灵力不足）那一支的 mpCost 已被清成 0，此处照实取用
   const mpSpent = cast ? Math.max(0, cast.mpCost) : 0;
+  const hpSpent = cast ? Math.max(0, cast.hpCost) : 0;
+  const mpRestored = cast ? Math.max(0, cast.mpRestore) : 0;
+
+  // 心法催运先落自己身上：扣气血、补灵力，扣完留一口气在
+  if (cast && (hpSpent > 0 || mpRestored > 0)) {
+    const me = list.find((e) => e.id === playerId);
+    if (me) {
+      if (hpSpent > 0 && typeof me.hp === "number") {
+        me.hp = Math.max(1, me.hp - hpSpent);
+      }
+      if (mpRestored > 0 && typeof me.mp === "number") {
+        const maxMp = typeof me.maxMp === "number" ? me.maxMp : me.mp + mpRestored;
+        me.mp = Math.min(maxMp, me.mp + mpRestored);
+      }
+      owned.push(me.id);
+    }
+  }
 
   if (cast && cast.damage > 0 && targetId) {
     const target = list.find((e) => e.id === targetId);
@@ -396,5 +458,5 @@ export function applyBattleCast(args: {
     }
   }
 
-  return { entities: list, owned, mpSpent };
+  return { entities: list, owned, mpSpent, hpSpent, mpRestored };
 }

@@ -330,6 +330,36 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
             </div>
           </section>
 
+          {/* 叙事留存：只影响是否另存全文，推演仍走压缩摘要 */}
+          <section>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <SectionLabel>保留全程叙事</SectionLabel>
+                <p className="font-serif text-xs text-paper-400/50 mt-1 leading-relaxed">
+                  开启后逐回另存原文，可在存档管理里整本导出。推演照旧只带压缩摘要与近几轮，
+                  等待与消耗都不变；开启之前的章节不会追记。
+                </p>
+              </div>
+              <button
+                onClick={() => patch({ keepFullNarrative: !draft.keepFullNarrative })}
+                className={cn(
+                  "relative h-6 w-12 shrink-0 rounded-full transition-colors",
+                  draft.keepFullNarrative
+                    ? "bg-gold-500/30 border border-gold-400/50"
+                    : "bg-ink-700/50 border border-paper-400/20",
+                )}
+                aria-label="保留全程叙事"
+              >
+                <div
+                  className={cn(
+                    "absolute top-1 h-4 w-4 rounded-full transition-transform",
+                    draft.keepFullNarrative ? "left-7 bg-gold-400" : "left-1 bg-paper-400/50",
+                  )}
+                />
+              </button>
+            </div>
+          </section>
+
           {/* 自定义提示词 */}
           <section>
             <SectionLabel>自定义提示词</SectionLabel>

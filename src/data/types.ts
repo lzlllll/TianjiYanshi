@@ -594,6 +594,13 @@ export interface TechniqueSkill {
   effects: BuffEffect[];
   /** 命中后负面效果维持几柱香；缺省按 3 柱算 */
   debuffDuration?: number;
+  /**
+   * 心法催运：不耗灵力，改为耗气血，并把灵力补回来。
+   * 两项皆为正数才算数；只有 category 为 心法 的功法能用这一路。
+   */
+  hpCost?: number;
+  /** 这一招运转之后回复多少灵力；与 hpCost 成对出现 */
+  mpRestore?: number;
 }
 
 export interface TechniquePrerequisite {
@@ -2021,6 +2028,11 @@ export interface AISettings {
   temperature: number;
   /** 玩家自定义提示词，追加到系统提示词末尾 */
   customPrompt: string;
+  /**
+   * 保留全程叙事正文。推演照旧只带压缩摘要与近几轮，这一项只决定是否另存全文，
+   * 供日后回看与导出；不开便随压缩一并丢弃。
+   */
+  keepFullNarrative?: boolean;
 }
 
 export type GenStage =
@@ -2259,9 +2271,30 @@ export interface GameSnapshot {
   adventures?: Adventure[];
 }
 
+/**
+ * 全程叙事里的一回。
+ * 推演仍旧只带压缩摘要与近几轮，这一份只是另存的原样正文，供回看与导出；
+ * 是否留存由设置里的「保留全程叙事」开关定。
+ */
+export interface NarrativeEntry {
+  /** 对应 turns 里那一轮的 id：同一轮重演时照它替换，不另起一条 */
+  id: string;
+  /** 这一回在游戏里的时刻，如「修真历514年3月2日 辰时」 */
+  timeLabel: string;
+  /** 这一回所在之处 */
+  place: string;
+  /** 玩家这一回写下的行动 */
+  input: string;
+  /** 叙事正文 */
+  narrative: string;
+  timestamp: number;
+}
+
 export interface ConversationState {
   turns: Turn[];
   summary: string;
+  /** 开了「保留全程叙事」之后逐回攒下的正文；不参与推演，只作留存与导出 */
+  narrativeLog?: NarrativeEntry[];
   stage: GenStage;
   errorMsg: string;
   lastFlashDuration: number;

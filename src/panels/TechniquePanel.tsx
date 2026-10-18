@@ -464,7 +464,18 @@ export function TechniquePanel() {
                         </div>
                         <p className="font-serif text-xs text-paper-400/70 mt-1">{skill.description}</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="font-number text-xs text-paper-400/50">灵力:{skill.mpCost}</span>
+                          {(skill.hpCost || 0) > 0 && (skill.mpRestore || 0) > 0 ? (
+                            <>
+                              <span className="font-number text-xs text-cinnabar-400/80">
+                                气血:{skill.hpCost}
+                              </span>
+                              <span className="font-number text-xs text-aura-cyan">
+                                回灵:{skill.mpRestore}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="font-number text-xs text-paper-400/50">灵力:{skill.mpCost}</span>
+                          )}
                           {skill.damage > 0 && (
                             <span className="font-number text-xs text-cinnabar-400/80">伤害:{skill.damage}</span>
                           )}

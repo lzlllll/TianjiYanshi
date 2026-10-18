@@ -320,7 +320,7 @@ function BattleOngoingView() {
           onChange={(e) => setAction(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={isResolving || battle.turn !== "player"}
-          placeholder="例如：向前移动两步，然后使用剑法攻击敌人"
+          placeholder="例如：向前移动两步，然后使用剑法攻击敌人；也可写运功回气、调息恢复灵力，心法里有那一招便会自行认领"
           rows={4}
           className={cn(
             "input-ink resize-none leading-relaxed",

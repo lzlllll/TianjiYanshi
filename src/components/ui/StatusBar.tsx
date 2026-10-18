@@ -52,7 +52,7 @@ export function StatusBar({ label, current, max, color, icon, compact, className
           }}
         />
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className="font-number text-xs text-ink-dark drop-shadow-sm whitespace-nowrap">
+          <span className="font-number text-xs text-black drop-shadow-sm whitespace-nowrap">
             {current} / {max}
           </span>
         </div>

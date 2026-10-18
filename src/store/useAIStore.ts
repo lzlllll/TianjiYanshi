@@ -40,6 +40,7 @@ import type {
   SectWarBrief,
   HaggleBrief,
   ShopBrief,
+  NarrativeEntry,
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
@@ -137,6 +138,7 @@ import {
   recentForPrompt,
   splitForCompression,
 } from "@/lib/contextCompressor";
+import { recordNarrative } from "@/lib/narrativeLog";
 import { aiReady } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 
@@ -151,6 +153,8 @@ const DEFAULT_SETTINGS: AISettings = {
   proReasoning: "auto",
   temperature: 0.85,
   customPrompt: "",
+  // 默认不留全程正文：省些体积，要回看或导出时再开
+  keepFullNarrative: false,
 };
 
 /** 叙事那一档的总时限：非推理档两分钟够用，推理档先长一段思考才落笔，留宽一档 */
@@ -164,6 +168,7 @@ function proTimeoutMs(settings: AISettings): number {
 const INITIAL_CONVERSATION: ConversationState = {
   turns: [],
   summary: "",
+  narrativeLog: [],
   stage: "idle",
   errorMsg: "",
   lastFlashDuration: 0,
@@ -1117,15 +1122,45 @@ function mergeBattleEntities(
 }
 
 /**
- * 这一手的灵力已由本地当场扣过，模型若在 OPS 里再扣一遍便是重复。
- * 恢复灵力的加法不管，只把按减号去扣 player.mp 的那几条剔出去。
+ * 这一手已由本地当场扣过（或补过）的账，模型若在 OPS 里再写一遍便是重复。
+ * 灵力：扣灵力的减法、心法催运补灵力的加法，一并剔去。
+ * 气血：只剔与系统所扣数目相等的减法——敌人打来的伤害是另一笔，须留着。
  */
-function withoutDuplicateMpCost(ops: DataOp[], mpSpent: number): DataOp[] {
-  if (mpSpent <= 0) return ops;
+function withoutDuplicateVitals(
+  ops: DataOp[],
+  settled: { mpSpent: number; mpRestored: number; hpSpent: number },
+): DataOp[] {
+  const { mpSpent, mpRestored, hpSpent } = settled;
+  if (mpSpent <= 0 && mpRestored <= 0 && hpSpent <= 0) return ops;
   return ops.filter((op) => {
-    if (op.kind !== "modify" || op.op !== "-") return true;
+    if (op.kind !== "modify") return true;
     const path = String(op.path || "").replace(/\s+/g, "");
-    return !(path === "player.mp" || path === "mp");
+    const isMp = path === "player.mp" || path === "mp";
+    if (mpSpent > 0 && op.op === "-" && isMp) return false;
+    if (mpRestored > 0 && op.op === "+" && isMp) return false;
+    const amount = Math.abs(Number(op.value));
+    if (hpSpent > 0 && op.op === "-" && path === "player.hp" && amount === hpSpent) return false;
+    return true;
+  });
+}
+
+/**
+ * 开了「保留全程叙事」才把这一回的正文另存一份。
+ * 推演那边照旧只带压缩摘要与近几轮，这份全文不参与任何提示词。
+ */
+function keepNarrativeOf(
+  st: { settings: AISettings; conversation: ConversationState },
+  turn: Turn,
+): NarrativeEntry[] | undefined {
+  if (!st.settings.keepFullNarrative) return st.conversation.narrativeLog;
+  const game = useGameStore.getState();
+  return recordNarrative(st.conversation.narrativeLog, {
+    id: turn.id,
+    timeLabel: formatGameTime(game.currentTime),
+    place: game.hereLabel(),
+    input: turn.playerInput,
+    narrative: turn.narrative,
+    timestamp: turn.timestamp,
   });
 }
 
@@ -2261,6 +2296,7 @@ export const useAIStore = create<AIStore>()(
           conversation: {
             ...st.conversation,
             turns: [...st.conversation.turns, turn],
+            narrativeLog: keepNarrativeOf(st, turn),
             stage: "done",
             errorMsg: "",
             pendingChatSummary: "",
@@ -2660,6 +2696,7 @@ export const useAIStore = create<AIStore>()(
           conversation: {
             ...st.conversation,
             turns: [...st.conversation.turns, turn],
+            narrativeLog: keepNarrativeOf(st, turn),
             stage: "done",
             errorMsg: "",
             pendingChatSummary: "",
@@ -2806,7 +2843,7 @@ export const useAIStore = create<AIStore>()(
 
         set((st) => {
           const turns = [...st.conversation.turns];
-          turns[turns.length - 1] = {
+          const regenerated: Turn = {
             ...lastTurn,
             // 重演开篇那一轮同样不认战斗标记：开篇不该开打
             mode: conversation.turns.length === 1 ? undefined : narrativeMode ?? undefined,
@@ -2819,10 +2856,13 @@ export const useAIStore = create<AIStore>()(
             applied: true,
             timestamp: Date.now(),
           };
+          turns[turns.length - 1] = regenerated;
           return {
             conversation: {
               ...st.conversation,
               turns,
+              // 同一轮重演：照 id 换掉先前存下的那一回，不另起一条
+              narrativeLog: keepNarrativeOf(st, regenerated),
               quickDecisions: extraction.quickDecisions,
               stage: "done",
               lastRawOutput: proRaw,
@@ -2913,6 +2953,7 @@ export const useAIStore = create<AIStore>()(
           conversation: {
             turns,
             summary: conv.summary || "",
+            narrativeLog: Array.isArray(conv.narrativeLog) ? conv.narrativeLog : [],
             stage: turns.length > 0 ? "done" : "idle",
             errorMsg: "",
             lastFlashDuration: 0,
@@ -4909,6 +4950,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           techniqueName: technique.name,
           skillName: skill.name,
           mpCost: Math.max(0, Math.round(skill.mpCost || 0)),
+          hpCost: Math.max(0, Math.round(skill.hpCost || 0)),
+          mpRestore: Math.max(0, Math.round(skill.mpRestore || 0)),
           damage: Math.max(0, Math.round(skill.damage || 0)),
           cooldown: Math.max(0, Math.round(skill.cooldown || 0)),
           effect: (skill.effects || [])
@@ -4917,10 +4960,14 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         }));
         const skillBrief =
           skillPalette
-            .map(
-              (s) =>
-                `${s.techniqueName}·${s.skillName}（耗灵 ${s.mpCost}，威力 ${s.damage}，冷却 ${s.cooldown}，效果：${s.effect || "无"}）`,
-            )
+            .map((s) => {
+              // 心法催运那一招不耗灵力，改写耗气血与回灵力
+              const cost =
+                s.hpCost > 0 && s.mpRestore > 0
+                  ? `耗气血 ${s.hpCost}·回灵力 ${s.mpRestore}`
+                  : `耗灵 ${s.mpCost}`;
+              return `${s.techniqueName}·${s.skillName}（${cost}，威力 ${s.damage}，冷却 ${s.cooldown}，效果：${s.effect || "无"}）`;
+            })
             .join("；") || "无";
 
         const playerId =
@@ -5024,6 +5071,17 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             { kind: "modify", path: "player.mp", op: "-", value: String(local.mpSpent) },
           ]);
         }
+        // 心法催运：气血扣、灵力补，也当场落定
+        if (local.hpSpent > 0) {
+          useGameStore.getState().applyOps([
+            { kind: "modify", path: "player.hp", op: "-", value: String(local.hpSpent) },
+          ]);
+        }
+        if (local.mpRestored > 0) {
+          useGameStore.getState().applyOps([
+            { kind: "modify", path: "player.mp", op: "+", value: String(local.mpRestored) },
+          ]);
+        }
 
         // 第三步：把判定结果与各项参数一并交给叙事那一步照写
         const settledTarget = targetId
@@ -5032,10 +5090,11 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         const settleLines: string[] = [];
         if (cast) {
           settleLines.push(`招式：《${cast.techniqueName}》·${cast.skillName}`);
-          if (targetId) settleLines.push(`目标：${settledTarget?.name ?? targetId}`);
           settleLines.push(`判定依据：${cast.breakdown.join("、")}`);
           settleLines.push(`结算：${cast.summary}`);
-          if (settledTarget && typeof settledTarget.hp === "number") {
+          // 心法催运不冲着谁去，便不报目标
+          if (targetId && cast.hpCost <= 0) settleLines.push(`目标：${settledTarget?.name ?? targetId}`);
+          if (cast.damage > 0 && settledTarget && typeof settledTarget.hp === "number") {
             settleLines.push(
               `目标气血：已由系统扣至 ${settledTarget.hp}${
                 typeof settledTarget.maxHp === "number" ? `/${settledTarget.maxHp}` : ""
@@ -5045,6 +5104,16 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         }
         if (local.mpSpent > 0) {
           settleLines.push(`你的灵力：已由系统扣至 ${Math.max(0, player.mp - local.mpSpent)}`);
+        }
+        if (local.hpSpent > 0) {
+          settleLines.push(
+            `你的气血：因这一门心法已由系统扣至 ${Math.max(1, player.hp - local.hpSpent)}（这一笔不要再写进 OPS）`,
+          );
+        }
+        if (local.mpRestored > 0) {
+          settleLines.push(
+            `你的灵力：因这一门心法已由系统回至 ${Math.min(player.mpMax, player.mp + local.mpRestored)}（这一笔不要再写进 OPS）`,
+          );
         }
         if (intent.move && local.owned.includes(playerId)) {
           settleLines.push(`走位：你已移步至 (${intent.move.x}, ${intent.move.y})`);
@@ -5132,7 +5201,11 @@ MODIFY player.mp - 10
 
           const parsed = parseModelOutput(raw);
 
-          const modelOps = withoutDuplicateMpCost(parsed.ops, local.mpSpent);
+          const modelOps = withoutDuplicateVitals(parsed.ops, {
+            mpSpent: local.mpSpent,
+            mpRestored: local.mpRestored,
+            hpSpent: local.hpSpent,
+          });
           if (modelOps.length > 0) {
             useGameStore.getState().applyOps(modelOps);
           }
@@ -5191,7 +5264,11 @@ MODIFY player.mp - 10
 
               const parsed = parseModelOutput(raw);
 
-              const modelOps = withoutDuplicateMpCost(parsed.ops, local.mpSpent);
+              const modelOps = withoutDuplicateVitals(parsed.ops, {
+                mpSpent: local.mpSpent,
+                mpRestored: local.mpRestored,
+                hpSpent: local.hpSpent,
+              });
               if (modelOps.length > 0) {
                 useGameStore.getState().applyOps(modelOps);
               }

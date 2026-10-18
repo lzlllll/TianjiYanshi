@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
+import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
+import { GAME_TITLE } from "@/lib/gameInfo";
+import { REALM_NAMES } from "@/data/mockData";
+import { buildNarrativeText } from "@/lib/narrativeLog";
 import {
   applySavePayload,
   buildSavePayload,
@@ -15,6 +19,7 @@ import {
 import {
   AlertTriangle,
   Download,
+  FileText,
   FolderOpen,
   Loader2,
   RefreshCw,
@@ -55,6 +60,7 @@ export function SaveManagerModal() {
   const open = useAIStore((s) => s.isSaveManagerOpen);
   const setOpen = useAIStore((s) => s.setSaveManagerOpen);
   const hasProgress = useAIStore((s) => s.conversation.turns.length > 0);
+  const narrativeLog = useAIStore((s) => s.conversation.narrativeLog ?? []);
 
   const [saves, setSaves] = useState<SaveRecord[]>([]);
   const [folderMode, setFolderMode] = useState(true);
@@ -184,6 +190,21 @@ export function SaveManagerModal() {
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  /** 导出攒下的全程叙事：纯文本，逐回列时间、所在、行动与正文 */
+  const exportNarrative = () => {
+    if (narrativeLog.length === 0) return;
+    const player = useGameStore.getState().player;
+    const who = [player.name || "无名之辈", player.title ? `「${player.title}」` : "", REALM_NAMES[player.realmIndex] ?? ""]
+      .filter(Boolean)
+      .join(" · ");
+    const text = buildNarrativeText(narrativeLog, {
+      title: GAME_TITLE,
+      player: who,
+      exportedAt: fmtTime(Date.now()),
+    });
+    downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), `叙事_${saveStamp()}.txt`);
   };
 
   return (
@@ -331,6 +352,35 @@ export function SaveManagerModal() {
               </p>
             </section>
           )}
+
+          <div className="book-divider" />
+
+          {/* 全程叙事：开了留存才有的另存正文，可整本导出 */}
+          <section className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-serif text-xs text-paper-300 tracking-wider flex items-center gap-1.5">
+                <FileText size={13} /> 叙事文本
+              </span>
+              <span className="font-number text-[11px] text-paper-400/50">已存 {narrativeLog.length} 回</span>
+            </div>
+            {narrativeLog.length === 0 ? (
+              <p className="rounded border border-paper-400/12 bg-ink-900/30 px-3 py-3 font-serif text-xs leading-relaxed text-paper-400/55">
+                尚未留存叙事。到「通灵设置」里打开「保留全程叙事」，此后每一回的原文都会存下，
+                可回看，也可在此整本导出。
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <SealButton onClick={exportNarrative} className="px-4 py-2 text-sm">
+                  <span className="flex items-center gap-1.5">
+                    <Download size={14} /> 导出叙事文本
+                  </span>
+                </SealButton>
+                <span className="font-serif text-[11px] leading-relaxed text-paper-400/50">
+                  纯文本 .txt，逐回写明时辰、所在、你的行动与正文
+                </span>
+              </div>
+            )}
+          </section>
 
           {notice && (
             <p className="rounded px-3 py-2 font-serif text-xs text-jade-400 bg-jade-500/10 border border-jade-500/30">

@@ -1138,16 +1138,24 @@ function normalizeTechnique(item: any): any {
       const debuffDuration = typeof rawDuration === "number" && Number.isFinite(rawDuration)
         ? Math.min(12, Math.max(1, Math.round(rawDuration)))
         : 3;
+      // 心法催运：拿气血换灵力。只有心法能走这一路，且耗血与回灵都要写正数，少一样便当普通招式
+      const rawHp = typeof s.hpCost === "number" && Number.isFinite(s.hpCost) ? s.hpCost : 0;
+      const rawRestore = typeof s.mpRestore === "number" && Number.isFinite(s.mpRestore) ? s.mpRestore : 0;
+      const convert = item.category === "心法" && rawHp > 0 && rawRestore > 0;
+      const hpCost = convert ? Math.min(999, Math.max(1, Math.round(rawHp))) : 0;
+      const mpRestore = convert ? Math.min(999, Math.max(1, Math.round(rawRestore))) : 0;
       return {
         id: s.id || `sk_${item.id}_${idx}`,
         name: s.name || `技能${idx + 1}`,
         description: s.description || s.desc || "",
         levelRequired: typeof s.rank === "number" ? s.rank : (idx === 0 ? 3 : idx === 1 ? 6 : 10),
-        mpCost: typeof s.mpCost === "number" ? s.mpCost : 20 + idx * 15,
+        // 换灵力的那一招不耗灵力，反过来补灵力
+        mpCost: convert ? 0 : (typeof s.mpCost === "number" ? s.mpCost : 20 + idx * 15),
         damage: typeof s.damage === "number" ? s.damage : 20 + idx * 25,
         cooldown: typeof s.cooldown === "number" ? s.cooldown : 3 + idx,
         effects: s.effects || [],
         debuffDuration,
+        ...(convert ? { hpCost, mpRestore } : {}),
       };
     });
   }
@@ -1579,11 +1587,16 @@ function settleQuest(root: any, name: string, status: "done" | "failed"): void {
   const today = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
   target.status = status;
   target.settledDay = today;
+  // 赏罚是一条状态时，须照眼下时辰算出顶到几时；少了这一笔，状态便立不起来，只剩字面上的一句话
+  const ledger: QuestLedgerTarget = {
+    ...(root as QuestLedgerTarget),
+    now: normalizeGameTime(root?.currentTime, OPENING_GAME_TIME),
+  };
   // 牙行揽下的差事交上了也只算办成，赏还押在柜上，得他自己回去领
   target.outcome =
     status === "done" && target.broker
       ? holdRewardOutcome(target)
-      : applyQuestLedger(root as QuestLedgerTarget, target, status);
+      : applyQuestLedger(ledger, target, status);
   if (status === "done" && target.broker) target.claimed = false;
   root.quests = quests;
   // 交差或黄了都留一笔在见闻里，免得这事了得无声无息
@@ -1943,8 +1956,10 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
   if (normalizedPath.startsWith("quest.")) {
     const questName = normalizedPath.slice("quest.".length).trim();
     if (!questName) return null;
-    const done = /成|了|交差|办妥|妥/.test(value);
-    const failed = /误|黄|败|不成|未/.test(value);
+    // 先认黄了的写法：「误了」「黄了」里也带着一个「了」字，
+    // 若先认「了」便被算作办成，该罚的那一笔连状态也落不下来
+    const failed = /误|黄|败|不成|未|没/.test(value);
+    const done = !failed && /成|了|交差|办妥|妥/.test(value);
     if (!done && !failed) return null;
     settleQuest(root, questName, done ? "done" : "failed");
     return null; // 已直接处理

@@ -1014,7 +1014,7 @@ export function buildOpsExtractionPrompt(params: {
 4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
 5. 可修改的玩家字段：player.name、player.title、player.realmIndex、player.cultivation、player.hp、player.hpMax、player.mp、player.mpMax、player.spirit、player.spiritMax、player.lifespanCurrent、player.lifespanMax、player.body、player.fortune、player.karma、player.personality、player.description、player.background、player.spiritRoots.<元素>、player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。
 6. 新闻 news.items 仅在跨天时新增，同一天内不要重复生成；每条需含 category（官府公告/宗门布告/市井传言）、title、content、source 四个字段。
-7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。
+7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。心法类可在 skills 里留一招以气血换灵力的招式，写明 hpCost 与 mpRestore；其余门类不写这两项。
 8. "服用丹药""使用符箓"只是消耗已有物品，如叙事中确有消耗，用 modify 扣减对应 inventory 条目的 count，不要用 add。
 9. quickDecisions：给出 3-4 条玩家下一轮可以采取的具体行动建议，每条 8-20 字，紧扣当前剧情与处境。
 10. player.timeline 是修炼历程，只记录足以载入生平的重大节点（如拜师、突破、结丹、结仇、得宝），寻常时日不要新增条目，以免流水账化。
@@ -1120,7 +1120,8 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - damage 为 0 到 120 的整数基本伤害；纯辅助招式可给 0
 - cooldown 为 0 到 6 的整数
 - debuffDuration 为 1 到 12 的整数，表示命中后负面效果维持几柱香
-- effects 为数组，写这一招打在对手身上的负面效果，每条 {"stat","valueType","value","description"}；stat 只取 defense、dodge、speed、attack、damage、vitality、soul、agility、hp 之一；valueType 只取 percentage、fixed、multiplier；value 为数字；description 一句中文说明。伤其性命的写法：stat 取 hp、valueType 取 fixed、value 为正整数，表示每柱香额外损这么多气血。纯增益、无负面效果的招式，effects 给空数组`,
+- effects 为数组，写这一招打在对手身上的负面效果，每条 {"stat","valueType","value","description"}；stat 只取 defense、dodge、speed、attack、damage、vitality、soul、agility、hp 之一；valueType 只取 percentage、fixed、multiplier；value 为数字；description 一句中文说明。伤其性命的写法：stat 取 hp、valueType 取 fixed、value 为正整数，表示每柱香额外损这么多气血。纯增益、无负面效果的招式，effects 给空数组
+- 心法那一门可留一招「催运回灵」的招式：以气血换灵力，不伤敌。写法为 {"id","name","description","levelRequired","mpCost":0,"damage":0,"cooldown","effects":[],"hpCost","mpRestore"}，其中 hpCost 为耗掉的气血、mpRestore 为补回的灵力，各取 10 到 80 之间的整数，mpRestore 不得超过 hpCost 的两倍。其余心法招式与别门功法一概不写这两项`,
   },
   {
     id: "treasure",
@@ -1850,6 +1851,9 @@ export interface BattleIntentBrief {
     techniqueName: string;
     skillName: string;
     mpCost: number;
+    /** 心法催运：这一招改为耗气血，并回复灵力 */
+    hpCost?: number;
+    mpRestore?: number;
     damage: number;
     cooldown: number;
     effect: string;
@@ -1886,12 +1890,16 @@ export function buildBattleIntentPrompt(brief: BattleIntentBrief): ChatMessage[]
   const skillLines =
     brief.skills.length > 0
       ? brief.skills
-          .map(
-            (s) =>
-              `- ${s.techniqueName}·${s.skillName}（耗灵 ${s.mpCost}，威力 ${s.damage}${
-                s.cooldown ? `，冷却 ${s.cooldown}` : ""
-              }${s.effect ? `，效果：${s.effect}` : ""}）`,
-          )
+          .map((s) => {
+            // 心法催运那一招不耗灵力，改写耗气血与回灵力
+            const convert = (s.hpCost ?? 0) > 0 && (s.mpRestore ?? 0) > 0;
+            const cost = convert
+              ? `耗气血 ${s.hpCost}，回灵力 ${s.mpRestore}`
+              : `耗灵 ${s.mpCost}`;
+            return `- ${convert ? "【催运回灵】" : ""}${s.techniqueName}·${s.skillName}（${cost}，威力 ${s.damage}${
+              s.cooldown ? `，冷却 ${s.cooldown}` : ""
+            }${s.effect ? `，效果：${s.effect}` : ""}）`;
+          })
           .join("\n")
       : "（此刻没有可使的招式）";
 
@@ -1923,6 +1931,8 @@ ${brief.recent && brief.recent.length > 0 ? `\n【近几回的经过】\n${brief
 - 只输出一个 JSON 对象，不要解释、注释或代码围栏：
 {"skill": "招式名", "technique": "所属功法名", "target": "台上某人的 id", "move": {"x": 数字, "y": 数字}, "item": "所用的丹药或符箓名", "note": "这一手的其余要点，20 字以内"}
 - skill 必须原样照抄【他可以用的招式】里的招式名；若这一手不是出招（只是走位、防守、用物、喊话、拖延），skill 写空字符串
+- 标着【催运回灵】的招式是以气血换灵力的一路，不伤敌：玩家说运功、调息、吐纳、行功、回气、补灵力、恢复灵力、压住翻腾的真气，便选这一招；此类招式不必挑 target，target 写空字符串
+- 玩家只把意思说出来、没有点招名时，你也要照意思挑最贴的那一招，把 skill 写成那一招的原名；确实没有可用的招式才写空字符串
 - technique 写该招式所属功法名；skill 为空时也写空字符串
 - target 必须照抄【场上的人】里的 id，且只能挑敌人；认不准是谁便写空字符串
 - move 只在确实要挪窝时给，写出要去的那一格；不挪窝写 null。格子须在战场之内，并且不要写别人正占着的格
