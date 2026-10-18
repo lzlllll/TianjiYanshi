@@ -33,6 +33,9 @@ extraResources:
   # 九州舆图的底图立在项目根目录，不在上面两处；漏了它舆图便是一片空白
   - from: 武侠地图.png
     to: game/武侠地图.png
+  # 背景音乐：《醉酒》为日常、《将军令》为战斗，按 /game/music 取
+  - from: music
+    to: game/music
 
 # 不开 asar：本地服务以 ESM 动态 import 引入，散文件最稳妥，也方便玩家自行改数据
 asar: false

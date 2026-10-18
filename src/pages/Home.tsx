@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
+import { gameMonthKey } from "@/lib/gameTime";
+import { autoSaveOnMonth } from "@/lib/autoSave";
 import { TopBanner } from "@/components/layout/TopBanner";
 import { SideNav } from "@/components/layout/SideNav";
 import { BottomStatus } from "@/components/layout/BottomStatus";
@@ -52,6 +54,18 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
   const tutorialSeen = useTutorialStore((s) => s.seen);
   const activeTutorial = useTutorialStore((s) => s.activeId);
   const startTutorial = useTutorialStore((s) => s.start);
+
+  // 跨月自动存档：只保留最近五份，手动档不受影响
+  const currentTime = useGameStore((s) => s.currentTime);
+  const monthKey = gameMonthKey(currentTime);
+  const lastMonthRef = useRef(monthKey);
+  useEffect(() => {
+    const prev = lastMonthRef.current;
+    lastMonthRef.current = monthKey;
+    if (prev === monthKey) return;
+    void autoSaveOnMonth(monthKey);
+  }, [monthKey]);
+
   // 开篇那一段落定之后摊一次玩法说明；说明还开着时先不走引导，免得两页叠在一起
   const introVisible = !introSeen && !introClosed && turnCount >= 1;
 
@@ -104,7 +118,7 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
       </div>
       <BottomStatus />
 
-      <AISettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <AISettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} allowTestTools />
       <NPCChatModal />
       {/* 路上的变故：未了结之前关不上，压在其余浮层之上 */}
       <RandomEventModal />

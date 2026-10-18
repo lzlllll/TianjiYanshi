@@ -293,6 +293,9 @@ export function SaveManagerModal() {
                   </span>
                   <span className="font-number text-[11px] text-paper-400/50">共 {saves.length} 份</span>
                 </div>
+                <p className="font-serif text-[11px] leading-relaxed text-paper-400/50">
+                  每逢游戏内跨月自动存一份，最多保留最近 5 份自动存档。
+                </p>
 
                 {saves.length === 0 ? (
                   <p className="rounded border border-paper-400/12 bg-ink-900/30 px-3 py-4 text-center font-serif text-xs text-paper-400/55">

@@ -19,7 +19,7 @@ const PROXY = {
  * 运行时读取的游戏数据与图片，构建时原样复制到 <产物>/game/ 下，
  * 与本地服务暴露的 /game/ 前缀对齐。这些文件不进包，改完重跑构建即可，不必动代码。
  */
-const GAME_ASSETS = ['game_data', 'image_assets', '武侠地图.png'];
+const GAME_ASSETS = ['game_data', 'image_assets', '武侠地图.png', 'music'];
 
 /** 逐层复制目录；不用 cpSync 是因为它在部分 Windows 环境下会让 node 进程直接崩掉 */
 function copyRecursive(from: string, to: string) {
@@ -60,6 +60,7 @@ const GAME_MIME: Record<string, string> = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
 };
 
 /**

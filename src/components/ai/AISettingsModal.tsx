@@ -8,12 +8,17 @@ import { FREE_MODEL } from "@/data/aiQuota";
 import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
 import { CustomApiModal } from "@/components/ai/CustomApiModal";
 import { SealButton } from "@/components/ui/SealButton";
+import { bgm, DEFAULT_BGM_VOLUME } from "@/lib/bgm";
 import { cn } from "@/lib/utils";
 import { X, Loader2, CheckCircle2, AlertTriangle, Plug } from "lucide-react";
+
+const DEFAULT_FONT_SCALE = 1;
 
 interface AISettingsModalProps {
   open: boolean;
   onClose: () => void;
+  /** 游戏内才给开发者测试入口；主菜单等处一概不放 */
+  allowTestTools?: boolean;
 }
 
 type TestState =
@@ -22,7 +27,7 @@ type TestState =
   | { status: "ok"; msg: string; model: "flash" | "pro" }
   | { status: "error"; msg: string; model: "flash" | "pro" };
 
-export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
+export function AISettingsModal({ open, onClose, allowTestTools = false }: AISettingsModalProps) {
   const settings = useAIStore((s) => s.settings);
   const updateSettings = useAIStore((s) => s.updateSettings);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
@@ -65,6 +70,33 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // 音量边拖边听。关闭时若没保存，退回已存的那个音量
+  useEffect(() => {
+    if (!open) return;
+    bgm.setVolume(draft.bgmVolume ?? DEFAULT_BGM_VOLUME);
+  }, [open, draft.bgmVolume]);
+
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      bgm.setVolume(useAIStore.getState().settings.bgmVolume ?? DEFAULT_BGM_VOLUME);
+    };
+  }, [open]);
+
+  // 字号边拖边看。关闭时若没保存，退回已存的那个字号
+  useEffect(() => {
+    if (!open) return;
+    document.documentElement.style.fontSize = `${16 * (draft.fontScale ?? DEFAULT_FONT_SCALE)}px`;
+  }, [open, draft.fontScale]);
+
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      const saved = useAIStore.getState().settings.fontScale ?? DEFAULT_FONT_SCALE;
+      document.documentElement.style.fontSize = `${16 * saved}px`;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -330,6 +362,52 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
             </div>
           </section>
 
+          {/* 背景音乐：日常与战斗两轨自动换，音量此处定 */}
+          <section>
+            <div className="flex items-center justify-between">
+              <SectionLabel>背景音乐</SectionLabel>
+              <span className="font-number text-sm text-gold-400">
+                {Math.round((draft.bgmVolume ?? DEFAULT_BGM_VOLUME) * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={draft.bgmVolume ?? DEFAULT_BGM_VOLUME}
+              onChange={(e) => patch({ bgmVolume: parseFloat(e.target.value) })}
+              className="fire-slider mt-3 w-full"
+            />
+            <p className="font-serif text-xs text-paper-400/50 mt-1.5 leading-relaxed">
+              日常放《醉酒》，战事一起换成《将军令》，换轨时交叉淡入淡出。拖到 0 即静音。
+            </p>
+          </section>
+
+          {/* 字体大小：整页随根字号缩放 */}
+          <section>
+            <div className="flex items-center justify-between">
+              <SectionLabel>字体大小</SectionLabel>
+              <span className="font-number text-sm text-gold-400">
+                {Math.round((draft.fontScale ?? DEFAULT_FONT_SCALE) * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0.85}
+              max={1.3}
+              step={0.05}
+              value={draft.fontScale ?? DEFAULT_FONT_SCALE}
+              onChange={(e) => patch({ fontScale: parseFloat(e.target.value) })}
+              className="fire-slider mt-3 w-full"
+            />
+            <div className="flex justify-between mt-1.5 font-serif text-xs text-paper-400/50">
+              <span>85% · 小</span>
+              <span>100% · 标准</span>
+              <span>130% · 大</span>
+            </div>
+          </section>
+
           {/* 叙事留存：只影响是否另存全文，推演仍走压缩摘要 */}
           <section>
             <div className="flex items-center justify-between gap-3">
@@ -427,15 +505,17 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                       />
                     </button>
                   </div>
-                  <button
-                    onClick={() => {
-                      openCrafting();
-                      onClose();
-                    }}
-                    className="ghost-btn mt-2 w-full px-3 py-1.5 rounded text-xs flex items-center justify-center gap-1.5"
-                  >
-                    强制打开百艺窗口（测试）
-                  </button>
+                  {allowTestTools && (
+                    <>
+                      <button
+                        onClick={() => {
+                          openCrafting();
+                          onClose();
+                        }}
+                        className="ghost-btn mt-2 w-full px-3 py-1.5 rounded text-xs flex items-center justify-center gap-1.5"
+                      >
+                        强制打开百艺窗口（测试）
+                      </button>
                   <button
                     onClick={() => {
                       const player = useGameStore.getState().player;
@@ -483,6 +563,8 @@ export function AISettingsModal({ open, onClose }: AISettingsModalProps) {
                   >
                     强制触发战斗模式（测试）
                   </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}

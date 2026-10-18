@@ -14,6 +14,7 @@ import {
   ClipboardPaste,
   Plug,
   X,
+  ArrowLeft,
 } from "lucide-react";
 import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
@@ -350,7 +351,7 @@ function OpeningLoading() {
   );
 }
 
-export function StartSetup() {
+export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) {
   const [setup, setSetup] = useState<PlayerSetup>({
     name: "",
     title: "",
@@ -700,6 +701,20 @@ ${OPENING_BRIEF}`,
                   >
                     <FolderOpen size={14} className="text-ink-lightest" /> 存档管理
                   </button>
+                  {onReturnToMenu && (
+                    <>
+                      <div className="h-px bg-ink-lightest/25" />
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          onReturnToMenu();
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 font-serif text-sm text-ink-dark hover:bg-gold-500/10 transition-colors"
+                      >
+                        <ArrowLeft size={14} className="text-ink-lightest" /> 返回主菜单
+                      </button>
+                    </>
+                  )}
                   {turns.length > 0 && (
                     <>
                       <div className="h-px bg-ink-lightest/25" />

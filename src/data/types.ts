@@ -2033,6 +2033,10 @@ export interface AISettings {
    * 供日后回看与导出；不开便随压缩一并丢弃。
    */
   keepFullNarrative?: boolean;
+  /** 背景音乐音量，0 到 1；未调过时默认关闭 */
+  bgmVolume?: number;
+  /** 界面字号缩放，1 为原字号；未调过时按 1 算 */
+  fontScale?: number;
 }
 
 export type GenStage =

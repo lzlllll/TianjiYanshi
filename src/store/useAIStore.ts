@@ -139,6 +139,7 @@ import {
   splitForCompression,
 } from "@/lib/contextCompressor";
 import { recordNarrative } from "@/lib/narrativeLog";
+import { DEFAULT_BGM_VOLUME } from "@/lib/bgm";
 import { aiReady } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 
@@ -155,6 +156,10 @@ const DEFAULT_SETTINGS: AISettings = {
   customPrompt: "",
   // 默认不留全程正文：省些体积，要回看或导出时再开
   keepFullNarrative: false,
+  // 背景音乐默认关闭，可在设置里再开
+  bgmVolume: DEFAULT_BGM_VOLUME,
+  // 界面字号默认原大
+  fontScale: 1,
 };
 
 /** 叙事那一档的总时限：非推理档两分钟够用，推理档先长一段思考才落笔，留宽一档 */
