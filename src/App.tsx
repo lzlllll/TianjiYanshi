@@ -5,6 +5,7 @@ import { MainMenu } from "@/pages/MainMenu";
 import { StartSetup } from "@/components/start/StartSetup";
 import { TermsGate } from "@/components/start/TermsGate";
 import { SaveManagerModal } from "@/components/save/SaveManagerModal";
+import { RateLimitModal } from "@/components/ai/RateLimitModal";
 import { hasAgreed, markAgreed } from "@/data/userAgreement";
 import { bgm, DEFAULT_BGM_VOLUME } from "@/lib/bgm";
 
@@ -59,6 +60,8 @@ export default function App() {
         <Home onReturnToMenu={() => setShowMainMenu(true)} />
       )}
       <SaveManagerModal />
+      {/* 内置 AI 服务被限流时的说明窗，压在最上层 */}
+      <RateLimitModal />
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { getScene, getSectMapTemplates, sectSceneId } from "@/data/map";
-import { findSectMapType } from "@/data/sects";
+import { climateAggression, findSectMapType } from "@/data/sects";
 import { sectSiteTerms } from "@/data/sectSites";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
@@ -49,7 +49,8 @@ export function SectSiteCard({ site, onClose }: { site: SectSite; onClose: () =>
           </div>
           <div className="mt-0.5 font-serif text-xs text-paper-400/60">
             {site.seat}
-            {mapType ? ` · ${mapType.name}` : ""} · {site.culture}
+            {mapType ? ` · ${mapType.name}` : ""} · {site.culture} · 侵略倾向{" "}
+            {Math.round(climateAggression(site.climate?.id) * 100)}%
           </div>
         </div>
         <button

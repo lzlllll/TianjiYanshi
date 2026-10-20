@@ -1934,6 +1934,11 @@ export interface GameState {
   sectRelations: SectRelation[];
   /** 被各宗门占下的城与村；由它标出城池的拥有者，占了便按月收贡金 */
   occupations: Occupation[];
+  /**
+   * 上一次掷「别家宗门主动开战」是哪一日（日序）。
+   * 一日只掷一回，免得同一天走几个时辰便连连开战。
+   */
+  lastSectWarDay?: number;
   /** 当前打开的侧拉面板；null 表示没有面板打开 */
   currentPanel: PanelId | null;
   craftingTab: CraftingTab;
@@ -2233,6 +2238,8 @@ export interface GameSnapshot {
   sectRelations?: SectRelation[];
   /** 城村的归属；撤销回合时要一并还原 */
   occupations?: Occupation[];
+  /** 上一次掷「别家宗门主动开战」的日序；撤销回合时要一并还原 */
+  lastSectWarDay?: number;
   /** 名声；撤销回合时要一并还原 */
   reputation?: Reputation;
   /** 随身灵兽；撤销回合时要一并还原 */

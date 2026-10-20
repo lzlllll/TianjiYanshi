@@ -126,7 +126,8 @@ import {
 } from "@/data/sectSites";
 import { PAWN_DAYS, isPawnOverdue, pawnPrice } from "@/data/pawn";
 import { escortToRelation, isEscortExpired } from "@/data/escort";
-import { normalizeSectRelation, upsertSectRelation, vassalTribute, type SectWarChoice } from "@/data/sectRelations";
+import { normalizeSectRelation, upsertSectRelation, findSectRelation, vassalTribute, type SectWarChoice } from "@/data/sectRelations";
+import { climateAggression } from "@/data/sects";
 import { occupationTribute, ownerOf, upsertOccupation } from "@/data/occupations";
 import { rollWorkshop } from "@/data/craftsmen";
 import { PACT_KEPT_AFFINITY, PACT_OVERDUE_AFFINITY, pactLapsed, pactReady } from "@/data/pacts";
@@ -412,6 +413,11 @@ interface GameStore extends GameState {
   /** 月度结算：各属城村来贡，本门占的入本门宝库，别家占的入那一处自己的账 */
   settleOccupations: () => void;
   /**
+   * 别家宗门主动启衅：照各自风气里的侵略倾向一日一掷，掷中的便向近邻兴兵；
+   * 胜者从败者手里夺一处城村，两家结仇，并记入快报与传闻。
+   */
+  settleAiSectWars: () => void;
+  /**
    * 把玩家的身份对上本门的职位树。
    * 开局报的身份是玩家随手写的，门中职位是模型另拟的，两边名目常对不上，
    * 对不上便落在最低一级，免得判身份时卡在「低于外门弟子」。
@@ -583,6 +589,9 @@ function validateAndFixState(state: any): GameState {
     occupations: Array.isArray(state?.occupations)
       ? state.occupations.filter((o) => o && o.targetId && o.ownerSectId)
       : [],
+    lastSectWarDay: Number.isFinite(Number(state?.lastSectWarDay))
+      ? Math.max(0, Math.trunc(Number(state.lastSectWarDay)))
+      : 0,
     pacts: Array.isArray(state?.pacts) ? state.pacts.filter((p) => p && p.id && p.name) : [],
     // 宗门点位是开局现掷的，旧档里没有这一项便空着，进主界面时再补
     sectSites: Array.isArray(state?.sectSites) ? state.sectSites : [],
@@ -681,6 +690,7 @@ const initialState: GameState = {
   playerShops: [],
   sectRelations: [],
   occupations: [],
+  lastSectWarDay: 0,
   pacts: [],
   sectSites: [],
   adventures: [],
@@ -1786,6 +1796,102 @@ EFFECT: [效果描述]`,
               : {}),
           });
         }
+      },
+
+      settleAiSectWars: () => {
+        const st = get();
+        const sites = (Array.isArray(st.sectSites) ? st.sectSites : []).filter((s) => s?.name && !s.mine);
+        if (sites.length < 2) return;
+
+        const today = daySerial(st.currentTime);
+        // 开局头两日先让人认一认江湖，不急着动兵
+        if (today < 2) return;
+        // 一日只掷一回；掷不中也算这一日已掷过
+        if ((Number(st.lastSectWarDay) || 0) >= today) return;
+        set({ lastSectWarDay: today });
+
+        // 各门照自己的风气掷：侵略倾向越高，越容易在这一日启衅
+        const aggressor = sites.find(
+          (site) =>
+            !site.vassalOf &&
+            Math.random() < 0.001 + climateAggression(site.climate?.id) * 0.004,
+        );
+        if (!aggressor) return;
+
+        // 打近处的；同盟、附庸与交情尚好的不动
+        const targets = sites.filter((other) => {
+          if (other.id === aggressor.id) return false;
+          if (other.vassalOf === aggressor.id) return false;
+          const rel = findSectRelation(st.sectRelations, aggressor.id, other.id);
+          if (rel && (rel.stance === "附庸" || rel.stance === "结盟")) return false;
+          if (rel && rel.relation >= 50) return false;
+          return true;
+        });
+        if (targets.length === 0) return;
+
+        const distance = (a: SectSite, b: SectSite) => Math.hypot(a.x - b.x, a.y - b.y);
+        targets.sort((a, b) => distance(aggressor, a) - distance(aggressor, b));
+        const target = targets[Math.floor(Math.random() * Math.min(3, targets.length))];
+
+        // 强弱照品级、长老、弟子、声望与宝库估，再各带一点战场上的运气
+        const power = (site: SectSite) =>
+          site.level * 100 +
+          (Number(site.elders) || 0) * 40 +
+          Math.min(300, Number(site.disciples) || 0) * 2 +
+          (Number(site.reputation) || 0) * 3 +
+          Math.min(5000, Number(site.treasury?.spiritStones) || 0) / 20;
+        const attackerWins =
+          power(aggressor) * (0.9 + Math.random() * 0.25) >
+          power(target) * (0.9 + Math.random() * 0.2);
+
+        // 两家就此结仇
+        const oldRel = findSectRelation(st.sectRelations, aggressor.id, target.id);
+        const relation = normalizeSectRelation({
+          a: aggressor.id,
+          b: target.id,
+          stance: "敌对",
+          relation: Math.min(Number(oldRel?.relation) || 0, -60),
+          note: `${aggressor.name}于第${today}日兴兵来犯${target.name}`,
+          sinceDay: oldRel?.sinceDay ?? today,
+        });
+        const sectRelations = relation
+          ? upsertSectRelation(st.sectRelations, relation)
+          : st.sectRelations;
+
+        // 胜者从败者手里夺一处城村；败者名下没有，便只记一笔战事
+        let occupations = Array.isArray(st.occupations) ? st.occupations : [];
+        let seized: Occupation | null = null;
+        if (attackerWins) {
+          const held = occupations.filter((o) => o.ownerSectId === target.id);
+          if (held.length > 0) {
+            const taken = held[Math.floor(Math.random() * held.length)];
+            seized = {
+              ...taken,
+              ownerSectId: aggressor.id,
+              ownerName: aggressor.name,
+              sinceDay: today,
+              settledMonth: undefined,
+            };
+            occupations = occupations.map((o) => (o === taken ? seized! : o));
+          }
+        }
+
+        const dateLabel = `${st.currentTime.year}年${st.currentTime.month}月${st.currentTime.day}日`;
+        const title = attackerWins
+          ? `${aggressor.name}兴兵，${target.name}败退`
+          : `${aggressor.name}来犯，${target.name}却之`;
+        const content = attackerWins
+          ? `${dateLabel}，${aggressor.name}以「${aggressor.climate?.name ?? "门户之争"}」为号兴兵犯${target.name}。两家战于山门外，${target.name}不敌${
+              seized ? `，${seized.targetName}遂归${aggressor.name}治下` : "，门户受挫"
+            }。`
+          : `${dateLabel}，${aggressor.name}兴兵犯${target.name}。${target.name}闭门固守，鏖战数日，来犯者无功而返。`;
+        const rumorText = `${aggressor.name}${attackerWins ? "攻破" : "来犯未克"}${target.name}${
+          seized ? `，夺了${seized.targetName}` : ""
+        }。`;
+
+        set({ sectRelations, occupations });
+        get().updateNews([{ category: "宗门布告", title, content, source: "江湖快报" }]);
+        get().addRumors([{ text: rumorText, source: "江湖传闻" }]);
       },
 
       settleOccupations: () => {
@@ -4775,6 +4881,8 @@ EFFECT: [效果描述]`,
         get().settleFacilities();
         // 别家山门的账也照日往前推，各有各的进项
         get().settleSectSites();
+        // 好战的门派或在这一日启衅，夺城结仇
+        get().settleAiSectWars();
         // 走过这一段路，兴许路上生变；掷中的便开一扇关不上的窗
         void import("@/store/useAIStore")
           .then(({ useAIStore }) => useAIStore.getState().maybeTriggerRandomEvent(hours))
@@ -4853,6 +4961,7 @@ EFFECT: [效果描述]`,
             playerShops: st.playerShops,
             sectRelations: st.sectRelations,
             occupations: st.occupations,
+            lastSectWarDay: st.lastSectWarDay,
             log: st.log,
             currentPlaceId: st.currentPlaceId,
             currentSectId: st.currentSectId,
@@ -4944,6 +5053,9 @@ EFFECT: [效果描述]`,
           playerShops: Array.isArray(snap.playerShops) ? clone(snap.playerShops) : [],
           sectRelations: Array.isArray(snap.sectRelations) ? clone(snap.sectRelations) : [],
           occupations: Array.isArray(snap.occupations) ? clone(snap.occupations) : [],
+          lastSectWarDay: Number.isFinite(Number(snap.lastSectWarDay))
+            ? Math.max(0, Math.trunc(Number(snap.lastSectWarDay)))
+            : 0,
           currentTime: normalizeGameTime(snap.currentTime, OPENING_GAME_TIME),
           districtNames: snap.districtNames ? clone(snap.districtNames) : {},
           priceAdjusts: Array.isArray(snap.priceAdjusts) ? clone(snap.priceAdjusts) : [],
@@ -5500,6 +5612,7 @@ EFFECT: [效果描述]`,
         sectSites: s.sectSites,
         sectRelations: s.sectRelations,
         occupations: s.occupations,
+        lastSectWarDay: s.lastSectWarDay,
         adventures: s.adventures,
       }),
       onRehydrateStorage: () => (state) => {

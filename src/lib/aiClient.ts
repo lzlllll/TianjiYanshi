@@ -1,6 +1,7 @@
 import type { AISettings } from "@/data/types";
 import { recordTokenUsage } from "@/store/useTokenStore";
 import { AI_CHAT_PATH, aiReady, backendUrl, hasCustomApi } from "@/data/backend";
+import { notifyAiRateLimit } from "@/lib/aiNotice";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -431,6 +432,9 @@ export async function chatWithModel(
           continue;
         }
 
+        // 内置服务（免费模型）被限流：重试也尽了，弹一扇说明窗，别让玩家以为存档坏了
+        if (resp.status === 429 && !hasCustomApi(settings)) notifyAiRateLimit();
+
         throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
       }
 
@@ -674,6 +678,8 @@ export async function chatWithModelStream(
         const errText = await resp.text().catch(() => "");
         const errorDetail = errText.slice(0, 300) || resp.statusText;
         console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
+        // 内置服务（免费模型）被限流：弹一扇说明窗，别让玩家以为存档坏了
+        if (resp.status === 429 && !hasCustomApi(settings)) notifyAiRateLimit();
         throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
       }
 

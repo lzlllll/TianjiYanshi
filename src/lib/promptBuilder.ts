@@ -14,6 +14,7 @@ import { isRewardHeld } from "@/data/quests";
 import { DC_HINT, SKILL_LEVEL_MAX } from "@/data/skills";
 import { BUFF_TARGET_STATS, buffCatalogBrief } from "@/data/buffs";
 import { sectModifierBrief } from "@/data/sectModifiers";
+import { climateAggression } from "@/data/sects";
 import { PLAYER_SHOP_KINDS } from "@/data/playerShops";
 import {
   OPENING_GAME_TIME,
@@ -362,12 +363,16 @@ export function buildDataSchema(state: GameState): string {
       const roster = scene ? sectBuildingRoster(scene).map((b) => b.name) : [];
       const names = Array.from(new Set([...roster, ...Object.values(x.built ?? {})])).slice(0, 16);
       const buildings = names.length ? `；建筑：${names.join("、")}` : "";
-      return `${x.name}（${x.culture}·${x.seat}·${x.nature?.name ?? "门派"}·${x.level} 级${buildings}）`;
+      const aggression = Math.round(climateAggression(x.climate?.id) * 100);
+      return `${x.name}（${x.culture}·${x.seat}·${x.nature?.name ?? "门派"}·${x.level} 级·侵略倾向${aggression}%${buildings}）`;
     };
     lines.push(
       `江湖上的门派（叙事里凡涉门派先照这些，用它们的名号、驻地与性质；写某座山门的某座建筑时照「建筑」那一列的真名写）＝ ${otherSites
         .map(entryOf)
         .join("；")}`,
+    );
+    lines.push(
+      "各门风气的侵略倾向以百分比计，越高越容易主动兴兵、抢城夺村，低者多取守势；若某处宗门来犯本门，仍照旧在正文后输出 SECTWAR（role=defender）。",
     );
   }
 

@@ -911,6 +911,22 @@ export function WorldMap({
                   ...(faction ? { backgroundColor: faction.color, borderColor: faction.color } : {}),
                 }}
               />
+              {/* 势力图上：拥有者标在城名上方，地名仍旧留在下方 */}
+              {mapMode === "territory" && (
+                <span
+                  className={cn(
+                    "pointer-events-none absolute bottom-full mb-1 whitespace-nowrap rounded-sm px-1 font-brush text-[10px] leading-tight shadow-[0_0_6px_rgba(0,0,0,0.85)]",
+                    faction ? "text-ink-darkest" : "border border-paper-400/30 bg-ink-900/85 text-paper-300/80",
+                  )}
+                  style={{
+                    ...(faction ? { backgroundColor: faction.color } : {}),
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                  }}
+                >
+                  {faction ? faction.label : "无主"}
+                </span>
+              )}
               <span
                 className="pointer-events-none absolute top-full flex flex-col items-center whitespace-nowrap"
                 style={{ left: "50%", transform: "translateX(-50%)" }}
@@ -921,14 +937,6 @@ export function WorldMap({
                 >
                   {marker.name}
                 </span>
-                {faction && (
-                  <span
-                    className="mt-0.5 rounded-sm px-1 font-brush text-[10px] leading-tight text-ink-darkest shadow-[0_0_6px_rgba(0,0,0,0.85)]"
-                    style={{ backgroundColor: faction.color }}
-                  >
-                    {faction.label}
-                  </span>
-                )}
               </span>
             </button>
           );
@@ -981,19 +989,20 @@ export function WorldMap({
                     ★
                   </span>
                 )}
+                {/* 势力图上：拥有者标在村名上方，地名仍旧留在下方 */}
+                {faction && (
+                  <span
+                    className="pointer-events-none absolute bottom-full mb-1 whitespace-nowrap rounded-sm px-1 font-brush text-[10px] leading-tight text-ink-darkest"
+                    style={{ backgroundColor: faction.color, left: "50%", transform: "translateX(-50%)" }}
+                  >
+                    {faction.label}
+                  </span>
+                )}
                 <span
                   className="absolute top-full flex flex-col items-center whitespace-nowrap"
                   style={{ left: "50%", transform: "translateX(-50%)" }}
                 >
                   <span className="font-brush text-[10px] leading-none text-paper-100">{v.name}</span>
-                  {faction && (
-                    <span
-                      className="mt-0.5 rounded-sm px-1 font-brush text-[10px] leading-tight text-ink-darkest"
-                      style={{ backgroundColor: faction.color }}
-                    >
-                      {faction.label}
-                    </span>
-                  )}
                 </span>
               </button>
             );

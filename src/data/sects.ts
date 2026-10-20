@@ -39,6 +39,53 @@ export const SECT_TERM_LABELS: Record<SectTermKind, string> = {
   start: "开局状态",
 };
 
+/**
+ * 宗门风气的侵略倾向：0 到 1，越高越容易主动挑起门派战。
+ * 好勇斗狠、强者为尊、护短这类最易启衅；闭门自守、不问世事最不欲动兵。
+ * 键与通用池、各地风气池的 id 一一对应。
+ */
+export const CLIMATE_AGGRESSION: Record<string, number> = {
+  // 通用
+  strict: 0.55,
+  chat: 0.15,
+  protect: 0.65,
+  profit: 0.5,
+  shut: 0.05,
+  aloof: 0.1,
+  sociable: 0.25,
+  pugnacious: 0.95,
+  // 中原
+  "rite-law": 0.45,
+  faction: 0.6,
+  seniority: 0.35,
+  // 江南
+  elegant: 0.12,
+  lineage: 0.3,
+  letters: 0.08,
+  // 苗疆
+  "mountain-god": 0.5,
+  "elder-rule": 0.3,
+  "gu-rank": 0.72,
+  // 西域
+  free: 0.35,
+  manygods: 0.42,
+  "merchant-first": 0.58,
+  // 漠北
+  valor: 0.85,
+  strongest: 0.92,
+  oath: 0.62,
+  // 日韩
+  ceremony: 0.42,
+  hierarchy: 0.55,
+  clean: 0.28,
+};
+
+/** 某条宗门风气的侵略倾向；认不得的风气按中庸算 */
+export function climateAggression(id: string | undefined): number {
+  const value = CLIMATE_AGGRESSION[String(id ?? "")];
+  return typeof value === "number" ? value : 0.35;
+}
+
 export interface SectTerm {
   id: string;
   /** 词条叫什么，如「剑修」 */
