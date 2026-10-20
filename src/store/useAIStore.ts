@@ -1902,7 +1902,16 @@ export const useAIStore = create<AIStore>()(
       closeNarrativeShop: () => set({ narrativeShop: null }),
 
       updateSettings: (patch) =>
-        set((st) => ({ settings: { ...st.settings, ...patch } })),
+        set((st) => {
+          const next = { ...st.settings, ...patch };
+          // 免费预设只认那一个模型名：没填自定义接口时一律钉死，
+          // 免得旧存档或手改的模型名把请求发到不相干的上游
+          if (!hasCustomApi(next)) {
+            next.flashModel = FREE_MODEL.model;
+            next.proModel = FREE_MODEL.model;
+          }
+          return { settings: next };
+        }),
 
       setStage: (stage, msg = "") =>
         set((st) => ({
@@ -5843,6 +5852,14 @@ MODIFY player.mp - 10
        */
       merge: (persisted, current) => {
         const merged = { ...current, ...((persisted as Partial<AIStore>) || {}) } as AIStore;
+        // 旧档里的模型名可能被手改过（如 gpt-oss-20b）：没填自定义接口时一律收回免费预设
+        if (merged.settings && !hasCustomApi(merged.settings)) {
+          merged.settings = {
+            ...merged.settings,
+            flashModel: FREE_MODEL.model,
+            proModel: FREE_MODEL.model,
+          };
+        }
         // 讲价与铺面都是眼前这一场的事，不随存档醒来：读档时把窗关掉，免得一进来又弹出早先那一扇
         merged.narrativeHaggle = null;
         merged.narrativeShop = null;

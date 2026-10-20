@@ -991,7 +991,7 @@ ${OPENING_BRIEF}`,
       <div className="space-y-4">
         <p className="font-serif text-sm ps-body leading-relaxed">
           本作的推演由大语言模型担纲。默认走游戏后端，接口与密钥都由后端操持，本机不必填写；
-          这里选好额度与模型名即可。若你有自己的接口，也可另开「自定义接口」直接使用。
+          免费预设模型的名目固定，不能另改。若你有自己的接口，可在「自定义接口」里填齐后自行指定模型。
         </p>
 
         <QuotaShopPanel freeActive={freeActive} onSelectFree={applyFreeModel} />
@@ -1001,23 +1001,31 @@ ${OPENING_BRIEF}`,
             <span className="block font-serif text-xs ps-muted mb-1">Flash 模型（判定与压缩）</span>
             <input
               type="text"
-              value={apiDraft.flashModel}
+              value={customActive ? apiDraft.flashModel : FREE_MODEL.model}
               onChange={(e) => setApiDraft((d) => ({ ...d, flashModel: e.target.value }))}
               placeholder="moonshotai/kimi-k3-free"
-              className="input-paper px-3 py-2 text-sm"
+              className="input-paper px-3 py-2 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={!customActive}
             />
           </label>
           <label className="block">
             <span className="block font-serif text-xs ps-muted mb-1">Pro 模型（叙事生成）</span>
             <input
               type="text"
-              value={apiDraft.proModel}
+              value={customActive ? apiDraft.proModel : FREE_MODEL.model}
               onChange={(e) => setApiDraft((d) => ({ ...d, proModel: e.target.value }))}
               placeholder="moonshotai/kimi-k3-free"
-              className="input-paper px-3 py-2 text-sm"
+              className="input-paper px-3 py-2 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={!customActive}
             />
           </label>
         </div>
+
+        {!customActive && (
+          <p className="font-serif text-xs ps-faint leading-relaxed">
+            免费预设模型不可改名；要指定自己的模型，请先在「自定义接口」里填齐 Base URL 与 API Key。
+          </p>
+        )}
 
         {/* 推演去向：默认走后端，也可自备接口 */}
         <div className="flex flex-wrap items-center gap-3 rounded border border-[rgba(36,31,26,0.16)] px-3 py-2.5">

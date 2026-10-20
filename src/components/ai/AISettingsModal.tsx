@@ -55,7 +55,12 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
   // 每次打开时同步最新设置
   useEffect(() => {
     if (open) {
-      setDraft(settings);
+      // 免费预设的模型名不可改：打开时先照它对齐，旧设置里若有别的名字也不带上界面
+      setDraft(
+        hasCustomApi(settings)
+          ? settings
+          : { ...settings, flashModel: FREE_MODEL.model, proModel: FREE_MODEL.model },
+      );
       setTest({ status: "idle" });
       setSaved(false);
     }
@@ -129,7 +134,11 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
   const runTest = async (which: "flash" | "pro") => {
     setTest({ status: "testing" });
     try {
-      const model = which === "flash" ? draft.flashModel : draft.proModel;
+      const model = !customActive
+        ? FREE_MODEL.model
+        : which === "flash"
+          ? draft.flashModel
+          : draft.proModel;
       const start = Date.now();
       await chatWithModel(
         draft,
@@ -251,11 +260,12 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
               </SectionLabel>
               <input
                 type="text"
-                value={draft.flashModel}
+                value={customActive ? draft.flashModel : FREE_MODEL.model}
                 onChange={(e) => patch({ flashModel: e.target.value })}
                 placeholder="deepseek-chat"
-                className="input-ink mt-2"
+                className="input-ink mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 spellCheck={false}
+                disabled={!customActive}
               />
               <label className="mt-2 flex items-center gap-2 font-serif text-xs text-paper-400/60">
                 <span className="shrink-0">思维链</span>
@@ -288,11 +298,12 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
               </SectionLabel>
               <input
                 type="text"
-                value={draft.proModel}
+                value={customActive ? draft.proModel : FREE_MODEL.model}
                 onChange={(e) => patch({ proModel: e.target.value })}
                 placeholder="deepseek-reasoner"
-                className="input-ink mt-2"
+                className="input-ink mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 spellCheck={false}
+                disabled={!customActive}
               />
               <label className="mt-2 flex items-center gap-2 font-serif text-xs text-paper-400/60">
                 <span className="shrink-0">思维链</span>
@@ -318,6 +329,12 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
               </button>
             </section>
           </div>
+
+          {!customActive && (
+            <p className="font-serif text-xs text-paper-400/50 leading-relaxed">
+              免费预设模型不可改名；要指定自己的模型，请先在「自定义接口」里填齐 Base URL 与 API Key。
+            </p>
+          )}
 
           {/* 测试结果 */}
           {test.status !== "idle" && test.status !== "testing" && (
@@ -583,7 +600,16 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
       </div>
 
       {/* 自定义接口：另开一扇窗，压在本窗之上 */}
-      <CustomApiModal open={customApiOpen} onClose={() => setCustomApiOpen(false)} />
+      <CustomApiModal
+        open={customApiOpen}
+        onClose={() => {
+          setCustomApiOpen(false);
+          // 那扇窗保存后设置已变，这里把草稿重新对齐，
+          // 免得本窗再点「保存」时把刚填的自定义接口与模型名覆盖掉
+          setDraft(useAIStore.getState().settings);
+          setTest({ status: "idle" });
+        }}
+      />
     </div>
   );
 }
