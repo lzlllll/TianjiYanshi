@@ -140,7 +140,7 @@ import {
 } from "@/lib/contextCompressor";
 import { recordNarrative } from "@/lib/narrativeLog";
 import { DEFAULT_BGM_VOLUME } from "@/lib/bgm";
-import { aiReady } from "@/data/backend";
+import { aiReady, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 
 const DEFAULT_SETTINGS: AISettings = {
@@ -186,6 +186,7 @@ const INITIAL_CONVERSATION: ConversationState = {
   streamingReasoning: "",
   openingFiled: [],
   openingFeed: [],
+  openingWarning: "",
 };
 
 const INITIAL_NPC_CHAT: NPCChatState = {
@@ -930,6 +931,8 @@ interface AIStore {
   resetLedger: () => void;
   cancel: () => void;
   setStage: (stage: GenStage, msg?: string) => void;
+  /** 关掉开局那句「部分数据未生成」的提示 */
+  dismissOpeningWarning: () => void;
 
   setDeveloperMode: (enabled: boolean) => void;
   /** 开关随机事件；只在开发者模式下给用，退出开发者模式便自动恢复 */
@@ -1423,8 +1426,10 @@ async function runOpeningExtraction(
   onFiled?: (domainId: string, ok: boolean) => void,
   /** 每门开始返回来报一声，等待页不必等一门跑完便能报出正在办的那一门 */
   onDomainStart?: (domainId: string) => void,
-): Promise<{ ops: DataOp[]; opsRaw: string; quickDecisions: string[] }> {
-  if (!narrative.trim()) return emptyExtraction();
+): Promise<{ ops: DataOp[]; opsRaw: string; quickDecisions: string[]; missing: string[] }> {
+  if (!narrative.trim()) {
+    return { ...emptyExtraction(), missing: OPENING_DOMAINS.map((d) => d.label) };
+  }
 
   const ask = async (
     domain: (typeof OPENING_DOMAINS)[number],
@@ -1448,6 +1453,8 @@ async function runOpeningExtraction(
         retries: 1,
         // 建档要的是合法 JSON，不是文采，温度压低些，少出岔子
         temperature: 0.25,
+        // 八门建档在后台跑，429 不必弹窗惊动玩家；哪一门没写全由开局的提示统一说明
+        muteRateLimitNotice: true,
       },
     );
     const parsed = parseJsonOps(raw);
@@ -1618,6 +1625,7 @@ async function runOpeningExtraction(
         jsonMode: true,
         retries: 1,
         temperature: 0.1,
+        muteRateLimitNotice: true,
       });
       const parsed = (parseJsonPayload(raw) ?? {}) as { place?: unknown; location?: unknown };
       modelPlace = String(parsed.place ?? "").trim();
@@ -1682,7 +1690,7 @@ async function runOpeningExtraction(
   // 开局的修为照所选境界压一道，免得推演把数值抬到与本境界不相称的地步
   const finalOps = clampOpeningCultivation(ops, state.player.realmIndex ?? 0, Number(state.player.cultivation) || 0);
 
-  return { ops: finalOps, opsRaw, quickDecisions };
+  return { ops: finalOps, opsRaw, quickDecisions, missing: stillEmpty };
 }
 
 /**
@@ -1899,6 +1907,11 @@ export const useAIStore = create<AIStore>()(
       setStage: (stage, msg = "") =>
         set((st) => ({
           conversation: { ...st.conversation, stage, errorMsg: msg },
+        })),
+
+      dismissOpeningWarning: () =>
+        set((st) => ({
+          conversation: { ...st.conversation, openingWarning: "" },
         })),
 
       cancel: () => {
@@ -2470,7 +2483,7 @@ export const useAIStore = create<AIStore>()(
 
         // ===== Stage 2: pro 生成叙事正文 =====
         set((st) => ({
-          conversation: { ...st.conversation, stage: "pro", openingFiled: [], openingFeed: [] },
+          conversation: { ...st.conversation, stage: "pro", openingFiled: [], openingFeed: [], openingWarning: "" },
         }));
 
         let narrative = "";
@@ -2596,6 +2609,22 @@ export const useAIStore = create<AIStore>()(
               )
             : await runOpsExtraction(settings, gameState, narrative, signal);
         if (signal.aborted) return;
+
+        // 开局八门若有没写全的，记一句，进主界面时提示；
+        // 自带接口的玩家不套用这句「免费模型」的话
+        if (
+          conv.turns.length === 0 &&
+          "missing" in extraction &&
+          extraction.missing.length > 0 &&
+          !hasCustomApi(settings)
+        ) {
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              openingWarning: "免费ai模型出现错误，部分数据未生成，不保证游玩可靠性。",
+            },
+          }));
+        }
 
         set((st) => ({
           conversation: { ...st.conversation, quickDecisions: extraction.quickDecisions },
@@ -2766,6 +2795,7 @@ export const useAIStore = create<AIStore>()(
               streamingReasoning: "",
               openingFiled: [],
               openingFeed: [],
+              openingWarning: "",
             },
           }));
           proRaw = await chatWithModelStream(
@@ -2841,6 +2871,21 @@ export const useAIStore = create<AIStore>()(
               )
             : await runOpsExtraction(settings, retryState, narrative, signal);
         if (signal.aborted) return;
+
+        // 重演开篇也照同一把尺：哪一门没写全，进主界面时提示
+        if (
+          conversation.turns.length === 1 &&
+          "missing" in extraction &&
+          extraction.missing.length > 0 &&
+          !hasCustomApi(settings)
+        ) {
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              openingWarning: "免费ai模型出现错误，部分数据未生成，不保证游玩可靠性。",
+            },
+          }));
+        }
 
         useGameStore.getState().applyOps(extraction.ops);
 

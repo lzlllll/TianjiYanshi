@@ -2334,6 +2334,11 @@ export interface ConversationState {
    * phase 为 doing 表示这一门此刻在途，done 表示已落定，ok 为假即没写全。
    */
   openingFeed: { id: string; phase: "doing" | "done"; ok: boolean }[];
+  /**
+   * 开局建档有哪一门没写全时留下的一句提示；
+   * 进了主界面再由提示窗报给玩家，说过便清空。
+   */
+  openingWarning?: string;
 }
 
 export type NPCChatRole = "player" | "npc";

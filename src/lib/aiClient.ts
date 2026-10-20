@@ -379,6 +379,11 @@ export async function chatWithModel(
      * 不必跟着设置里那个随叙事起伏的温度走。
      */
     temperature?: number;
+    /**
+     * 这一趟不必弹「内置服务繁忙」的提示窗。
+     * 开局八门建档在后台并发跑，429 由开局的「部分数据未生成」统一交代。
+     */
+    muteRateLimitNotice?: boolean;
   } = {},
 ): Promise<string> {
   assertAiReady(settings);
@@ -433,7 +438,9 @@ export async function chatWithModel(
         }
 
         // 内置服务（免费模型）被限流：重试也尽了，弹一扇说明窗，别让玩家以为存档坏了
-        if (resp.status === 429 && !hasCustomApi(settings)) notifyAiRateLimit();
+        if (resp.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) {
+          notifyAiRateLimit();
+        }
 
         throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
       }

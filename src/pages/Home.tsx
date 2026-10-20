@@ -31,6 +31,7 @@ import { CraftOrderModal } from "@/components/ai/CraftOrderModal";
 import { CraftingModal } from "@/components/crafting/CraftingModal";
 import { EndingScreen } from "@/components/ending/EndingScreen";
 import { GameIntroModal } from "@/components/start/GameIntroModal";
+import { OpeningWarningModal } from "@/components/start/OpeningWarningModal";
 import { GuidedTutorial } from "@/components/tutorial/GuidedTutorial";
 import { useTutorialStore } from "@/store/useTutorialStore";
 
@@ -155,6 +156,9 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
       {forest && <ForestExploreModal {...forest} onClose={() => setForest(null)} />}
       {/* 终局：气血耗尽或寿元用尽时压在最上层 */}
       <EndingScreen />
+
+      {/* 开局建档有缺项时的提示：压在最上层，看过便不再提 */}
+      <OpeningWarningModal />
 
       {/* 开篇那一段落定之后，摊一次玩法说明 */}
       {introVisible && (
