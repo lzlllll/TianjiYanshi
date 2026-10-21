@@ -1,4 +1,4 @@
-import type { AISettings } from "@/data/types";
+import type { AISettings, ThinkingParamStyle } from "@/data/types";
 import { recordTokenUsage } from "@/store/useTokenStore";
 import { AI_CHAT_PATH, aiReady, backendUrl, hasCustomApi } from "@/data/backend";
 import { notifyAiRateLimit } from "@/lib/aiNotice";
@@ -33,9 +33,8 @@ const MAX_OUTPUT_TOKENS = 8192;
 const MAX_OUTPUT_TOKENS_REASONING = 32768;
 
 /**
- * 带思维链的模型，一律按这一档收思考量：开局之后的每一次调用——叙事、交谈、讲价、
- * 建档与结算，凡是走推理档的，口径都统一到这里，免得各条各写一种参数、迟早走岔。
- * 压到最低是为了省时间，行文仍留一分斟酌。
+ * 思考量压到最低时用的档位；OpenAI 一系与多数网关都认 reasoning_effort。
+ * 其余各家的叫法不同，见下面那几张表。
  *
  * 实测（七牛云 · moonshotai/kimi-k3-free，同一句请求走游戏后端）：
  *   不加参数                53.9s，512 token 全花在思维链上，正文一个字没有
@@ -43,6 +42,135 @@ const MAX_OUTPUT_TOKENS_REASONING = 32768;
  *   另试过 "minimal" 与 "medium"，上游直接 502——只有 low 与 none 可用。
  */
 const REASONING_EFFORT = "low";
+
+/** 认得出写法的几家；auto 已在前面归到具体一家 */
+type ResolvedThinkingStyle = Exclude<ThinkingParamStyle, "auto">;
+
+/** 从接口地址里取主机名；走后端时是相对路径，取不到便交空串 */
+function hostOf(url: string | undefined): string {
+  try {
+    return new URL(String(url ?? "")).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 这一档该照哪一家的写法发思考参数。
+ * 玩家手动指定的优先；auto 先看自定义接口的主机，再看模型名的家族。
+ */
+function resolveThinkingStyle(
+  settings: AISettings,
+  model: string,
+  endpoint: string,
+): ResolvedThinkingStyle {
+  const picked = settings.thinkingStyle ?? "auto";
+  if (picked !== "auto") return picked;
+
+  const host = hostOf(settings.baseUrl?.trim() || endpoint);
+  if (/openrouter\.ai/.test(host)) return "openrouter";
+  if (/dashscope|aliyuncs/.test(host)) return "qwen";
+  if (/bigmodel\.cn|zhipu/.test(host)) return "glm";
+  if (/deepseek\.com/.test(host)) return "deepseek";
+  if (/moonshot\.(cn|ai)|kimi/.test(host)) return "moonshot";
+  if (/siliconflow\.(cn|com)/.test(host)) return "vllm";
+  if (/openai\.com|azure\.com/.test(host)) return "openai";
+
+  const name = String(model ?? "").toLowerCase();
+  if (/qwen|qwq|tongyi/.test(name)) return "qwen";
+  if (/glm|chatglm/.test(name)) return "glm";
+  if (/deepseek/.test(name)) return "deepseek";
+  if (/kimi|moonshot/.test(name)) return "moonshot";
+  // 豆包、混元、文心一类的写法与智谱同形：thinking.type
+  if (/doubao|seed-oss|hunyuan|ernie/.test(name)) return "glm";
+  if (/openrouter/.test(name)) return "openrouter";
+  return "openai";
+}
+
+/**
+ * 关掉思考：各家写法不同。
+ * 宁可先按这一家的写法发一次——有的混合模型不点明便自顾自想下去；
+ * 老模型不认这个参数会报 400，postChat 自会退到不带参数的那一种。
+ */
+function thinkingOffParams(style: ResolvedThinkingStyle): Record<string, unknown> {
+  switch (style) {
+    case "qwen":
+      return { enable_thinking: false };
+    case "glm":
+    case "deepseek":
+    case "moonshot":
+      return { thinking: { type: "disabled" } };
+    case "openrouter":
+      return { reasoning: { enabled: false } };
+    case "vllm":
+      return { chat_template_kwargs: { enable_thinking: false } };
+    case "openai":
+      return { reasoning_effort: "none" };
+    default:
+      return {};
+  }
+}
+
+/** 留着思考，但压到最低 */
+function thinkingBriefParams(style: ResolvedThinkingStyle): Record<string, unknown> {
+  switch (style) {
+    case "qwen":
+      // 通义这一档的最小预算是一千零二十四
+      return { enable_thinking: true, thinking_budget: 1024 };
+    case "glm":
+    case "deepseek":
+      return { thinking: { type: "enabled" } };
+    case "moonshot":
+      return { reasoning_effort: REASONING_EFFORT };
+    case "openrouter":
+      return { reasoning: { effort: "low" } };
+    case "vllm":
+      return { chat_template_kwargs: { enable_thinking: true }, thinking_budget: 1024 };
+    case "openai":
+      return { reasoning_effort: REASONING_EFFORT };
+    default:
+      return {};
+  }
+}
+
+interface ThinkingVariant {
+  /** 日志里怎么说这一种写法 */
+  label: string;
+  /** 叠进请求体的那几个字段 */
+  extra: Record<string, unknown>;
+}
+
+/**
+ * 一种写法不行便退到更通用的：先照认出来的那一家发，再退到 reasoning_effort，
+ * 最后干脆不带任何思考参数。有些服务商见到不认识的字段便整笔拒掉，
+ * 留着这条退路，换模型时便不至于一上来就报错。
+ */
+function thinkingVariants(style: ResolvedThinkingStyle, reasoning: boolean): ThinkingVariant[] {
+  const list: ThinkingVariant[] = [];
+  const add = (label: string, extra: Record<string, unknown>) => {
+    const key = JSON.stringify(extra);
+    if (!list.some((v) => JSON.stringify(v.extra) === key)) list.push({ label, extra });
+  };
+  add(
+    reasoning ? "思考·最低" : "思考·关闭",
+    reasoning ? thinkingBriefParams(style) : thinkingOffParams(style),
+  );
+  add("思考·通用", reasoning ? { reasoning_effort: REASONING_EFFORT } : { reasoning_effort: "none" });
+  add("不带思考参数", {});
+  return list;
+}
+
+/** 哪一种写法试过能用便记下：同一家、同一档往后直接用它，少走冤枉路 */
+const workingVariant = new Map<string, number>();
+
+/**
+ * 这一笔报错要不要换个思考参数写法再试。
+ * 只认 400/422——这两档多半是参数不合；鉴权、限流、服务端故障照旧原样报出去。
+ * 不细抠报错里的字眼：各家措辞不一，认漏了反倒让玩家白白碰上一次失败。
+ */
+function warrantsThinkingFallback(status: number): boolean {
+  return status === 400 || status === 422;
+}
 
 /**
  * 认得出是推理模型的字样。认不出也无妨——哪一档真吐过思维链，
@@ -118,6 +246,8 @@ function buildRequestBody(params: {
   /** 这一档是不是推理模型 */
   reasoning: boolean;
   jsonMode?: boolean;
+  /** 思考参数；各家写法不同，由 postChat 按家挑好再叠进来 */
+  thinking?: Record<string, unknown>;
 }): Record<string, unknown> {
   const { model, messages, stream, temperature, reasoning, jsonMode } = params;
   const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
@@ -140,11 +270,13 @@ function buildRequestBody(params: {
     body.response_format = { type: "json_object" };
   }
   /*
-   * 推理档一律交上最低档的思考量：叙事、交谈、讲价、建档与结算，口径统一到这一处。
-   * 非推理档一概不交——有些服务商对不认识的参数会直接报错。
+   * 思考参数由调用方按各家的写法叠进来：开了思考的压到最低，关了的明说要关，
+   * 免得带思考的模型把额度全耗在思维链上、正文一个字没有。
+   * 只挡回必备字段，别让它把 model / messages / stream 盖掉。
    */
-  if (reasoning) {
-    body.reasoning_effort = REASONING_EFFORT;
+  for (const [key, value] of Object.entries(params.thinking ?? {})) {
+    if (key === "model" || key === "messages" || key === "stream") continue;
+    body[key] = value;
   }
   if (stream) {
     // 流式响应默认不带用量，显式要一份，好在末尾那一片里读到 token 数
@@ -152,6 +284,91 @@ function buildRequestBody(params: {
   }
   return body;
 }
+
+/** 上游拒了这一笔：状态与原文一并带出来，调用方好照状态重试或提示 */
+class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string) {
+    super(`接口返回 ${status}：${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/**
+ * 发一笔 chat/completions；思考参数照各家的写法依次试。
+ * 只有「不认思考参数」这一类才换写法重发——限流、鉴权、超时照旧原样抛给调用方，
+ * 免得把别的毛病也当成参数问题一遍遍重试。
+ */
+async function postChat(args: {
+  settings: AISettings;
+  model: string;
+  messages: ChatMessage[];
+  stream: boolean;
+  temperature: number;
+  reasoning: boolean;
+  jsonMode?: boolean;
+  signal: AbortSignal;
+  /** 流式时写明 text/event-stream */
+  accept?: string;
+}): Promise<{ resp: Response; endpoint: string }> {
+  const endpoint = buildEndpoint(args.settings);
+  const style = resolveThinkingStyle(args.settings, args.model, endpoint);
+  const variants = thinkingVariants(style, args.reasoning);
+  const memoKey = `${style}:${args.reasoning}:${args.model}`;
+  // 先前试出过能用的那一种，直接从那一种起手
+  const start = Math.min(workingVariant.get(memoKey) ?? 0, variants.length - 1);
+
+  let last: ApiError | null = null;
+  for (let vi = start; vi < variants.length; vi++) {
+    const requestBody = buildRequestBody({
+      model: args.model,
+      messages: args.messages,
+      stream: args.stream,
+      temperature: args.temperature,
+      reasoning: args.reasoning,
+      jsonMode: args.jsonMode,
+      thinking: variants[vi].extra,
+    });
+    const bodyStr = JSON.stringify(requestBody);
+    const bodySize = new Blob([bodyStr]).size;
+    logRequestInfo(args.model, args.messages, bodySize, endpoint);
+    checkRequestSize(bodySize);
+
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(args.accept ? { Accept: args.accept } : {}),
+        ...authHeaders(args.settings),
+      },
+      body: bodyStr,
+      signal: args.signal,
+    });
+
+    if (resp.ok) {
+      if (vi !== start) {
+        console.info(`[aiClient] 思考参数改用「${variants[vi].label}」；往后这一家照此发。`);
+      }
+      workingVariant.set(memoKey, vi);
+      return { resp, endpoint };
+    }
+
+    const errText = (await resp.text().catch(() => "")) || resp.statusText;
+    last = new ApiError(resp.status, errText.slice(0, 300));
+    if (vi + 1 < variants.length && warrantsThinkingFallback(resp.status)) {
+      console.warn(
+        `[aiClient] 思考参数「${variants[vi].label}」不被认（${resp.status}：${errText.slice(0, 120)}），换一种写法再试。`,
+      );
+      continue;
+    }
+    throw last;
+  }
+  throw last ?? new ApiError(0, "请求未能发出");
+}
+
 
 /**
  * 本地服务窗口被关掉时，浏览器只会抛出 ERR_CONNECTION_REFUSED。
@@ -247,11 +464,34 @@ function noteFinish(model: string, data: any, content: string): void {
   }
 }
 
+/** 各家把思维链放在不同字段上：reasoning_content、reasoning、thinking、analysis，或分成几条的 reasoning_details */
+function reasoningTextOf(message: any): string {
+  const raw = message?.reasoning_content ?? message?.reasoning ?? message?.thinking ?? message?.analysis;
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(message?.reasoning_details)) {
+    return message.reasoning_details
+      .map((d: any) => (typeof d === "string" ? d : d?.text ?? d?.summary ?? ""))
+      .join("");
+  }
+  return "";
+}
+
 /** 非流式回包里的思维链；没有便是空串 */
 function reasoningOf(data: any): string {
-  const message = data?.choices?.[0]?.message ?? {};
-  const raw = message?.reasoning_content ?? message?.reasoning;
-  return typeof raw === "string" ? raw : "";
+  return reasoningTextOf(data?.choices?.[0]?.message ?? {});
+}
+
+/** 正文可能是一段字，也可能是若干块（[{type:"text",text:"..."}]）；一并接起来 */
+function contentOf(data: any): string {
+  const message = data?.choices?.[0]?.message;
+  const raw = message?.content ?? data?.choices?.[0]?.text ?? "";
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((block: any) => (typeof block === "string" ? block : block?.text ?? ""))
+      .join("");
+  }
+  return "";
 }
 
 /**
@@ -264,7 +504,7 @@ function emptyContentError(model: string, data: any): Error {
     const finish = data?.choices?.[0]?.finish_reason;
     return new Error(
       `接口只吐了思维链、没写正文${finish ? `（finish_reason=${finish}）` : ""}。模型「${model}」多半是带思维链的推理模型，` +
-        `思考过程把输出额度占满，正文便没写出来——请在设置里换一档不带思维链的模型。`,
+        `思考过程把输出额度占满，正文便没写出来——请在设置里把这一档的「思维链」设为无，或换一档不带思维链的模型。`,
     );
   }
   return new Error("接口返回空内容，请检查后端的上游配置与模型名称。");
@@ -277,7 +517,7 @@ function emptyContentError(model: string, data: any): Error {
 function reasoningOnlyError(model: string, why: string): Error {
   return new Error(
     `接口只吐了思维链、没写正文（${why}）。模型「${model}」多半是带思维链的推理模型，` +
-      `思考过程把输出额度占满，正文便没写出来——请在设置里换一档不带思维链的模型来生成叙事。`,
+      `思考过程把输出额度占满，正文便没写出来——请在设置里把这一档的「思维链」设为无，或调整「思考参数」那一项。`,
   );
 }
 
@@ -298,23 +538,13 @@ export async function chatComplete(
 
   try {
     const model = messages[0]?.role === "system" ? inferModel(messages, settings) : settings.proModel;
-    const requestBody = buildRequestBody({
+    const { resp } = await postChat({
+      settings,
       model,
       messages,
       stream: false,
       temperature: settings.temperature,
       reasoning: isReasoningSlot(settings, slotOf(settings, model)),
-    });
-    const bodyStr = JSON.stringify(requestBody);
-    const bodySize = new Blob([bodyStr]).size;
-
-    logRequestInfo(model, messages, bodySize, endpoint);
-    checkRequestSize(bodySize);
-
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders(settings) },
-      body: bodyStr,
       signal: controller.signal,
     });
 
@@ -322,13 +552,6 @@ export async function chatComplete(
 
     // 连接已建立，清除超时计时器，让响应读取不受限
     clearTimeout(timer);
-
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
-      const errorDetail = errText.slice(0, 300) || resp.statusText;
-      console.error(`[aiClient] API Error ${resp.status}: ${errorDetail}`);
-      throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
-    }
 
     let data: any;
     try {
@@ -345,10 +568,7 @@ export async function chatComplete(
       throw new Error(`JSON 解析失败：${(jsonErr as Error).message}\n\n响应内容：${text.slice(0, 300)}`);
     }
 
-    const content: string =
-      data?.choices?.[0]?.message?.content ??
-      data?.choices?.[0]?.text ??
-      "";
+    const content = contentOf(data);
     // 吐过思维链便记下这一档，往后自动按推理档办
     if (reasoningOf(data)) noteReasoningModel(model);
     if (!content) {
@@ -362,6 +582,10 @@ export async function chatComplete(
     }
     return content;
   } catch (e: unknown) {
+    if (e instanceof ApiError) {
+      if (e.status === 429 && !hasCustomApi(settings)) notifyAiRateLimit();
+      throw e;
+    }
     if (e instanceof DOMException && e.name === "AbortError") {
       console.warn("[aiClient] Request timed out or aborted");
       throw new Error("请求超时或已取消。");
@@ -422,24 +646,14 @@ export async function chatWithModel(
     }
 
     try {
-      const requestBody = buildRequestBody({
+      const { resp } = await postChat({
+        settings,
         model,
         messages,
         stream: false,
         temperature: opts.temperature ?? settings.temperature,
         reasoning: isReasoningSlot(settings, slotOf(settings, model)),
         jsonMode: opts.jsonMode,
-      });
-      const bodyStr = JSON.stringify(requestBody);
-      const bodySize = new Blob([bodyStr]).size;
-
-      logRequestInfo(model, messages, bodySize, endpoint);
-      checkRequestSize(bodySize);
-
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders(settings) },
-        body: bodyStr,
         signal: controller.signal,
       });
 
@@ -447,26 +661,6 @@ export async function chatWithModel(
 
       // 连接已建立，清除超时计时器，让响应读取不受限
       clearTimeout(timer);
-
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => "");
-        const errorDetail = errText.slice(0, 300) || resp.statusText;
-        console.error(`[aiClient] API Error ${resp.status} (attempt ${attempt}): ${errorDetail}`);
-
-        if (attempt <= maxRetries && (resp.status >= 500 || resp.status === 429)) {
-          console.warn(`[aiClient] Retrying (attempt ${attempt}/${maxRetries}) after error: ${resp.status}`);
-          clearTimeout(timer);
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
-          continue;
-        }
-
-        // 内置服务（免费模型）被限流：重试也尽了，弹一扇说明窗，别让玩家以为存档坏了
-        if (resp.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) {
-          notifyAiRateLimit();
-        }
-
-        throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
-      }
 
       let data: any;
       try {
@@ -487,10 +681,7 @@ export async function chatWithModel(
         throw new Error(`JSON 解析失败：${(jsonErr as Error).message}\n\n响应内容：${text.slice(0, 300)}`);
       }
 
-      const content: string =
-        data?.choices?.[0]?.message?.content ??
-        data?.choices?.[0]?.text ??
-        "";
+      const content = contentOf(data);
       // 吐过思维链便记下这一档，往后自动按推理档办
       if (reasoningOf(data)) noteReasoningModel(model);
       if (!content) {
@@ -505,6 +696,20 @@ export async function chatWithModel(
       return content;
     } catch (e: unknown) {
       clearTimeout(timer);
+
+      if (e instanceof ApiError) {
+        // 5xx 与限流照旧整笔重试；重试尽了再照原样报出去
+        if (attempt <= maxRetries && (e.status >= 500 || e.status === 429)) {
+          console.warn(`[aiClient] Retrying (attempt ${attempt}/${maxRetries}) after error: ${e.status}`);
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+          continue;
+        }
+        // 内置服务（免费模型）被限流：重试也尽了，弹一扇说明窗，别让玩家以为存档坏了
+        if (e.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) {
+          notifyAiRateLimit();
+        }
+        throw e;
+      }
 
       if (e instanceof DOMException && e.name === "AbortError") {
         console.warn(`[aiClient] Request timed out (attempt ${attempt})`);
@@ -608,12 +813,21 @@ async function parseSSEStream(
           const piece = choice?.delta ?? {};
           for (const k of Object.keys(piece)) deltaKeys.add(k);
           if (!firstChunk && choice) firstChunk = data;
-          const reasoning = piece.reasoning_content ?? piece.reasoning;
-          if (typeof reasoning === "string" && reasoning) {
+          // 各家把思维链放在不同字段上，逐一种都认
+          const reasoning = reasoningTextOf(piece);
+          if (reasoning) {
             sawReasoning = true;
             onReasoning?.(reasoning);
           }
-          const delta: string = piece.content ?? choice?.text ?? "";
+          const rawDelta = piece.content ?? choice?.text ?? "";
+          const delta: string =
+            typeof rawDelta === "string"
+              ? rawDelta
+              : Array.isArray(rawDelta)
+                ? rawDelta
+                    .map((block: any) => (typeof block === "string" ? block : block?.text ?? ""))
+                    .join("")
+                : "";
           if (delta) {
             sawContent = true;
             onDelta(delta);
@@ -679,43 +893,21 @@ export async function chatWithModelStream(
     const convo: ChatMessage[] = [...messages];
     for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
       const beforeLen = full.length;
-      const requestBody = buildRequestBody({
+      const { resp } = await postChat({
+        settings,
         model,
         messages: convo,
         stream: true,
         temperature: opts.temperature ?? settings.temperature,
         reasoning: isReasoningSlot(settings, slotOf(settings, model)),
-      });
-      const bodyStr = JSON.stringify(requestBody);
-      const bodySize = new Blob([bodyStr]).size;
-
-      logRequestInfo(model, messages, bodySize, endpoint);
-      checkRequestSize(bodySize);
-
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-          ...authHeaders(settings),
-        },
-        body: bodyStr,
         signal: controller.signal,
+        accept: "text/event-stream",
       });
 
       console.debug(`[aiClient][stream] Response status: ${resp.status}（第 ${seg + 1} 段）`);
 
       // 这里不撤那个钟：撤了便只剩「建连」这一段受约束，正文能无限拖下去——
       // 慢的推理模型一口气吐十几分钟思维链也不会有个头。让它架到整段读完为止。
-
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => "");
-        const errorDetail = errText.slice(0, 300) || resp.statusText;
-        console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
-        // 内置服务（免费模型）被限流：弹一扇说明窗，别让玩家以为存档坏了
-        if (resp.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) notifyAiRateLimit();
-        throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
-      }
 
       if (!resp.body) {
         throw new Error("接口未返回流式响应体，可能上游或后端不支持 stream 模式。");
@@ -792,6 +984,12 @@ export async function chatWithModelStream(
     }
     return full;
   } catch (e: unknown) {
+    if (e instanceof ApiError) {
+      // 内置服务（免费模型）被限流：弹一扇说明窗，别让玩家以为存档坏了
+      if (e.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) notifyAiRateLimit();
+      console.error(`[aiClient][stream] API Error ${e.status}: ${e.detail}`);
+      throw e;
+    }
     if (e instanceof DOMException && e.name === "AbortError") {
       // 到点自动断的：与「用户主动取消」分开说，别让人以为是自己的操作
       if (timedOut) {

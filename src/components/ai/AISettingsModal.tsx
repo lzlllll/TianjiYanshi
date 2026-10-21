@@ -3,7 +3,7 @@ import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { useTutorialStore } from "@/store/useTutorialStore";
 import { chatWithModel } from "@/lib/aiClient";
-import type { AISettings, ModelReasoningMode } from "@/data/types";
+import type { AISettings, ModelReasoningMode, ThinkingParamStyle } from "@/data/types";
 import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
@@ -130,6 +130,7 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
       // 免费模型不带思维链，先前那档的手动设定别跟着留下
       flashReasoning: "auto",
       proReasoning: "auto",
+      thinkingStyle: "auto",
     }));
     setTest({ status: "idle" });
   };
@@ -338,6 +339,32 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
               免费预设模型不可改名；要指定自己的模型，请先在「自定义接口」里填齐 Base URL 与 API Key。
             </p>
           )}
+
+          {/* 思考参数：各家对「开思考／关思考」的叫法不同，换模型后思考停不下来时可在此指定 */}
+          <section>
+            <SectionLabel>
+              思考参数
+              <span className="font-serif text-xs text-paper-400/50 ml-2">换模型后思考过长时调整</span>
+            </SectionLabel>
+            <select
+              value={draft.thinkingStyle ?? "auto"}
+              onChange={(e) => patch({ thinkingStyle: e.target.value as ThinkingParamStyle })}
+              className="input-ink mt-2"
+            >
+              <option value="auto">自动识别（按接口地址与模型名）</option>
+              <option value="openai">OpenAI 系 · reasoning_effort</option>
+              <option value="qwen">通义千问 · enable_thinking</option>
+              <option value="glm">智谱 / 豆包 / 文心 · thinking.type</option>
+              <option value="deepseek">DeepSeek · thinking.type</option>
+              <option value="moonshot">Kimi · reasoning_effort</option>
+              <option value="openrouter">OpenRouter · reasoning</option>
+              <option value="vllm">vLLM / SiliconFlow · chat_template_kwargs</option>
+              <option value="none">不发思考参数</option>
+            </select>
+            <p className="mt-1.5 font-serif text-[11px] leading-relaxed text-paper-400/55">
+              自动识别先看自定义接口的地址，再看模型名；认不出时先照 OpenAI 的写法发，不被认便自动退回通用写法，仍不行就不带思考参数。关掉思考的一档会明确发送关闭参数，免得带思考的模型把额度耗在思维链上。
+            </p>
+          </section>
 
           {/* 测试结果 */}
           {test.status !== "idle" && test.status !== "testing" && (

@@ -2014,6 +2014,25 @@ export type DataOp =
  */
 export type ModelReasoningMode = "auto" | "on" | "off";
 
+/**
+ * 思考参数按哪一家的写法发。
+ *
+ * 各家对「开思考／关思考」的叫法并不一样：
+ * OpenAI 认 reasoning_effort，通义认 enable_thinking，智谱与豆包认 thinking.type，
+ * OpenRouter 认 reasoning，vLLM 一类要经 chat_template_kwargs 转进去。
+ * auto 由接口地址与模型名自认；认不出便照 OpenAI 那一套发，仍不被认再退回不带参数。
+ */
+export type ThinkingParamStyle =
+  | "auto"
+  | "openai"
+  | "qwen"
+  | "glm"
+  | "deepseek"
+  | "moonshot"
+  | "openrouter"
+  | "vllm"
+  | "none";
+
 export interface AISettings {
   /**
    * 自定义接口。两项都填齐时，推演直接走玩家自己的接口；
@@ -2030,6 +2049,12 @@ export interface AISettings {
    */
   flashReasoning?: ModelReasoningMode;
   proReasoning?: ModelReasoningMode;
+  /**
+   * 思考参数按哪一家的写法发；缺省 auto。
+   * 换到别家的模型后思考停不下来（一口气想上万字），多半是这一项没对上，
+   * 可在此手动指一家，或干脆选「不发」。
+   */
+  thinkingStyle?: ThinkingParamStyle;
   temperature: number;
   /** 玩家自定义提示词，追加到系统提示词末尾 */
   customPrompt: string;
