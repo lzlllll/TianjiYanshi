@@ -219,3 +219,7 @@
 # 新增
 1.新增「思考参数」一项，可自动识别或手动指定 OpenAI、通义千问、智谱／豆包、DeepSeek、Kimi、OpenRouter、vLLM 各家关思考与压思考预算的写法，换模型后思考停不下来时可在设置里调整
 2.思考参数不被上游认时，自动退到通用写法、再退到不带参数，并记住这一家能用的那一种；回包里的思维链也认 reasoning_content、reasoning、thinking、analysis、reasoning_details 几种字段
+
+——————Pre-alpha 0.1.3.3
+# 修复
+1.修复 GLM-5.3 一类强制思考的模型思考上万字仍不落笔：不再向它发被拒的 thinking.disabled，改为 thinking.enabled 加 reasoning_effort:「low」，并照推理档给足输出额度

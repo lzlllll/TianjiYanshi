@@ -87,16 +87,48 @@ function resolveThinkingStyle(
   return "openai";
 }
 
+/** GLM-5.3 起与 4.7、4.5V 一类强制思考：传 disabled 直接 400，只能退到最低一档 */
+const GLM_FORCED_THINKING = /glm-(?:5\.[3-9]|[6-9]|4\.7|4\.5v)/i;
+/** 认 reasoning_effort 的 GLM：5.2 起。5.3 的档位是 low / high / max，缺省是 max——不想它想太久就得点明 low */
+const GLM_EFFORT = /glm-(?:5\.[2-9]|[6-9])/i;
+
+/** 智谱这一家的开与关 */
+function glmThinkingParams(model: string, on: boolean): Record<string, unknown> {
+  const name = String(model ?? "");
+  const forced = GLM_FORCED_THINKING.test(name);
+  const effort = GLM_EFFORT.test(name);
+  if (on || forced) {
+    // 强制思考的模型关不掉，能给的最低一档便是 low；不认 effort 的老模型只开思考
+    return {
+      thinking: { type: "enabled" },
+      ...(effort ? { reasoning_effort: "low" } : {}),
+    };
+  }
+  return { thinking: { type: "disabled" } };
+}
+
+/**
+ * 有的模型压根关不掉思考——哪怕玩家把这一档设成「无」，它也照样先想再写。
+ * 这类模型不能只给寻常那点输出额度，否则思维链一长，正文便没地方落了。
+ */
+function mustThink(model: string): boolean {
+  return GLM_FORCED_THINKING.test(String(model ?? ""));
+}
+
 /**
  * 关掉思考：各家写法不同。
  * 宁可先按这一家的写法发一次——有的混合模型不点明便自顾自想下去；
  * 老模型不认这个参数会报 400，postChat 自会退到不带参数的那一种。
  */
-function thinkingOffParams(style: ResolvedThinkingStyle): Record<string, unknown> {
+function thinkingOffParams(
+  style: ResolvedThinkingStyle,
+  model: string,
+): Record<string, unknown> {
   switch (style) {
     case "qwen":
       return { enable_thinking: false };
     case "glm":
+      return glmThinkingParams(model, false);
     case "deepseek":
     case "moonshot":
       return { thinking: { type: "disabled" } };
@@ -112,12 +144,16 @@ function thinkingOffParams(style: ResolvedThinkingStyle): Record<string, unknown
 }
 
 /** 留着思考，但压到最低 */
-function thinkingBriefParams(style: ResolvedThinkingStyle): Record<string, unknown> {
+function thinkingBriefParams(
+  style: ResolvedThinkingStyle,
+  model: string,
+): Record<string, unknown> {
   switch (style) {
     case "qwen":
       // 通义这一档的最小预算是一千零二十四
       return { enable_thinking: true, thinking_budget: 1024 };
     case "glm":
+      return glmThinkingParams(model, true);
     case "deepseek":
       return { thinking: { type: "enabled" } };
     case "moonshot":
@@ -145,7 +181,11 @@ interface ThinkingVariant {
  * 最后干脆不带任何思考参数。有些服务商见到不认识的字段便整笔拒掉，
  * 留着这条退路，换模型时便不至于一上来就报错。
  */
-function thinkingVariants(style: ResolvedThinkingStyle, reasoning: boolean): ThinkingVariant[] {
+function thinkingVariants(
+  style: ResolvedThinkingStyle,
+  reasoning: boolean,
+  model: string,
+): ThinkingVariant[] {
   const list: ThinkingVariant[] = [];
   const add = (label: string, extra: Record<string, unknown>) => {
     const key = JSON.stringify(extra);
@@ -153,9 +193,17 @@ function thinkingVariants(style: ResolvedThinkingStyle, reasoning: boolean): Thi
   };
   add(
     reasoning ? "思考·最低" : "思考·关闭",
-    reasoning ? thinkingBriefParams(style) : thinkingOffParams(style),
+    reasoning ? thinkingBriefParams(style, model) : thinkingOffParams(style, model),
   );
-  add("思考·通用", reasoning ? { reasoning_effort: REASONING_EFFORT } : { reasoning_effort: "none" });
+  // 通用那一手：GLM 只认 low / high / max，没有 none 这一档
+  add(
+    "思考·通用",
+    reasoning
+      ? { reasoning_effort: REASONING_EFFORT }
+      : style === "glm"
+        ? { reasoning_effort: "low" }
+        : { reasoning_effort: "none" },
+  );
   add("不带思考参数", {});
   return list;
 }
@@ -178,7 +226,8 @@ function warrantsThinkingFallback(status: number): boolean {
  * kimi-k3 是官方免费额度那档（moonshotai/kimi-k3-free）：它带思维链，
  * 若不认出来，便会照普通档只给 8192 的额度，被思考过程吃光、正文一个字都留不下。
  */
-const REASONING_NAME_PATTERN = /reason|think|z1|qwq|r1\b|o[1-9]-|kimi-k3/i;
+const REASONING_NAME_PATTERN =
+  /reason|think|z1|qwq|r1\b|o[1-9]-|kimi-k3|glm-(?:5\.[3-9]|[6-9]|4\.7|4\.5v)/i;
 
 /** 运行时见过的推理档模型名；见过一次便记住，往后自动按推理档办 */
 const reasonedModels = new Set<string>();
@@ -250,7 +299,8 @@ function buildRequestBody(params: {
   thinking?: Record<string, unknown>;
 }): Record<string, unknown> {
   const { model, messages, stream, temperature, reasoning, jsonMode } = params;
-  const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
+  const maxTokens =
+    reasoning || mustThink(model) ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
   const oSeries = isOpenAiOSeries(model);
   // 思考档认得出的模型，温度须先归到它认的那几档
   const appliedTemperature = isThinkingTemperatureLocked(model)
@@ -316,7 +366,7 @@ async function postChat(args: {
 }): Promise<{ resp: Response; endpoint: string }> {
   const endpoint = buildEndpoint(args.settings);
   const style = resolveThinkingStyle(args.settings, args.model, endpoint);
-  const variants = thinkingVariants(style, args.reasoning);
+  const variants = thinkingVariants(style, args.reasoning, args.model);
   const memoKey = `${style}:${args.reasoning}:${args.model}`;
   // 先前试出过能用的那一种，直接从那一种起手
   const start = Math.min(workingVariant.get(memoKey) ?? 0, variants.length - 1);
