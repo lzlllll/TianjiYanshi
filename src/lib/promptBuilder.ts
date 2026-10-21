@@ -1208,7 +1208,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - reward 写在字面上，如「下品灵石三十枚」；rewardKind 只取 灵石、修为、物品、人情、状态、正道名声、魔道名声、平民名声、官府名声；rewardAmount 为整数，物品、人情与状态那三类不必给数额
 - penalty 与 penaltyKind 同上，penaltyKind 只取 灵石、修为、业力、状态、正道名声、魔道名声、平民名声、官府名声；不涉罚的这两项可以不写
 - 赏罚是一条状态时，rewardBuff／penaltyBuff 另写：先照 {"template":"状态名录里的id或名目","hours":顶几个时辰}；名录里确没有合用的，才自编 {"name":"名目不超过10字","icon":"一个汉字","isDebuff":true或false,"stat":"效力落在哪一项","value":数值,"hours":顶几个时辰,"desc":"一句说明"}。自编的效力只许从 ${BUFF_TARGET_STATS.join("、")} 里挑一项，顶的时辰取 1 到 720
-- dueDay 写限几日之内，如 3、7、15；不限时的可以不写
+- dueDay 写第几日截止，开篇为第 1 日，「三日后」就写 4、「七日后」写 8；不限时的可以不写
 - status 一律写 open
 - 产出 2 至 4 桩，轻重缓急要有分别，且与玩家的身份、境界、宗门处境相合：散修写江湖上的私事，门中弟子可写门里派下的差事
 - 不要产出已经办完的事，也不要写玩家当下办不到的事`,

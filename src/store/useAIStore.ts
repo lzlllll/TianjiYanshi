@@ -45,7 +45,7 @@ import type {
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
-import { normalizeQuest, parseQuestKind } from "@/data/quests";
+import { normalizeQuest, parseQuestKind, parseQuestOutcome } from "@/data/quests";
 import { buffCatalogBrief } from "@/data/buffs";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
@@ -640,8 +640,9 @@ function settleDoneMark(text: string): string {
   const parts = found[1].split("|").map((p) => p.trim());
   const name = parts[0] || "";
   if (name) {
-    const failed = /误|黄|败|不成|未/.test(parts[1] || "");
-    useGameStore.getState().settleQuest({ name, status: failed ? "failed" : "done" });
+    // 判词只认说得明白的成与败：「未」「还没」只是没办完，不作误期
+    const outcome = parseQuestOutcome(parts[1] || "");
+    if (outcome) useGameStore.getState().settleQuest({ name, status: outcome });
   }
 
   return text.replace(found[0], "");

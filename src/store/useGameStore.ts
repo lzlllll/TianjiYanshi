@@ -2822,10 +2822,27 @@ EFFECT: [效果描述]`,
           .find((q) => q.status === "open" && (q.name === name || name.includes(q.name) || q.name.includes(name)));
         if (!target) return false;
 
+        // 期限还写着后头的日子，便不作误期——日子到了、过期了，自会由 expireQuests 照单落账。
+        // 叙事里的人就算先摇了头，也不该把还没到期的桩子记成黄了
+        const today = daySerial(st.currentTime);
+        if (status === "failed" && target.dueDay !== undefined && today <= target.dueDay) return false;
+
+        // 为这桩事现开的那一处去处，事一了便撤去；原本就在舆图上的去处不归它管
+        const questAdventure = (Array.isArray(st.adventures) ? st.adventures : []).find(
+          (a) => a.questId === target.id,
+        );
+        const adventures = questAdventure
+          ? st.adventures.filter((a) => a.id !== questAdventure.id)
+          : st.adventures;
+        const currentAdventureId =
+          questAdventure && st.currentAdventureId === questAdventure.id ? undefined : st.currentAdventureId;
+
         // 牙行揽下的差事：交上了也只算办成，赏还押在柜上，得他自己回去领
         if (status === "done" && target.broker) {
           const held = holdRewardOutcome(target);
           set({
+            adventures,
+            currentAdventureId,
             quests: st.quests.map((q) =>
               q.id === target.id
                 ? { ...q, status: "done", settledDay: daySerial(st.currentTime), claimed: false, outcome: held }
@@ -2859,6 +2876,8 @@ EFFECT: [效果描述]`,
           reputation,
           sect,
           relations,
+          adventures,
+          currentAdventureId,
           quests: st.quests.map((q) =>
             q.id === target.id
               ? { ...q, status, settledDay: daySerial(st.currentTime), outcome }
@@ -2896,12 +2915,27 @@ EFFECT: [效果描述]`,
           );
         }
 
+        // 这些事一了，替它们现开的去处也一并撤去
+        const failedIds = new Set(overdue.map((q) => q.id));
+        const goneAdventures = new Set(
+          (Array.isArray(st.adventures) ? st.adventures : [])
+            .filter((a) => a.questId && failedIds.has(a.questId))
+            .map((a) => a.id),
+        );
+        const adventures = (Array.isArray(st.adventures) ? st.adventures : []).filter(
+          (a) => !goneAdventures.has(a.id),
+        );
+        const currentAdventureId =
+          st.currentAdventureId && goneAdventures.has(st.currentAdventureId) ? undefined : st.currentAdventureId;
+
         set({
           player,
           spiritStones,
           reputation,
           sect,
           relations,
+          adventures,
+          currentAdventureId,
           quests: st.quests.map((q) =>
             outcomes.has(q.id) ? { ...q, status: "failed", settledDay: today, outcome: outcomes.get(q.id)! } : q,
           ),
@@ -3849,6 +3883,13 @@ EFFECT: [效果描述]`,
           const nextLocation = resolveLocation(next.currentLocation) ?? st.currentLocation;
           // 人没挪窝、场所也照旧，才算仍驻在原先那处奇遇点位上；否则奇遇点位自然作废
           const stillAtPoint = !moved && nextLocation === st.currentLocation;
+          // 叙事里那桩事了结、替它现开的去处已撤，脚下这处便也算没了
+          const nextAdventures = next.adventures ?? st.adventures;
+          const currentStillThere =
+            !st.currentAdventureId ||
+            (Array.isArray(nextAdventures) ? nextAdventures : []).some(
+              (a) => a.id === st.currentAdventureId,
+            );
           return {
             player: nextPlayer,
             techniques: next.techniques,
@@ -3862,7 +3903,7 @@ EFFECT: [效果描述]`,
             // 换了地方就退回世界地图，免得停在上一个地点的内部地图里
             mapSceneId: moved ? WORLD_SCENE_ID : st.mapSceneId,
             currentLocation: nextLocation,
-            currentAdventureId: stillAtPoint ? st.currentAdventureId : undefined,
+            currentAdventureId: stillAtPoint && currentStillThere ? st.currentAdventureId : undefined,
             log: next.log,
             pillCache: next.pillCache,
             news: next.news,

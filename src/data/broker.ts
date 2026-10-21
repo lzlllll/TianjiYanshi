@@ -580,6 +580,8 @@ export function pinNarrativeQuest(args: {
               kind: "去处",
               summary: quest.desc || quest.condition,
               danger: 1,
+              // 这一处是替这桩事现开的；事一了，便照这个 id 一并撤去
+              questId: quest.id,
             },
             {
               state: { sectSites: args.sectSites ?? [], adventures: args.adventures ?? [] },

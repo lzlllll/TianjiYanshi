@@ -26,15 +26,21 @@ export function AdventureModal() {
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
 
+  const found = (adventures || []).find((a) => a.id === adventure.id);
+  const busy = adventure.busy;
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [adventure.turns.length, adventure.opening, adventure.busy]);
 
+  // 那一处若已随机缘了结而撤去，这一扇窗也不必再开着
+  useEffect(() => {
+    if (adventure.active && adventure.id && adventures && !found) closeAdventure();
+  }, [adventure.active, adventure.id, adventures, found, closeAdventure]);
+
   if (!adventure.active) return null;
 
-  const found = (adventures || []).find((a) => a.id === adventure.id);
   const here = !!found && found.cityId === currentPlaceId;
-  const busy = adventure.busy;
 
   const handleSend = () => {
     const text = input.trim();

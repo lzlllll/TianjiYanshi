@@ -227,6 +227,8 @@ export function normalizeAdventure(
     ...(src.persistent === true || src.persistent === "是" ? { persistent: true } : {}),
     day: Math.max(0, Math.trunc(Number(ctx.day) || 0)),
     origin: ctx.origin ?? "story",
+    // 为某桩机缘现开的那一处，记着主家的 id，事一了也好一并撤去
+    ...(clip(src.questId, 40) ? { questId: clip(src.questId, 40) } : {}),
   };
 }
 

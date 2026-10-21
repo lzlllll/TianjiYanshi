@@ -27,7 +27,7 @@ import { resolveLocation } from "@/data/locations";
 import { isKnownGood } from "@/data/goods";
 import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data/skills";
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
-import { applyQuestLedger, holdRewardOutcome, normalizeQuest, type QuestLedgerTarget } from "@/data/quests";
+import { applyQuestLedger, holdRewardOutcome, normalizeQuest, parseQuestOutcome, type QuestLedgerTarget } from "@/data/quests";
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizeAdventure } from "@/data/adventures";
 import { emptyPlot } from "@/data/manors";
@@ -1614,6 +1614,8 @@ function settleQuest(root: any, name: string, status: "done" | "failed"): void {
   if (!target) return;
 
   const today = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
+  // 期限还没到就不作误期：日子过了，自会由 expireQuests 照单落账
+  if (status === "failed" && target.dueDay !== undefined && today <= target.dueDay) return;
   target.status = status;
   target.settledDay = today;
   // 赏罚是一条状态时，须照眼下时辰算出顶到几时；少了这一笔，状态便立不起来，只剩字面上的一句话
@@ -1628,6 +1630,10 @@ function settleQuest(root: any, name: string, status: "done" | "failed"): void {
       : applyQuestLedger(ledger, target, status);
   if (status === "done" && target.broker) target.claimed = false;
   root.quests = quests;
+  // 这桩事一了，替它现开的那一处去处也撤去；原本就在舆图上的去处没有 questId，不动
+  if (Array.isArray(root.adventures)) {
+    root.adventures = root.adventures.filter((a: any) => a?.questId !== target.id);
+  }
   // 交差或黄了都留一笔在见闻里，免得这事了得无声无息
   root.log = [`「${target.name}」${target.outcome}`, ...(Array.isArray(root.log) ? root.log : [])].slice(0, 30);
 }
@@ -1985,12 +1991,10 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
   if (normalizedPath.startsWith("quest.")) {
     const questName = normalizedPath.slice("quest.".length).trim();
     if (!questName) return null;
-    // 先认黄了的写法：「误了」「黄了」里也带着一个「了」字，
-    // 若先认「了」便被算作办成，该罚的那一笔连状态也落不下来
-    const failed = /误|黄|败|不成|未|没/.test(value);
-    const done = !failed && /成|了|交差|办妥|妥/.test(value);
-    if (!done && !failed) return null;
-    settleQuest(root, questName, done ? "done" : "failed");
+    // 判词只认说得明白的成与败：「未」「还没」只是没办完，不作误期
+    const outcome = parseQuestOutcome(value);
+    if (!outcome) return null;
+    settleQuest(root, questName, outcome);
     return null; // 已直接处理
   }
 

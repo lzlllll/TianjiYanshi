@@ -220,7 +220,11 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     place: clean(raw.place ?? raw.where, 24),
     // 类别认不出便当事件类：它不逼着要有去处与人，最不容易被数据卡住
     kind: parseQuestKind(raw.kind ?? raw.type ?? raw.category) ?? "事件",
-    dueDay: Number.isFinite(Number(raw.dueDay)) ? Math.trunc(Number(raw.dueDay)) : undefined,
+    // 日序从第一日起算，零与负数都不是期限，宁可当作不限时，也别让新立的机缘一落地就误期
+    dueDay:
+      Number.isFinite(Number(raw.dueDay)) && Number(raw.dueDay) > 0
+        ? Math.trunc(Number(raw.dueDay))
+        : undefined,
     giver: clean(raw.giver ?? raw.from, 16),
     condition: clean(raw.condition ?? raw.how, 120),
     reward: clean(raw.reward, 60),
@@ -246,7 +250,34 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
 
 /** 这桩事是不是已经误了期（还没了结的那种） */
 export function isQuestOverdue(quest: Quest, today: number): boolean {
-  return quest.status === "open" && quest.dueDay !== undefined && today > quest.dueDay;
+  // 零与负数不是期限：旧档里若留下这样的值，当作不限时，别一读档就判成误期
+  if (quest.status !== "open") return false;
+  if (quest.dueDay === undefined || !Number.isFinite(quest.dueDay) || quest.dueDay <= 0) return false;
+  return today > quest.dueDay;
+}
+
+/**
+ * 从叙事或交谈里那句判词认出「成了」还是「误了」。
+ *
+ * 只认说得明白的成败。「未」「还没」「没办完」这些只是说眼下没办成，
+ * 不能当作误期——否则期限还没到，机缘就先被记成黄了。
+ */
+export function parseQuestOutcome(value: unknown): "done" | "failed" | null {
+  const text = String(value ?? "").replace(/\s+/g, "");
+  if (!text) return null;
+
+  // 明说黄了的字样先认：「误了」「黄了」里也带一个「了」字，不能算办成。
+  // 「没办成」「未办成」不算——那只是说眼下还没办到，并未说这桩事黄了
+  if (/误|黄|败|砸|告吹|落空|办不到|办不成/.test(text)) {
+    return "failed";
+  }
+  // 带「未」「没」而没明说办不成的，是在说还没办完，留待后话
+  if (/未|没/.test(text)) return null;
+
+  if (/成了|办成|办妥|交差|交了差|了结|已了|^了$|^成$|^妥$|^完成$|^已完成$|办好了/.test(text)) {
+    return "done";
+  }
+  return null;
 }
 
 /**
