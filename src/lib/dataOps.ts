@@ -52,6 +52,7 @@ const QUICK_START = "<<<QUICK>>>";
 const SECTWAR_START = "<<<SECTWAR>>>";
 const HAGGLE_START = "<<<HAGGLE>>>";
 const SHOP_START = "<<<SHOP>>>";
+const CONVERSE_START = "<<<CONVERSE>>>";
 
 const MAX_TOTAL_OPS = 200;
 
@@ -73,6 +74,14 @@ export interface ParsedTurn {
   haggle: HaggleBrief | null;
   /** 这一轮叙事把玩家引到某家铺子买卖；没有便是 null */
   shop: ShopBrief | null;
+  /** 这一轮叙事里有人当面与玩家搭话、该转为当面交谈；没有便是 null */
+  converse: ConverseBrief | null;
+}
+
+/** 叙事里那位先开口的人 */
+export interface ConverseBrief {
+  /** 说话人的姓名，须是尘缘里认得的那一个 */
+  npc: string;
 }
 
 const MODE_START = "<<<MODE>>>";
@@ -144,6 +153,19 @@ export function parseModelOutput(raw: string): ParsedTurn {
       : text.slice(0, shopIdx);
   }
 
+  let converse: ConverseBrief | null = null;
+  const converseIdx = text.indexOf(CONVERSE_START);
+  if (converseIdx !== -1) {
+    const afterConverse = text.slice(converseIdx + CONVERSE_START.length);
+    const converseEndIdx = afterConverse.indexOf(END_MARKER);
+    const content = converseEndIdx !== -1 ? afterConverse.slice(0, converseEndIdx) : afterConverse;
+    const npc = String(parseJsonPayload(content)?.npc ?? "").trim();
+    if (npc) converse = { npc };
+    text = converseEndIdx !== -1
+      ? text.slice(0, converseIdx) + afterConverse.slice(converseEndIdx + END_MARKER.length)
+      : text.slice(0, converseIdx);
+  }
+
   let quickDecisions: string[] = [];
   const quickStartIdx = text.indexOf(QUICK_START);
   if (quickStartIdx !== -1) {
@@ -180,7 +202,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
   if (battleNarrative) narrative = battleNarrative;
   const ops = parseOpLines(opsRaw);
   _debugOps(ops);
-  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop };
+  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop, converse };
 }
 
 /**

@@ -331,6 +331,8 @@ function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
 const TREAT_MARK = "<<<请客>>>";
 /** 谈话里要考较一门本事时，回话末尾缀这一行，摘下它便去掷一次骰子 */
 const CHECK_MARK = "<<<判定>>>";
+/** 话说到该转场的地方（起身出门、上船启程、同去某处）时缀这一行，摘下它便收交谈、转叙事 */
+const STORY_MARK = "<<<转叙事>>>";
 
 /**
  * 报上玩家身上几门市井本事与最近的判定。
@@ -688,6 +690,49 @@ function settleNPCMarks(
   spoken = spoken.split(TREAT_MARK).join("");
 
   return spoken.replace(/^\s+|\s+$/g, "") || text.trim();
+}
+
+/**
+ * 摘下末尾的转叙事标记：话说到起身出门、上船启程、同去某处这类非一段叙事接不住的事，
+ * 说话的人便缀上这一行，写明玩家接下来做什么、往哪里去。
+ * 摘掉它，余下的照旧是这一句回话；没有这一行便是照常谈下去。
+ */
+function takeStoryCue(text: string): { text: string; cue: string } {
+  const idx = text.indexOf(STORY_MARK);
+  if (idx === -1) return { text: text.trim(), cue: "" };
+
+  const after = text.slice(idx + STORY_MARK.length);
+  const lineEnd = after.indexOf("\n");
+  const cue = (lineEnd === -1 ? after : after.slice(0, lineEnd)).replace(/^[\s|｜:：]+/, "").trim();
+  const head = text.slice(0, idx);
+  const tail = lineEnd === -1 ? "" : after.slice(lineEnd);
+  return { text: (head + tail).trim(), cue };
+}
+
+/**
+ * 话说到该转场的地方：收起这一席交谈，摊开问道窗，由叙事接着往下写。
+ * 单谈与多人同席共用这一处，走的是与「问道」同一条推演，不另起一套。
+ */
+function handOffChatToNarration(who: string, cue: string): void {
+  const store = useAIStore.getState();
+  // 先照常收席：这一席的摘要与这人的记性都要落下来
+  store.closeNPCChat();
+  useAIStore.setState({ isStoryOpen: true });
+  const trimmed = cue.replace(/[。;；,，]\s*$/, "").trim();
+  void store.runTurn(`与${who}话毕，${trimmed || "起身离去"}`);
+}
+
+/**
+ * 叙事里的人先开了口：把交谈窗叫起来，由玩家当面接话。
+ * 只认尘缘里真有的那一位，且须就在近前；认不出、或人不在跟前，就不开这一席。
+ */
+function openChatFromNarrative(converse: { npc: string } | null): void {
+  if (!converse?.npc) return;
+  const gs = useGameStore.getState();
+  const rel = (gs.relations || []).find((r) => r.name === converse.npc);
+  if (!rel) return;
+  if (!isNpcAround(rel, { placeId: gs.currentPlaceId, placeName: gs.hereLabel() })) return;
+  useAIStore.getState().openNPCChat(rel.id);
 }
 
 /**
@@ -2253,6 +2298,8 @@ export const useAIStore = create<AIStore>()(
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
+        // 叙事里有人当面搭话时，这一轮收束后把交谈窗叫起来
+        let narrativeConverse: { npc: string } | null = null;
         let extraction = emptyExtraction();
 
         // Pro 只生成叙事正文
@@ -2296,6 +2343,7 @@ export const useAIStore = create<AIStore>()(
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
+          narrativeConverse = parsed.converse;
           const reviewed = await reviewNarrative(settings, parsed.narrative, signal);
           if ((streamBlocked || reviewed !== parsed.narrative) && !signal.aborted) {
             set((st) => ({ conversation: { ...st.conversation, streamingNarrative: reviewed } }));
@@ -2404,6 +2452,9 @@ export const useAIStore = create<AIStore>()(
           },
         }));
         abortController = null;
+
+        // 这一回有人当面搭话，便把交谈窗叫起来，让玩家自己接
+        openChatFromNarrative(narrativeConverse);
 
         await get().compressNow();
       },
@@ -2571,6 +2622,8 @@ export const useAIStore = create<AIStore>()(
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
+        // 叙事里有人当面搭话时，这一轮收束后把交谈窗叫起来
+        let narrativeConverse: { npc: string } | null = null;
 
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
@@ -2612,6 +2665,7 @@ export const useAIStore = create<AIStore>()(
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
+          narrativeConverse = parsed.converse;
           const reviewed = await reviewNarrative(settings, parsed.narrative, signal);
           if ((streamBlocked || reviewed !== parsed.narrative) && !signal.aborted) {
             set((st) => ({ conversation: { ...st.conversation, streamingNarrative: reviewed } }));
@@ -2828,6 +2882,9 @@ export const useAIStore = create<AIStore>()(
         }));
         abortController = null;
 
+        // 这一回有人当面搭话，便把交谈窗叫起来，让玩家自己接
+        openChatFromNarrative(narrativeConverse);
+
         await get().compressNow();
       },
 
@@ -2877,6 +2934,8 @@ export const useAIStore = create<AIStore>()(
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
+        // 重演这一回若有人当面搭话，收束后同样把交谈窗叫起来
+        let narrativeConverse: { npc: string } | null = null;
         try {
           set((st) => ({
             conversation: {
@@ -2921,6 +2980,7 @@ export const useAIStore = create<AIStore>()(
           narrativeSectWar = parsedRetry.sectWar;
           narrativeHaggle = parsedRetry.haggle;
           narrativeShop = parsedRetry.shop;
+          narrativeConverse = parsedRetry.converse;
           rawNarrative = parsedRetry.narrative;
           narrative = await reviewNarrative(settings, rawNarrative, signal);
           if ((streamBlocked || narrative !== rawNarrative) && !signal.aborted) {
@@ -3019,6 +3079,9 @@ export const useAIStore = create<AIStore>()(
           };
         });
         abortController = null;
+
+        // 重演这一回若有人当面搭话，同样把交谈窗叫起来
+        openChatFromNarrative(narrativeConverse);
       },
 
       compressNow: async () => {
@@ -3969,9 +4032,10 @@ ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene!.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
 <<<END>>>
 价钱只取 ${CRAFT_PRICE_RANGE[0]} 到 ${CRAFT_PRICE_RANGE[1]}，日子只取 ${CRAFT_DAYS_RANGE[0]} 到 ${CRAFT_DAYS_RANGE[1]}；他还没说要做什么、你还没应下、或价钱没说定时，这一块就不写。这一块若写，便放在全篇最末。` : ""}
-${craft ? 11 : 10}. ${isDining
+${craft ? 11 : 10}. 若话说到这里，接下来已不是席上几句能了结的——他要随你起身出门、上船启程、同去某处，或当场动起手来——就在回话的最后另起一行只写 ${STORY_MARK} 一句话写明玩家接下来做什么、往哪里去，如「随他起身往城南码头，登船离岸」。只是随口提及去处、人还没动身，就不要写这一行。
+${craft ? 12 : 11}. ${isDining
                 ? `你若要替他叫一道菜做东，就在回话的最后另起一行只写 ${TREAT_MARK}。`
-                : ""}除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}${craft ? `、${CRAFT_MARK}` : ""}${isDining ? `、${TREAT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记或系统提示，只输出对话内容`,
+                : ""}除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${craft ? `、${CRAFT_MARK}` : ""}${isDining ? `、${TREAT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记或系统提示，只输出对话内容`,
           },
           {
             role: "user" as const,
@@ -4009,10 +4073,18 @@ ${craft ? 11 : 10}. ${isDining
           );
           if (signal.aborted) return;
 
+          // 话里带了转场的意思：这一句照旧入席，随后收窗转叙事
+          const { text: shown, cue } = takeStoryCue(spoken);
+
           appendNpcLine(
-            { id: `msg-${Date.now()}`, role: "npc", content: spoken, timestamp: Date.now() },
+            { id: `msg-${Date.now()}`, role: "npc", content: shown, timestamp: Date.now() },
             !!checkBox.check,
           );
+
+          if (cue) {
+            handOffChatToNarration(profile.name, cue);
+            return;
+          }
 
           if (!checkBox.check) return;
           const passed = checkBox.check;
@@ -4036,15 +4108,17 @@ ${craft ? 11 : 10}. ${isDining
             );
             if (signal.aborted || !followSpoken.trim()) return;
 
+            const follow = takeStoryCue(followSpoken);
             appendNpcLine(
               {
                 id: `msg-${Date.now()}-cont`,
                 role: "npc",
-                content: followSpoken,
+                content: follow.text,
                 timestamp: Date.now(),
               },
               false,
             );
+            if (follow.cue) handOffChatToNarration(profile.name, follow.cue);
           } catch (e) {
             if (!signal.aborted) console.warn("[sendNPCMessage] 判定通过后的续话未成:", e);
           } finally {
@@ -4362,7 +4436,8 @@ ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
 <<<END>>>
 ` : ""}
-7. 除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}${profile.scene?.craft ? `、${CRAFT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记，只输出你要说的这段话`,
+7. 若话说到这里，接下来已不是席上几句能了结的——众人要起身出门、上船启程、同去某处——就在回话的最后另起一行只写 ${STORY_MARK} 一句话写明接下来做什么、往哪里去。只是随口提及去处、人还没动身，就不要写这一行。
+8. 除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${profile.scene?.craft ? `、${CRAFT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记，只输出你要说的这段话`,
               },
             ];
 
@@ -4377,17 +4452,24 @@ ${CRAFT_MARK}
                 if (check.success) checkBox.check = check;
               }),
             );
+            // 席间有人把话引到了该转场的地方：这一句照旧入席，随后收窗转叙事
+            const { text: shown, cue } = takeStoryCue(spoken);
             const line: NPCGroupMessage = {
               id: `gmsg-${Date.now()}-${member.id}`,
               role: "npc",
               speakerId: member.id,
               speakerName: profile.name,
-              content: spoken,
+              content: shown,
               timestamp: Date.now(),
             };
             transcript = [...transcript, line];
             set((st) => ({ npcChat: { ...st.npcChat, partyMessages: transcript } }));
-            noteDown([member.id], { id: line.id, role: "npc", content: spoken, timestamp: line.timestamp });
+            noteDown([member.id], { id: line.id, role: "npc", content: shown, timestamp: line.timestamp });
+
+            if (cue) {
+              handOffChatToNarration(profile.name, cue);
+              return;
+            }
 
             // 同席里判定过了，也让这一位顺着话头把该交的底交出来
             if (checkBox.check) {
@@ -4407,12 +4489,13 @@ ${CRAFT_MARK}
                   settleNPCMarks(followRaw, profile),
                 );
                 if (followSpoken.trim()) {
+                  const follow = takeStoryCue(followSpoken);
                   const followLine: NPCGroupMessage = {
                     id: `gmsg-${Date.now()}-${member.id}-cont`,
                     role: "npc",
                     speakerId: member.id,
                     speakerName: profile.name,
-                    content: followSpoken,
+                    content: follow.text,
                     timestamp: Date.now(),
                   };
                   transcript = [...transcript, followLine];
@@ -4420,9 +4503,13 @@ ${CRAFT_MARK}
                   noteDown([member.id], {
                     id: followLine.id,
                     role: "npc",
-                    content: followSpoken,
+                    content: follow.text,
                     timestamp: followLine.timestamp,
                   });
+                  if (follow.cue) {
+                    handOffChatToNarration(profile.name, follow.cue);
+                    return;
+                  }
                 }
               } catch (e) {
                 console.warn("[sendPartyMessage] 判定通过后的续话未成:", e);
