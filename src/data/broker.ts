@@ -10,6 +10,7 @@
  */
 
 import { getCityMarkers, getDistricts, getMarker } from "@/data/map";
+import { normalizeAdventure, pickOrNudgeSpotNear } from "@/data/adventures";
 import { relationWhereabout, rollQuestNpc } from "@/data/npcGen";
 import { questKindNeedsPlace } from "@/data/quests";
 import type {
@@ -536,7 +537,7 @@ export function pinNarrativeQuest(args: {
   villages?: Village[];
   /** 江湖上的各处山门；去处写到某座建筑便可钉过去 */
   sectSites?: SectSite[];
-}): { quest: Quest; people: Relation[] } {
+}): { quest: Quest; people: Relation[]; adventure?: Adventure } {
   const { quest, currentPlaceId, districtNames, today } = args;
   if (!currentPlaceId) return { quest, people: [] };
 
@@ -547,6 +548,8 @@ export function pinNarrativeQuest(args: {
   const culture = getMarker(cityId)?.culture ?? args.culture;
 
   let target = quest.target;
+  // 若这一桩点名的地方舆图上没有，便现开一处去处；生出来的这一处要一并交回，好落进存档
+  let born: Adventure | undefined;
   if (!target) {
     // 去处可能是城内街区、某座山门里的建筑、舆图上的奇遇，或一座村庄，按写法依次认一遍
     target =
@@ -557,8 +560,42 @@ export function pinNarrativeQuest(args: {
     // 事件类可以没有具体去处：认不出便不钉，由叙事随缘去办，不硬安一个星标
     if (!target && !questKindNeedsPlace(quest.kind)) return { quest, people: [] };
     if (!target) {
-      // 地点类与人物类必须有具体去处：去处没写明、或只写到城外某处时，
-      // 便落在那座城一处住人的地方，好歹有人可寻
+      // 地点类与人物类须有具体去处：点名的地方城里没有，就在附近还空着的预设点位上现开一处。
+      // 只挑这一带近处的空位，远处的不算「附近」；这一带都被人占满了，
+      // 便在离城最近的那处点位旁另开一处，仍算在附近
+      const nearby = pickOrNudgeSpotNear(
+        { sectSites: args.sectSites ?? [], adventures: args.adventures ?? [] },
+        cityId,
+      );
+      // 去处写了城名的，开出来的这一处只留地方本名，免得屏幕上叠成「临安·临安城西废寺」
+      const cityName = getMarker(cityId)?.name ?? "";
+      const placeName =
+        (cityName && text.startsWith(cityName)
+          ? text.slice(cityName.length).replace(/^[·•.\s]+/, "")
+          : text) || quest.name;
+      born = nearby
+        ? normalizeAdventure(
+            {
+              name: placeName,
+              kind: "去处",
+              summary: quest.desc || quest.condition,
+              danger: 1,
+            },
+            {
+              state: { sectSites: args.sectSites ?? [], adventures: args.adventures ?? [] },
+              spot: nearby,
+              cityId,
+              day: today,
+              origin: "story",
+            },
+          ) ?? undefined
+        : undefined;
+      if (born) {
+        target = { cityId: born.cityId, label: `${born.name}（${born.kind}）`, adventureId: born.id };
+      }
+    }
+    if (!target) {
+      // 近处没有可开的地方：仍落在那座城一处住人的地方，好歹有人可寻
       const fallback =
         getDistricts(cityId).find((d) => d.nature === "平民住宅") ?? getDistricts(cityId)[0];
       if (!fallback) return { quest, people: [] };
@@ -575,7 +612,7 @@ export function pinNarrativeQuest(args: {
   // 去处落了实、却本不是奔人去的：按落下的去处归到地点类，不另钉人——
   // 到了那一处怎么办，由叙事去写。奔人去的照旧：去处连同要找的人一并钉下
   if (quest.kind !== "人物") {
-    return { quest: { ...quest, kind: "地点", target }, people: [] };
+    return { quest: { ...quest, kind: "地点", target }, people: [], ...(born ? { adventure: born } : {}) };
   }
 
   const roles = narrativeCastRoles(quest);
@@ -602,5 +639,6 @@ export function pinNarrativeQuest(args: {
       cast: roles,
     },
     people,
+    ...(born ? { adventure: born } : {}),
   };
 }

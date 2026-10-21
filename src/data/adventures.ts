@@ -108,6 +108,54 @@ export function pickAdventureSpotNear(
   return near[Math.floor(Math.random() * near.length)];
 }
 
+/** 在某一处点位旁边错开几十步另取一处坐标；与已占的点位重合便再错一次 */
+function nudgeSpot(
+  base: { sceneId: string; x: number; y: number },
+  used: Set<string>,
+): { sceneId: string; x: number; y: number } | undefined {
+  for (let i = 0; i < 16; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 36 + Math.random() * 54;
+    const spot = {
+      sceneId: base.sceneId,
+      x: Math.round(base.x + Math.cos(angle) * radius),
+      y: Math.round(base.y + Math.sin(angle) * radius),
+    };
+    if (!used.has(presetKey(spot))) return spot;
+  }
+  return undefined;
+}
+
+/**
+ * 就近开一处：先挑那一带还空着的预设点位；
+ * 那一带已被人占满（宗门立了山门、奇遇又占着最后几处），
+ * 便在离城最近的那处点位旁错开数十步，临时开出一处来。
+ * 总好过把一桩点名要办的事硬推到城里住人的街区上。
+ */
+export function pickOrNudgeSpotNear(
+  state: Pick<GameState, "sectSites" | "adventures">,
+  cityId: string,
+): { sceneId: string; x: number; y: number } | undefined {
+  if (!cityId) return undefined;
+  const spot = pickAdventureSpotNear(state, cityId);
+  if (spot) return spot;
+
+  const city = getCityMarkers().find((c) => c.id === cityId);
+  const points = getScenePresetPoints(WORLD_SCENE_ID);
+  if (!city || points.length === 0) return undefined;
+
+  let nearest = points[0];
+  let bestDist = Infinity;
+  for (const point of points) {
+    const dist = (point.x - city.x) ** 2 + (point.y - city.y) ** 2;
+    if (dist < bestDist) {
+      bestDist = dist;
+      nearest = point;
+    }
+  }
+  return nudgeSpot(nearest, freePresetKeys(state));
+}
+
 function clip(value: unknown, max: number): string {
   return String(value ?? "").trim().slice(0, max);
 }

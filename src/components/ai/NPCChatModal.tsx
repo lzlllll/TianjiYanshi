@@ -6,6 +6,7 @@ import { isAroundHere } from "@/data/npcGen";
 import type { Relation } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { migrateRelation } from "@/data/npcGen";
+import { ChatAside } from "@/components/ai/SessionAside";
 import { X, Loader2, Send, Trash2, UserPlus } from "lucide-react";
 
 export function NPCChatModal() {
@@ -160,7 +161,7 @@ export function NPCChatModal() {
       />
 
       <div
-        className="relative scroll-card corner-ornament spiritual-particles rounded-lg w-full max-w-3xl h-[70vh] flex flex-col"
+        className="relative scroll-card corner-ornament spiritual-particles rounded-lg w-full max-w-5xl h-[75vh] flex flex-col overflow-hidden"
         style={{ animation: "inkSpread 0.4s ease-out" }}
       >
         <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b-2 border-gold-500 bg-ink-800 cloud-border">
@@ -221,6 +222,9 @@ export function NPCChatModal() {
           </div>
         </div>
 
+        {/* 左边这一席话，右边一栏旁记：前情、此人、相干机缘 */}
+        <div className="flex-1 min-h-0 flex">
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {/* 在场的人：点名字可请入、可请出 */}
         <div className="px-6 py-2 border-b border-gold-500/15 bg-ink-800/70 flex flex-wrap items-center gap-1.5">
           <span className="font-serif text-[11px] text-paper-400/55 mr-1">在场</span>
@@ -386,6 +390,9 @@ export function NPCChatModal() {
             )}
           </div>
         )}
+          </div>
+          <ChatAside />
+        </div>
       </div>
     </div>
   );

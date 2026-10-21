@@ -7,6 +7,7 @@ import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import { ChangeNotice } from "@/components/ui/ChangeNotice";
 import { BattlePanel } from "@/components/battle/BattlePanel";
+import { StoryAside } from "@/components/ai/SessionAside";
 import {
   Sparkles,
   Square,
@@ -229,7 +230,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 flex-1 min-h-0">
+      <div className="flex-1 min-h-0 flex gap-4">
+        <div className="flex flex-col gap-3 flex-1 min-w-0 min-h-0">
         {/* 叙事正文 */}
         <ScrollCard
           title="天机"
@@ -426,6 +428,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
             )}
           </ScrollCard>
         )}
+        </div>
+        <StoryAside />
       </div>
     </div>
   );

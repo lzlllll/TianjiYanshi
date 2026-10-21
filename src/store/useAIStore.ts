@@ -482,11 +482,16 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
     });
     useGameStore.setState((s) => ({
       quests: [...s.quests, pinned.quest],
+      // 点名的地方舆图上没有、现开了一处：这一处也得落进舆图，不然这桩事走过去是一片空白
+      adventures: pinned.adventure
+        ? [...(Array.isArray(s.adventures) ? s.adventures : []), pinned.adventure]
+        : s.adventures,
       relations:
         pinned.people.length > 0
           ? [...s.relations, ...pinned.people.filter((p) => !s.relations.some((r) => r.id === p.id))]
           : s.relations,
       log: [
+        ...(pinned.adventure ? [`舆图上添了一处去处：${pinned.adventure.name}。`] : []),
         broker
           ? `「${giver}」在「${broker.shopName}」给你记下一桩差事：${quest.name}，赏押在柜上。`
           : `「${giver}」托付下一桩事：${quest.name}。`,

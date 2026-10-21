@@ -2328,10 +2328,11 @@ function applyOne(root: any, op: DataOp): void {
         // 去处与要见的人一并由它定下：去处对得上本城或别城的街区便钉在那儿，
         // 人现掷一个钉在目标地块上，玩家走到那一处方能寻着、交得了差；认不出去处的，
         // 才落在那一座城一处住人的地方。切不可先把 target 认好再交进去——
-        // 它会当成去处已定，只记地方不钉人，玩家到了那儿便寻不着接头的人
+        // 它会当成去处已定，只记地方不钉人，玩家到了那儿便寻不着接头的人；
+        // 模型偶尔会在机缘里自写一个 target，同样不认，去处只从 place 现认
         const placeId = String(root?.currentPlaceId ?? "");
         const pinned = pinNarrativeQuest({
-          quest,
+          quest: { ...quest, target: undefined },
           currentPlaceId: placeId,
           districtNames: root?.districtNames,
           culture: getMarker(placeId)?.culture,
@@ -2345,6 +2346,11 @@ function applyOne(root: any, op: DataOp): void {
           pinned.people.forEach((person) => {
             if (!relArr.some((r) => r?.id === person.id)) relArr.push(person);
           });
+        }
+        // 点名的地方舆图上没有、现开了一处：这一处也要一并落进舆图
+        if (pinned.adventure) {
+          const advArr = resolveCollection(root, "adventures");
+          if (!advArr.some((a: any) => a?.id === pinned.adventure!.id)) advArr.push(pinned.adventure);
         }
         arr.push(pinned.quest);
         if (arr.length > 40) arr.splice(0, arr.length - 40);
