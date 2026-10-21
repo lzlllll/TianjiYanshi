@@ -289,26 +289,34 @@ export function NPCChatModal() {
                 </p>
               </div>
             ) : group ? (
-              partyMessages.map((msg) => (
-                <Bubble
-                  key={msg.id}
-                  mine={msg.speakerId === "player"}
-                  avatar={msg.speakerId === "player" ? "我" : msg.speakerName.charAt(0) || "?"}
-                  name={msg.speakerId === "player" ? "" : msg.speakerName}
-                  content={msg.content}
-                  timestamp={msg.timestamp}
-                />
-              ))
+              partyMessages.map((msg) =>
+                msg.speakerId === "system" ? (
+                  <SystemNote key={msg.id} content={msg.content} />
+                ) : (
+                  <Bubble
+                    key={msg.id}
+                    mine={msg.speakerId === "player"}
+                    avatar={msg.speakerId === "player" ? "我" : msg.speakerName.charAt(0) || "?"}
+                    name={msg.speakerId === "player" ? "" : msg.speakerName}
+                    content={msg.content}
+                    timestamp={msg.timestamp}
+                  />
+                ),
+              )
             ) : (
-              (Array.isArray(profile?.messages) ? profile!.messages : []).map((msg) => (
-                <Bubble
-                  key={msg.id}
-                  mine={msg.role === "player"}
-                  avatar={msg.role === "player" ? "我" : profile?.name?.charAt(0) || "?"}
-                  content={msg.content}
-                  timestamp={msg.timestamp}
-                />
-              ))
+              (Array.isArray(profile?.messages) ? profile!.messages : []).map((msg) =>
+                msg.role === "system" ? (
+                  <SystemNote key={msg.id} content={msg.content} />
+                ) : (
+                  <Bubble
+                    key={msg.id}
+                    mine={msg.role === "player"}
+                    avatar={msg.role === "player" ? "我" : profile?.name?.charAt(0) || "?"}
+                    content={msg.content}
+                    timestamp={msg.timestamp}
+                  />
+                ),
+              )
             )}
 
             {/* 打字中 */}
@@ -380,6 +388,15 @@ export function NPCChatModal() {
         )}
       </div>
     </div>
+  );
+}
+
+/** 系统旁注：判定未过这类，居中一行小字，不占谁的气泡 */
+function SystemNote({ content }: { content: string }) {
+  return (
+    <p className="text-center font-serif text-[11px] leading-relaxed text-cinnabar-300/80 px-4">
+      {content}
+    </p>
   );
 }
 

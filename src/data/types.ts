@@ -2280,6 +2280,16 @@ export interface GameSnapshot {
   pacts?: Pact[];
   /** 舆图上的奇遇；撤销回合时要一并还原 */
   adventures?: Adventure[];
+  /** 已学的符箓配方；旧存档没有这一项 */
+  talismanRecipes?: TalismanRecipe[];
+  /** 已学的丹方；旧存档没有这一项 */
+  alchemyRecipes?: AlchemyRecipe[];
+  /** 各城大户人家，键为「城市编号:街区编号」；旧存档没有这一项 */
+  manors?: Record<string, Manor>;
+  /** 各城坊市铺面，键同 manors；旧存档没有这一项 */
+  markets?: Record<string, Market>;
+  /** 舆图上的宗门；旧存档没有这一项 */
+  sectSites?: SectSite[];
 }
 
 /**
@@ -2341,7 +2351,8 @@ export interface ConversationState {
   openingWarning?: string;
 }
 
-export type NPCChatRole = "player" | "npc";
+/** 单谈里的三种话：玩家说的、对方说的，以及系统的一句旁注（判定未过之类） */
+export type NPCChatRole = "player" | "npc" | "system";
 
 export interface NPCMessage {
   id: string;

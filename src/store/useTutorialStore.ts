@@ -12,7 +12,10 @@ interface TutorialState {
   activeId: TutorialId | null;
   step: number;
   seen: Partial<Record<TutorialId, boolean>>;
-  /** 起一套引导；同时只走一套，看过的除非 force，不再自动弹出 */
+  /** 在设置里永久关掉自动引导；手动从顶栏菜单重看仍可用 force */
+  disabled: boolean;
+  setDisabled: (disabled: boolean) => void;
+  /** 起一套引导；同时只走一套，看过的、或已永久关掉的，除非 force，不再自动弹出 */
   start: (id: TutorialId, force?: boolean) => void;
   next: () => void;
   prev: () => void;
@@ -27,11 +30,16 @@ export const useTutorialStore = create<TutorialState>()(
       activeId: null,
       step: 0,
       seen: {},
+      disabled: false,
+
+      // 关掉时把正走着的那一套一并收起，免得设置关上了、眼前还悬着半套
+      setDisabled: (disabled) =>
+        set(disabled ? { disabled, activeId: null, step: 0 } : { disabled }),
 
       start: (id, force = false) => {
-        const { activeId, seen } = get();
+        const { activeId, seen, disabled } = get();
         if (activeId) return;
-        if (!force && seen[id]) return;
+        if (!force && (disabled || seen[id])) return;
         set({ activeId: id, step: 0 });
       },
 
@@ -60,8 +68,9 @@ export const useTutorialStore = create<TutorialState>()(
     {
       name: "xiuxian-tutorial",
       version: 1,
-      // 走到哪一步不必留档：关掉页面再进来，从头再走一遍便是
-      partialize: (s) => ({ seen: s.seen }),
+      // 走到哪一步不必留档：关掉页面再进来，从头再走一遍便是；
+      // 永久关闭这一项要留着，设过便不再自动弹
+      partialize: (s) => ({ seen: s.seen, disabled: s.disabled }),
     },
   ),
 );

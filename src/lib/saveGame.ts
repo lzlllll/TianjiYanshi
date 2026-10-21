@@ -8,7 +8,7 @@
 
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
-import type { AISettings, ConversationState, GameSnapshot } from "@/data/types";
+import type { AISettings, ConversationState, GameSnapshot, NPCChatState } from "@/data/types";
 
 /** 存档格式版本；日后若改结构，导入端照它判断 */
 export const SAVE_VERSION = 2;
@@ -20,7 +20,7 @@ export const SAVE_ACCEPT = ".json,.gz,.json.gz";
 export interface SaveFileShape {
   v?: number;
   game?: unknown;
-  ai?: { settings?: unknown; conversation?: unknown };
+  ai?: { settings?: unknown; conversation?: unknown; npcChat?: unknown };
   timestamp?: number;
 }
 
@@ -28,17 +28,21 @@ export interface SaveFileShape {
 export function buildSavePayload(): {
   v: number;
   game: GameSnapshot;
-  ai: { settings: AISettings; conversation: ConversationState };
+  ai: { settings: AISettings; conversation: ConversationState; npcChat: Pick<NPCChatState, "profiles"> };
   timestamp: number;
 } {
   const game = useGameStore.getState().getSnapshot();
   const ai = useAIStore.getState();
-  // 只留真正要带走的东西：进度、设置与推演记录；
+  // 只留真正要带走的东西：进度、设置、推演记录，以及尘缘里各人说过的话；
   // 临时窗口状态不随存档走，免得读档一进来又弹出早先那一扇
   return {
     v: SAVE_VERSION,
     game,
-    ai: { settings: ai.settings, conversation: ai.conversation },
+    ai: {
+      settings: ai.settings,
+      conversation: ai.conversation,
+      npcChat: { profiles: Array.isArray(ai.npcChat.profiles) ? ai.npcChat.profiles : [] },
+    },
     timestamp: Date.now(),
   };
 }
@@ -55,6 +59,8 @@ export function applySavePayload(data: SaveFileShape | null | undefined): void {
   if (data.ai?.conversation) {
     useAIStore.getState().restoreConversation(data.ai.conversation as ConversationState);
   }
+  // 旧档没有这一项：一并清空，免得这一局还留着上一局跟人说过的话
+  useAIStore.getState().restoreNPCChat((data.ai?.npcChat ?? null) as Partial<NPCChatState> | null);
 }
 
 /** 存档可能被 gzip 压过：按魔数判断，压过的先解压，纯文本的照旧读 */

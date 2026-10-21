@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
+import { useTutorialStore } from "@/store/useTutorialStore";
 import { chatWithModel } from "@/lib/aiClient";
 import type { AISettings, ModelReasoningMode } from "@/data/types";
 import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
@@ -34,6 +35,8 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
   const setDeveloperMode = useAIStore((s) => s.setDeveloperMode);
   const randomEventDisabled = useAIStore((s) => s.randomEventDisabled);
   const setRandomEventDisabled = useAIStore((s) => s.setRandomEventDisabled);
+  const tutorialDisabled = useTutorialStore((s) => s.disabled);
+  const setTutorialDisabled = useTutorialStore((s) => s.setDisabled);
   const openCrafting = useAIStore((s) => s.openCrafting);
   const startBattle = useAIStore((s) => s.startBattle);
 
@@ -449,6 +452,35 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
                   className={cn(
                     "absolute top-1 h-4 w-4 rounded-full transition-transform",
                     draft.keepFullNarrative ? "left-7 bg-gold-400" : "left-1 bg-paper-400/50",
+                  )}
+                />
+              </button>
+            </div>
+          </section>
+
+          {/* 新手引导：拨上之后不再自动弹出，想重看可在顶栏菜单里手动打开 */}
+          <section>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <SectionLabel>新手引导</SectionLabel>
+                <p className="font-serif text-xs text-paper-400/50 mt-1 leading-relaxed">
+                  拨上之后，往后进游戏、开面板都不再自动弹出引导。想重看时，仍可在顶栏菜单里手动打开。
+                </p>
+              </div>
+              <button
+                onClick={() => setTutorialDisabled(!tutorialDisabled)}
+                className={cn(
+                  "relative h-6 w-12 shrink-0 rounded-full transition-colors",
+                  tutorialDisabled
+                    ? "bg-gold-500/30 border border-gold-400/50"
+                    : "bg-ink-700/50 border border-paper-400/20",
+                )}
+                aria-label="关闭新手引导"
+              >
+                <div
+                  className={cn(
+                    "absolute top-1 h-4 w-4 rounded-full transition-transform",
+                    tutorialDisabled ? "left-7 bg-gold-400" : "left-1 bg-paper-400/50",
                   )}
                 />
               </button>

@@ -736,6 +736,15 @@ function openChatFromNarrative(converse: { npc: string } | null): void {
 }
 
 /**
+ * 判定没过时，在对话里留一句旁注：考的是哪一门、掷了多少、差在哪儿。
+ * 对方的回话照旧把话头收住，玩家得知道自己这一考没接住。
+ */
+function checkFailNote(check: SkillCheck): string {
+  const tail = check.pending ? "这一句还悬着，往后或能再看。" : "话头便停在这里。";
+  return `〔判定未过 · ${check.skill}〕掷 ${check.roll} + Lv.${check.level} = ${check.total}，难度 ${check.dc}。${tail}`;
+}
+
+/**
  * 判定掷过之后，NPC 方才那半句话还悬着。
  * 这一句把结果交回给模型，请它顺着话头把该给的答案、该认的事说下去。
  */
@@ -991,6 +1000,8 @@ interface AIStore {
   compressNow: () => Promise<void>;
   clearConversation: () => void;
   restoreConversation: (conv: ConversationState) => void;
+  /** 读档时把尘缘里的交谈记录一并换回；存档里没有这一项便清空，免得留着上一局的话 */
+  restoreNPCChat: (chat?: Partial<NPCChatState> | null) => void;
   /**
    * 重开一局：把推演账与各扇临时窗口一并归零。
    * 起手开新游戏前必须叫一次，免得新局接着上一局的话头往下走。
@@ -3180,6 +3191,20 @@ export const useAIStore = create<AIStore>()(
         });
       },
 
+      restoreNPCChat: (chat) => {
+        // 只把人与话接回来；眼前开着的那一席、正打着字的那些，都是上一局的事，不随存档醒来
+        const profiles = Array.isArray(chat?.profiles) ? chat!.profiles : [];
+        set({
+          npcChat: {
+            ...INITIAL_NPC_CHAT,
+            profiles: profiles.map((p) => ({
+              ...p,
+              messages: Array.isArray(p.messages) ? p.messages : [],
+            })),
+          },
+        });
+      },
+
       maybeTriggerRandomEvent: (hours) => {
         const st = get();
         if (st.randomEvent.active || st.randomEvent.busy) return;
@@ -3951,7 +3976,10 @@ ${DIALOGUE_STYLE}`;
           .map((t) => `玩家：${t.input}\n叙述：${t.narrative.slice(0, 300)}`)
           .join("\n---\n");
 
-        const recentMessages = (Array.isArray(profile.messages) ? profile.messages : []).slice(-10);
+        // 旁注不进上文：那是给玩家看的，别让模型当成对方说过的话
+        const recentMessages = (Array.isArray(profile.messages) ? profile.messages : [])
+          .filter((m) => m.role !== "system")
+          .slice(-10);
         const chatHistory = recentMessages
           .map((m) => `${m.role === "player" ? "玩家" : profile.name}：${m.content}`)
           .join("\n");
@@ -4063,11 +4091,12 @@ ${craft ? 12 : 11}. ${isDining
          * 让它顺着话头再开一次口，把该给的答案交出来。
          */
         const deliverReply = async (raw: string, model: string) => {
-          const checkBox: { check: SkillCheck | null } = { check: null };
+          const checkBox: { check: SkillCheck | null; failed: SkillCheck | null } = { check: null, failed: null };
           const spoken = await reviewNarrative(
             settings,
             settleNPCMarks(raw, profile, (check) => {
               if (check.success) checkBox.check = check;
+              else checkBox.failed = check;
             }),
             signal,
           );
@@ -4084,6 +4113,19 @@ ${craft ? 12 : 11}. ${isDining
           if (cue) {
             handOffChatToNarration(profile.name, cue);
             return;
+          }
+
+          // 判定没过：当面留一句旁注，玩家得知道自己这一考没接住
+          if (checkBox.failed) {
+            appendNpcLine(
+              {
+                id: `msg-${Date.now()}-check`,
+                role: "system",
+                content: checkFailNote(checkBox.failed),
+                timestamp: Date.now(),
+              },
+              false,
+            );
           }
 
           if (!checkBox.check) return;
@@ -4238,8 +4280,10 @@ ${craft ? 12 : 11}. ${isDining
         // 生成对话摘要
         const activeProfile = state.npcChat.profiles.find((p) => p.npcId === state.npcChat.activeNpcId);
         let chatSummary = "";
-        if (activeProfile && activeProfile.messages.length >= 2) {
-          const recentMsgs = activeProfile.messages.slice(-8);
+        // 判定的旁注不必攒进记性里：那只是给玩家看的一句话
+        const spokenMessages = (activeProfile?.messages ?? []).filter((m) => m.role !== "system");
+        if (activeProfile && spokenMessages.length >= 2) {
+          const recentMsgs = spokenMessages.slice(-8);
           const lines: string[] = [];
           lines.push(`与「${activeProfile.name}」(${activeProfile.title})近期的交谈：`);
           for (const msg of recentMsgs) {
@@ -4401,6 +4445,8 @@ ${craft ? 12 : 11}. ${isDining
           for (const member of members) {
             const profile = await get().getOrCreateNPCProfile(member.id, member.name, member.title);
             const heard = transcript
+              // 旁注不进上文：那是给玩家看的，别让模型当成谁说过的话
+              .filter((m) => m.speakerId !== "system")
               .slice(-16)
               .map((m) => `${m.speakerName}：${m.content}`)
               .join("\n");
@@ -4445,11 +4491,12 @@ ${CRAFT_MARK}
               timeoutMs: 120000,
               retries: 1,
             });
-            const checkBox: { check: SkillCheck | null } = { check: null };
+            const checkBox: { check: SkillCheck | null; failed: SkillCheck | null } = { check: null, failed: null };
             const spoken = await reviewNarrative(
               settings,
               settleNPCMarks(raw, profile, (check) => {
                 if (check.success) checkBox.check = check;
+                else checkBox.failed = check;
               }),
             );
             // 席间有人把话引到了该转场的地方：这一句照旧入席，随后收窗转叙事
@@ -4469,6 +4516,21 @@ ${CRAFT_MARK}
             if (cue) {
               handOffChatToNarration(profile.name, cue);
               return;
+            }
+
+            // 判定没过：在席上留一句旁注，省得玩家以为对方只是不肯说
+            if (checkBox.failed) {
+              const note: NPCGroupMessage = {
+                id: `gmsg-${Date.now()}-${member.id}-check`,
+                role: "system",
+                speakerId: "system",
+                speakerName: "",
+                content: checkFailNote(checkBox.failed),
+                timestamp: Date.now(),
+              };
+              transcript = [...transcript, note];
+              set((st) => ({ npcChat: { ...st.npcChat, partyMessages: transcript } }));
+              noteDown([member.id], { id: note.id, role: "system", content: note.content, timestamp: note.timestamp });
             }
 
             // 同席里判定过了，也让这一位顺着话头把该交的底交出来
