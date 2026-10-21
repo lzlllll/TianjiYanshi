@@ -88,6 +88,24 @@ function isOpenAiOSeries(model: string): boolean {
 }
 
 /**
+ * Kimi K3 的思考档只收 0、0.6、1 三档温度，别的值整笔请求会被判成 invalid_request_error。
+ * 各处的温度偏好照旧，发出去之前就近归到这三档。
+ */
+const THINKING_TEMPERATURES = [0, 0.6, 1];
+
+function isThinkingTemperatureLocked(model: string, reasoning: boolean): boolean {
+  return reasoning && /kimi-k3/i.test(String(model ?? ""));
+}
+
+function snapThinkingTemperature(temperature: number): number {
+  let best = THINKING_TEMPERATURES[0];
+  for (const step of THINKING_TEMPERATURES) {
+    if (Math.abs(step - temperature) < Math.abs(best - temperature)) best = step;
+  }
+  return best;
+}
+
+/**
  * 请求体只在这一处生成。三处调用各写一份，参数适配迟早走岔。
  * 推理档与非推理档的差别全在这里收口：输出额度放宽、不硬要 response_format。
  */
@@ -103,6 +121,10 @@ function buildRequestBody(params: {
   const { model, messages, stream, temperature, reasoning, jsonMode } = params;
   const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
   const oSeries = isOpenAiOSeries(model);
+  // 思考档认得出的模型，温度须先归到它认的那几档
+  const appliedTemperature = isThinkingTemperatureLocked(model, reasoning)
+    ? snapThinkingTemperature(temperature)
+    : temperature;
 
   const body: Record<string, unknown> = { model, messages, stream };
   // o 系改名成 max_completion_tokens，且不认 temperature（传了会报错）
@@ -110,7 +132,7 @@ function buildRequestBody(params: {
     body.max_completion_tokens = maxTokens;
   } else {
     body.max_tokens = maxTokens;
-    body.temperature = temperature;
+    body.temperature = appliedTemperature;
   }
   // 部分推理模型不认 response_format，硬要 JSON 反倒报错；提示词里已写明「只输出 JSON」
   if (jsonMode && !reasoning) {

@@ -154,7 +154,7 @@ const DEFAULT_SETTINGS: AISettings = {
   // 是不是带思维链的推理模型，默认由模型名与运行时表现自行判断
   flashReasoning: "auto",
   proReasoning: "auto",
-  temperature: 0.85,
+  temperature: 1,
   customPrompt: "",
   // 默认不留全程正文：省些体积，要回看或导出时再开
   keepFullNarrative: false,
