@@ -645,6 +645,10 @@ export async function chatWithModelStream(
     onDelta?: (delta: string, full: string) => void;
     /** 思维链增量；推理模型先长思考才落笔，这一段不并入正文 */
     onReasoning?: (delta: string, fullReasoning: string) => void;
+    /** 单独指定温度；建档这类要合法 JSON 的活儿压低些，不必跟设置里那个随叙事起伏的温度走 */
+    temperature?: number;
+    /** 这一趟不必弹「内置服务繁忙」的提示窗：开局八门在后台并发跑，由开局的缺项提示统一交代 */
+    muteRateLimitNotice?: boolean;
   } = {},
 ): Promise<string> {
   assertAiReady(settings);
@@ -679,7 +683,7 @@ export async function chatWithModelStream(
         model,
         messages: convo,
         stream: true,
-        temperature: settings.temperature,
+        temperature: opts.temperature ?? settings.temperature,
         reasoning: isReasoningSlot(settings, slotOf(settings, model)),
       });
       const bodyStr = JSON.stringify(requestBody);
@@ -709,7 +713,7 @@ export async function chatWithModelStream(
         const errorDetail = errText.slice(0, 300) || resp.statusText;
         console.error(`[aiClient][stream] API Error ${resp.status}: ${errorDetail}`);
         // 内置服务（免费模型）被限流：弹一扇说明窗，别让玩家以为存档坏了
-        if (resp.status === 429 && !hasCustomApi(settings)) notifyAiRateLimit();
+        if (resp.status === 429 && !hasCustomApi(settings) && !opts.muteRateLimitNotice) notifyAiRateLimit();
         throw new Error(`接口返回 ${resp.status}：${errorDetail}`);
       }
 

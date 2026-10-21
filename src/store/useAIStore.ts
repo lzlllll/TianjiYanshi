@@ -1493,7 +1493,9 @@ async function runOpeningExtraction(
     terse = false,
     budgetMs = OPENING_CALL_TIMEOUT_MS,
   ) => {
-    const raw = await chatWithModel(
+    // 走流式：这一门的 JSON 动辄上千字，等它整段写完再回，往往先撞上转发层百秒的时限；
+    // 边写边收既不会半路被掐，撞上 length 时还会自动接着续写，截断的 JSON 也就少了
+    const raw = await chatWithModelStream(
       settings,
       model,
       buildOpeningDomainPrompt({
@@ -1507,9 +1509,6 @@ async function runOpeningExtraction(
         timeoutMs: budgetMs,
         // 单遍的时限之外还压着开局总时限：到点便断，别让这一门拖住整局
         signal: withinDeadline(signal, budgetMs),
-        jsonMode: true,
-        // 重打由下面那条补档梯子管，这里不再叠一层，免得一趟超时被算成两趟
-        retries: 0,
         // 建档要的是合法 JSON，不是文采，温度压低些，少出岔子
         temperature: 0.25,
         // 八门建档在后台跑，429 不必弹窗惊动玩家；哪一门没写全由开局的提示统一说明
