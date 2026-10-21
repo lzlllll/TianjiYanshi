@@ -59,6 +59,21 @@ const MAX_TOTAL_OPS = 200;
 /** 行囊能收的几格；叙事挑起的讲价买入时照这一列归一 */
 const ITEM_TYPES: InventoryItem["type"][] = ["材料", "丹药", "符箓", "法宝", "杂物", "灵兽"];
 
+/** 模型写出来的别称一律归到正名；认不出便当杂物 */
+const ITEM_TYPE_ALIASES: Record<string, InventoryItem["type"]> = {
+  药材: "材料", 矿石: "材料", 丹药: "丹药", 药: "丹药", 符: "符箓", 法器: "法宝",
+  兵器: "法宝", 宝物: "法宝", 灵宝: "法宝", 物品: "杂物", 杂物: "杂物",
+  // 活的灵兽模型常写成这些别称；归到灵兽，灵兽栏才认得出它
+  灵宠: "灵兽", 妖兽: "灵兽", 兽宠: "灵兽", 宠物: "灵兽", 坐骑: "灵兽",
+};
+
+/** 物品类别归一：正名照收，别称照表转，认不出的当杂物 */
+export function normalizeItemType(raw: unknown): InventoryItem["type"] {
+  const text = String(raw ?? "").trim();
+  if (ITEM_TYPES.includes(text as InventoryItem["type"])) return text as InventoryItem["type"];
+  return ITEM_TYPE_ALIASES[text] ?? "杂物";
+}
+
 export interface ParsedTurn {
   narrative: string;
   ops: DataOp[];
@@ -257,9 +272,8 @@ function parseHaggleBrief(content: string): HaggleBrief | null {
   const basePrice = Math.max(1, Math.min(999999, Math.round(Number(r.basePrice ?? r.price) || 1)));
   const shop = String(r.shop ?? r.place ?? "").trim() || "一处铺面";
   const rawType = String(r.itemType ?? r.type ?? "").trim();
-  const itemType = ITEM_TYPES.includes(rawType as InventoryItem["type"])
-    ? (rawType as InventoryItem["type"])
-    : undefined;
+  // 只写了类别才归一；没写便留空，落账时按寻常什物算
+  const itemType = rawType ? normalizeItemType(rawType) : undefined;
 
   return { mode, subject: subject.slice(0, 20), count, basePrice, keeper: keeper.slice(0, 16), shop: shop.slice(0, 30), itemType };
 }
@@ -1414,16 +1428,9 @@ const DEFAULT_ITEM_ELEMENTS: Record<string, Record<string, number>> = {
 export function normalizeItemElements(item: any): any {
   if (!item || typeof item !== "object") return item;
 
-  // 行囊条目的类别与品阶只认这几样，模型写的别称一律归到最普通的那一档
-  const ITEM_TYPES = ["材料", "丹药", "符箓", "法宝", "杂物", "灵兽"];
+  // 行囊条目的类别与品阶只认这几样，模型写的别称一律归到正名
   const ITEM_GRADES = ["凡品", "灵品", "玄品", "天品", "仙品"];
-  const TYPE_ALIASES: Record<string, string> = {
-    药材: "材料", 矿石: "材料", 丹药: "丹药", 药: "丹药", 符: "符箓", 法器: "法宝",
-    兵器: "法宝", 宝物: "法宝", 灵宝: "法宝", 物品: "杂物", 杂物: "杂物",
-  };
-  if (!ITEM_TYPES.includes(item.type)) {
-    item.type = TYPE_ALIASES[String(item.type ?? "").trim()] || "杂物";
-  }
+  item.type = normalizeItemType(item.type);
   if (!ITEM_GRADES.includes(item.grade)) {
     item.grade = "凡品";
   }

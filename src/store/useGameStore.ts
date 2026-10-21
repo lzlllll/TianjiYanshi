@@ -3008,8 +3008,12 @@ EFFECT: [效果描述]`,
         const item = st.inventory.find((i) => i.id === itemId);
         if (!item) return false;
         const beast = beastFromItem(item);
-        // 收作随身之后就不再算行囊里的一件东西了
-        const inventory = st.inventory.filter((i) => i.id !== itemId);
+        // 收作随身之后就不再算行囊里的一件东西了；
+        // 同一格摞着几头的，只牵走一头，余下的仍留在行囊里
+        const inventory =
+          item.count > 1
+            ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: i.count - 1 } : i))
+            : st.inventory.filter((i) => i.id !== itemId);
         set({
           beast,
           inventory,

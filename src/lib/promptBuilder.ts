@@ -865,7 +865,7 @@ export function buildProPrompt(params: {
 - 不要写标题、前言、总结或对玩家的点评，直接开始叙事
 - ${opening
     ? "开篇这一轮只立人物、铺世界，不得写成你来我往的逐回合交锋，也不得输出任何标记"
-    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>battle<<<END>>>。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。若本轮叙事里有人（须是摘要中 relations 里认得的人）当面与玩家搭话、话头正等玩家来接，便在正文写完之后另起一行输出一行 <<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>——npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。战斗标记（battle／SECTWAR 二择其一）、讲价标记、铺面标记与对谈标记不可同时出现；除这几行之外不得出现任何标记`}
+    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>battle<<<END>>>。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名","itemType":"买的是哪一类"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；itemType 只在买时写，取 材料、丹药、符箓、法宝、灵兽、杂物 之一，买的是活的灵兽便写「灵兽」；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。若本轮叙事里有人（须是摘要中 relations 里认得的人）当面与玩家搭话、话头正等玩家来接，便在正文写完之后另起一行输出一行 <<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>——npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。战斗标记（battle／SECTWAR 二择其一）、讲价标记、铺面标记与对谈标记不可同时出现；除这几行之外不得出现任何标记`}
 
 ${PROSE_STYLE}
 【笔法】不做大段的解释与直接的心理独白，心境借行为与环境暗示；对话高度生活化，用来推动剧情、显露人情；环境描写要有用处，能带出时间与变化。
@@ -1020,7 +1020,7 @@ export function buildOpsExtractionPrompt(params: {
 1. 只输出叙事中确实发生的变化，没有发生就不要编造；本轮若无任何变化，ops 输出空数组。
 2. 数值幅度必须与叙事相符，不要夸大，也不要凭空赠送珍稀物品。
 3. 时间：每轮都要回传最新日期。正文里时间若确实走动，用 modify currentTime.year / currentTime.month / currentTime.day / currentTime.hour 把它写足；时辰字段只写十二时辰的名字，取 ${SHICHEN_NAMES.join("、")} 之一；时间没动就照原值再写一遍。当前时间：${formatGameTime(now)}。
-4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
+4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复；物品的 type 只取 材料、丹药、符箓、法宝、灵兽、杂物 之一——叙事里收服、买下一头活物，就用 add inventory 记下，type 写「灵兽」、name 写兽的名目，玩家往后可在灵兽栏把它收作随身；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
 5. 可修改的玩家字段：player.name、player.title、player.realmIndex、player.cultivation、player.hp、player.hpMax、player.mp、player.mpMax、player.spirit、player.spiritMax、player.lifespanCurrent、player.lifespanMax、player.body、player.fortune、player.karma、player.personality、player.description、player.background、player.spiritRoots.<元素>、player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。
 6. 新闻 news.items 仅在跨天时新增，同一天内不要重复生成；每条需含 category（官府公告/宗门布告/市井传言）、title、content、source 四个字段。
 7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。心法类可在 skills 里留一招以气血换灵力的招式，写明 hpCost 与 mpRestore；其余门类不写这两项。
@@ -1136,7 +1136,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
     id: "treasure",
     label: "财宝",
     spec: `只产出随身物品与灵石：
-- 逐件 add inventory，每件 {"id","name","type","grade","count","icon","desc"}；type 只取 材料、丹药、符箓、法宝、杂物；grade 只取 凡品、灵品、玄品、天品、仙品；icon 为一个汉字；count 为整数；desc 不少于 20 字，写明外观或用途
+- 逐件 add inventory，每件 {"id","name","type","grade","count","icon","desc"}；type 只取 材料、丹药、符箓、法宝、灵兽、杂物；grade 只取 凡品、灵品、玄品、天品、仙品；icon 为一个汉字；count 为整数；desc 不少于 20 字，写明外观或用途。开局若带着一头活的灵兽（有名字、有来历的那种），type 写「灵兽」，name 写兽的名目，往后玩家可在灵兽栏把它收作随身
 - type 为 材料 或 丹药 的，必须额外给出 elements：由 金木水火土风雷冰暗 中的 1 至 3 种构成，形如 {"木":80,"土":20}，取值为 -100 到 100。这是炼丹火候与元素判定的依据，不可省略
 - 产出 5 至 8 件，其中至少一件是有来历的私人物件（如残玉、旧剑、母亲留下的香囊），并在 desc 中交代来历
 - 灵石：modify spiritStones.low、spiritStones.mid、spiritStones.high、spiritStones.supreme，均为整数；数量要与角色身份相称，底层弟子不应持有上品以上灵石`,

@@ -34,8 +34,10 @@ export function BeastPanel() {
   const tameBeast = useGameStore((s) => s.tameBeast);
   const releaseBeast = useGameStore((s) => s.releaseBeast);
 
-  // 行囊里还养着的兽：灵兽栏买下的那一类
-  const candidates: InventoryItem[] = inventory.filter((i) => i.type === "灵兽" && i.count > 0);
+  // 行囊里还养着的兽：灵兽栏买下的那一类；笼上蒙着布、还看不出是什么的旧物，得先鉴过再说
+  const candidates: InventoryItem[] = inventory.filter(
+    (i) => i.type === "灵兽" && i.count > 0 && !i.mystery,
+  );
 
   return (
     <div className="space-y-4">

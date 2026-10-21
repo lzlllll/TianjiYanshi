@@ -65,8 +65,8 @@ export function beastFromItem(item: InventoryItem): SpiritBeast {
   const scale = GRADE_SCALE[item.grade] ?? 1;
   const hpMax = roll(Math.round(26 * scale), 6);
   return {
-    name: item.name.slice(0, 20),
-    desc: item.desc.slice(0, 80),
+    name: String(item.name ?? "").slice(0, 20) || "无名之兽",
+    desc: String(item.desc ?? "").slice(0, 80),
     temper: TEMPERS[Math.floor(Math.random() * TEMPERS.length)],
     icon: item.icon && item.icon.trim() ? item.icon.trim().slice(0, 1) : "兽",
     hp: hpMax,
