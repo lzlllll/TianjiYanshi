@@ -165,6 +165,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const streamingNarrative = conversation.streamingNarrative ?? "";
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
   const streaming = stage === "pro" && !!streamingNarrative;
+  // 正文要过完内容闸才上屏，未开闸之前没有 streamingNarrative，仍得让玩家看见这一回在推演
+  const generating = stage === "pro" && !streamingNarrative;
   const displayNarrative = streaming ? streamingNarrative : lastTurn?.narrative ?? "";
   const streamingReasoning = conversation.streamingReasoning ?? "";
   // 推理模型先长一段思考才落笔：正文还没出、思维链已经来了，便把「正在思考」亮出来，
@@ -254,20 +256,24 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
             data-tutorial="story-narrative"
             className="flex-1 overflow-y-auto pr-2 min-h-0"
           >
-            {thinking ? (
+            {thinking || generating ? (
               <div className="rounded border border-gold-500/25 bg-ink-800/40 px-4 py-3">
                 <div className="flex items-center gap-2 font-serif text-sm text-gold-400/90">
                   <Loader2 size={13} className="animate-spin shrink-0" />
-                  模型正在思考…（{streamingReasoning.length} 字）
+                  {streamingReasoning
+                    ? `模型正在思考…（${streamingReasoning.length} 字）`
+                    : "正在推演这一回…"}
                 </div>
-                <details className="mt-2">
-                  <summary className="cursor-pointer font-serif text-xs text-paper-400/60 select-none">
-                    展开思维链
-                  </summary>
-                  <div className="mt-2 max-h-64 overflow-y-auto font-serif text-xs text-paper-400/80 leading-relaxed whitespace-pre-wrap">
-                    {streamingReasoning}
-                  </div>
-                </details>
+                {streamingReasoning && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer font-serif text-xs text-paper-400/60 select-none">
+                      展开思维链
+                    </summary>
+                    <div className="mt-2 max-h-64 overflow-y-auto font-serif text-xs text-paper-400/80 leading-relaxed whitespace-pre-wrap">
+                      {streamingReasoning}
+                    </div>
+                  </details>
+                )}
               </div>
             ) : turns.length === 0 && !streamingNarrative ? (
               <EmptyState />

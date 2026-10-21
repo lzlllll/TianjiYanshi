@@ -41,6 +41,7 @@ import type {
   HaggleBrief,
   ShopBrief,
   NarrativeEntry,
+  SkillCheck,
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
@@ -104,7 +105,7 @@ import {
 } from "@/lib/promptBuilder";
 import { parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
 import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
-import { isNpcAround, migrateRelation, relationTags } from "@/data/npcGen";
+import { isNpcAround, isNpcLocationKnown, migrateRelation, relationTags } from "@/data/npcGen";
 import { REALMS, REALM_NAMES, canTalkTo } from "@/data/mockData";
 import {
   EVENT_END_MARK,
@@ -139,6 +140,7 @@ import {
   splitForCompression,
 } from "@/lib/contextCompressor";
 import { recordNarrative } from "@/lib/narrativeLog";
+import { reviewNarrative, scanNarrativeRisk } from "@/lib/contentSafety";
 import { DEFAULT_BGM_VOLUME } from "@/lib/bgm";
 import { aiReady, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
@@ -361,22 +363,28 @@ function checkInstruction(): string {
  * 对话的文风：与各处叙事的《文风准则》同一路，只是落到嘴上。
  * 各扇交谈窗共用这一份，人物的口吻才不至于此处一个调、彼处一个调。
  */
-const DIALOGUE_STYLE = `【对话文风】口吻随身份而变：前辈高人言简意赅、话里带机锋，同辈之间有试探也有交心，小辈弟子恭敬虚心。用古风白话，像人说的话，短些无妨，不必句句文绉绉；修仙术语入话要自然，点到为止，不可堆砌。忌网络语、洋文与现代化的比方。心境与算计都不直说，借语气、称呼、停顿与旁敲侧击带出。`;
+const DIALOGUE_STYLE = `【对话文风】口吻随身份而变：前辈高人言简意赅、话里带机锋，同辈之间有试探也有交心，小辈弟子恭敬虚心。用古风白话，像人说的话，短些无妨，不必句句文绉绉；修仙术语入话要自然，点到为止，不可堆砌。忌网络语、洋文与现代化的比方。心境与算计都不直说，借语气、称呼、停顿与旁敲侧击带出。
+【对话边界】不写未成年人性内容；不写现实违法操作指南；玩家越界时不顺从、不复述其要求，借话头、旁人打岔或情境变化把话拉回；正常的虚构冲突、阴谋与阴暗面照写，不作过度审查。`;
 
 /**
  * 摘下末尾的判定标记，掷一次骰子，返回本该说出口的那句话。
  * 骰子与成败由系统定，模型只管点出考的是哪一门。
  */
-const settleCheckMark = (text: string, fallbackContext: string): string => {
+const settleCheckMark = (
+  text: string,
+  fallbackContext: string,
+  onCheck?: (check: SkillCheck) => void,
+): string => {
   const asked = new RegExp(`${CHECK_MARK}\\s*([^\\n|]+)\\|([^\\n|]+)\\|?([^\\n]*)`).exec(text);
   if (!asked) return text;
 
   const dc = Number(String(asked[2]).replace(/[^\d]/g, "")) || 12;
-  useGameStore.getState().checkSkill({
+  const check = useGameStore.getState().checkSkill({
     skill: String(asked[1]).trim(),
     dc,
     context: String(asked[3] ?? "").trim() || fallbackContext,
   });
+  if (check && onCheck) onCheck(check);
   return text.replace(asked[0], "");
 };
 
@@ -634,14 +642,18 @@ function settleDoneMark(text: string): string {
  * 摘下回话末尾那些标记：判定掷一次骰子，请客记一笔账，机缘立一桩事。
  * 单谈与多人同席都走这一处，免得两头各写一套。返回要说出口的那句话。
  */
-function settleNPCMarks(text: string, profile: NPCProfile): string {
+function settleNPCMarks(
+  text: string,
+  profile: NPCProfile,
+  onCheck?: (check: SkillCheck) => void,
+): string {
   const scene = profile.scene;
   // 只有坐在客栈茶棚的堂里才谈得上做东叫菜；牙行柜前没有这一说
   const isDining = scene?.kind === "客栈" || scene?.kind === "茶棚";
   // 作坊里的场面才谈得上定做东西
   const offer = scene?.craft ? parseCraftOffer(text) : null;
 
-  let spoken = settleCheckMark(text, `${profile.name}问起的一桩事`);
+  let spoken = settleCheckMark(text, `${profile.name}问起的一桩事`, onCheck);
   spoken = settleQuestMark(spoken, profile.name, brokerFromScene(scene));
   spoken = settleDoneMark(spoken);
   // 说定的事记成一桩口头之约
@@ -676,6 +688,16 @@ function settleNPCMarks(text: string, profile: NPCProfile): string {
   spoken = spoken.split(TREAT_MARK).join("");
 
   return spoken.replace(/^\s+|\s+$/g, "") || text.trim();
+}
+
+/**
+ * 判定掷过之后，NPC 方才那半句话还悬着。
+ * 这一句把结果交回给模型，请它顺着话头把该给的答案、该认的事说下去。
+ */
+function checkPassedInstruction(profile: NPCProfile, check: SkillCheck): string {
+  return `【系统判定】玩家方才就「${check.context}」考较「${check.skill}」：掷 ${check.roll} + Lv.${check.level} = ${check.total}，难度 ${check.dc}，判定已通过。
+你方才话到关键处停住了。请以「${profile.name}」的身份顺着刚才的话头接着说下去，把通过之后该给的答案、该认的事、该交的底交出来。
+不要重复已经说过的话，不要再考较同一件事，也不要输出任何判定、机缘、了事或约定标记。50 到 200 字，古风白话，只输出你要说的这段话。`;
 }
 
 const INITIAL_BATTLE: BattleState = {
@@ -2195,6 +2217,7 @@ export const useAIStore = create<AIStore>()(
         // Pro 只生成叙事正文
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
+          let streamBlocked = false;
           set((st) => ({
             conversation: { ...st.conversation, streamingNarrative: "", streamingReasoning: "" },
           }));
@@ -2216,6 +2239,9 @@ export const useAIStore = create<AIStore>()(
               signal,
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
+                // 高风险文字不上屏：一旦扫到，就把画面停在上一段干净的文字上
+                if (!streamBlocked && scanNarrativeRisk(full)) streamBlocked = true;
+                if (streamBlocked) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
               },
               onReasoning: (_delta, fullReasoning) => {
@@ -2224,19 +2250,23 @@ export const useAIStore = create<AIStore>()(
               },
             },
           );
-          set((st) => ({
-            conversation: {
-              ...st.conversation,
-              lastProDuration: Date.now() - proStart,
-              lastRawOutput: proRaw,
-            },
-          }));
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
-          return parsed.narrative;
+          const reviewed = await reviewNarrative(settings, parsed.narrative, signal);
+          if ((streamBlocked || reviewed !== parsed.narrative) && !signal.aborted) {
+            set((st) => ({ conversation: { ...st.conversation, streamingNarrative: reviewed } }));
+          }
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              lastProDuration: Date.now() - proStart,
+              lastRawOutput: reviewed === parsed.narrative ? proRaw : reviewed,
+            },
+          }));
+          return reviewed;
         };
 
         try {
@@ -2503,6 +2533,7 @@ export const useAIStore = create<AIStore>()(
 
         const generateNarrative = async (model: string): Promise<string> => {
           const proStart = Date.now();
+          let streamBlocked = false;
           set((st) => ({
             conversation: { ...st.conversation, streamingNarrative: "", streamingReasoning: "" },
           }));
@@ -2524,6 +2555,9 @@ export const useAIStore = create<AIStore>()(
               signal,
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
+                // 高风险文字不上屏：一旦扫到，就把画面停在上一段干净的文字上
+                if (!streamBlocked && scanNarrativeRisk(full)) streamBlocked = true;
+                if (streamBlocked) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
               },
               onReasoning: (_delta, fullReasoning) => {
@@ -2532,19 +2566,23 @@ export const useAIStore = create<AIStore>()(
               },
             },
           );
-          set((st) => ({
-            conversation: {
-              ...st.conversation,
-              lastProDuration: Date.now() - proStart,
-              lastRawOutput: proRaw,
-            },
-          }));
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
-          return parsed.narrative;
+          const reviewed = await reviewNarrative(settings, parsed.narrative, signal);
+          if ((streamBlocked || reviewed !== parsed.narrative) && !signal.aborted) {
+            set((st) => ({ conversation: { ...st.conversation, streamingNarrative: reviewed } }));
+          }
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              lastProDuration: Date.now() - proStart,
+              lastRawOutput: reviewed === parsed.narrative ? proRaw : reviewed,
+            },
+          }));
+          return reviewed;
         };
 
         try {
@@ -2792,6 +2830,8 @@ export const useAIStore = create<AIStore>()(
         // Pro 只重新生成叙事正文
         let narrative = "";
         let proRaw = "";
+        let rawNarrative = "";
+        let streamBlocked = false;
         let narrativeMode: string | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
@@ -2823,6 +2863,9 @@ export const useAIStore = create<AIStore>()(
               signal,
               onDelta: (_delta, full) => {
                 if (signal.aborted) return;
+                // 高风险文字不上屏：一旦扫到，就把画面停在上一段干净的文字上
+                if (!streamBlocked && scanNarrativeRisk(full)) streamBlocked = true;
+                if (streamBlocked) return;
                 set((st) => ({ conversation: { ...st.conversation, streamingNarrative: full } }));
               },
               onReasoning: (_delta, fullReasoning) => {
@@ -2837,7 +2880,11 @@ export const useAIStore = create<AIStore>()(
           narrativeSectWar = parsedRetry.sectWar;
           narrativeHaggle = parsedRetry.haggle;
           narrativeShop = parsedRetry.shop;
-          narrative = parsedRetry.narrative;
+          rawNarrative = parsedRetry.narrative;
+          narrative = await reviewNarrative(settings, rawNarrative, signal);
+          if ((streamBlocked || narrative !== rawNarrative) && !signal.aborted) {
+            set((st) => ({ conversation: { ...st.conversation, streamingNarrative: narrative } }));
+          }
         } catch (e) {
           if (signal.aborted) return;
           set((st) => ({
@@ -2924,7 +2971,7 @@ export const useAIStore = create<AIStore>()(
               narrativeLog: keepNarrativeOf(st, regenerated),
               quickDecisions: extraction.quickDecisions,
               stage: "done",
-              lastRawOutput: proRaw,
+              lastRawOutput: narrative === rawNarrative ? proRaw : narrative,
               streamingNarrative: "",
               streamingReasoning: "",
             },
@@ -3891,6 +3938,81 @@ ${craft ? 11 : 10}. ${isDining
           },
         ];
 
+        /** 把一句 NPC 回话添进这一席 */
+        const appendNpcLine = (msg: NPCMessage, typing: boolean) => {
+          set((st) => ({
+            npcChat: {
+              ...st.npcChat,
+              isTyping: typing,
+              profiles: (Array.isArray(st.npcChat.profiles) ? st.npcChat.profiles : []).map((p) =>
+                p.npcId === npcId
+                  ? { ...p, messages: [...(Array.isArray(p.messages) ? p.messages : []), msg], lastUpdated: Date.now() }
+                  : p,
+              ),
+            },
+          }));
+        };
+
+        /**
+         * 判定过了，NPC 方才那半句话还悬着：把结果交回模型，
+         * 让它顺着话头再开一次口，把该给的答案交出来。
+         */
+        const deliverReply = async (raw: string, model: string) => {
+          const checkBox: { check: SkillCheck | null } = { check: null };
+          const spoken = await reviewNarrative(
+            settings,
+            settleNPCMarks(raw, profile, (check) => {
+              if (check.success) checkBox.check = check;
+            }),
+            signal,
+          );
+          if (signal.aborted) return;
+
+          appendNpcLine(
+            { id: `msg-${Date.now()}`, role: "npc", content: spoken, timestamp: Date.now() },
+            !!checkBox.check,
+          );
+
+          if (!checkBox.check) return;
+          const passed = checkBox.check;
+          try {
+            const followRaw = await chatWithModel(
+              settings,
+              model,
+              [
+                ...prompt,
+                { role: "assistant" as const, content: spoken },
+                { role: "system" as const, content: checkPassedInstruction(profile, passed) },
+              ],
+              { timeoutMs: 120000, signal, retries: 1 },
+            );
+            if (signal.aborted) return;
+
+            const followSpoken = await reviewNarrative(
+              settings,
+              settleNPCMarks(followRaw, profile),
+              signal,
+            );
+            if (signal.aborted || !followSpoken.trim()) return;
+
+            appendNpcLine(
+              {
+                id: `msg-${Date.now()}-cont`,
+                role: "npc",
+                content: followSpoken,
+                timestamp: Date.now(),
+              },
+              false,
+            );
+          } catch (e) {
+            if (!signal.aborted) console.warn("[sendNPCMessage] 判定通过后的续话未成:", e);
+          } finally {
+            if (!signal.aborted) {
+              set((st) => ({ npcChat: { ...st.npcChat, isTyping: false } }));
+            }
+          }
+        };
+
         try {
           const raw = await chatWithModel(settings, settings.proModel, prompt, {
             timeoutMs: 120000,
@@ -3900,24 +4022,7 @@ ${craft ? 11 : 10}. ${isDining
 
           if (signal.aborted) return;
 
-          const npcMsg: NPCMessage = {
-            id: `msg-${Date.now()}`,
-            role: "npc",
-            content: settleNPCMarks(raw, profile),
-            timestamp: Date.now(),
-          };
-
-          set((st) => ({
-            npcChat: {
-              ...st.npcChat,
-              isTyping: false,
-              profiles: (Array.isArray(st.npcChat.profiles) ? st.npcChat.profiles : []).map((p) =>
-                p.npcId === npcId
-                  ? { ...p, messages: [...(Array.isArray(p.messages) ? p.messages : []), npcMsg], lastUpdated: Date.now() }
-                  : p,
-              ),
-            },
-          }));
+          await deliverReply(raw, settings.proModel);
         } catch (e) {
           if (signal.aborted) return;
           const errorMsg = (e as Error).message;
@@ -3935,24 +4040,7 @@ ${craft ? 11 : 10}. ${isDining
 
               if (signal.aborted) return;
 
-              const npcMsg: NPCMessage = {
-                id: `msg-${Date.now()}`,
-                role: "npc",
-                content: settleNPCMarks(raw, profile),
-                timestamp: Date.now(),
-              };
-
-              set((st) => ({
-                npcChat: {
-                  ...st.npcChat,
-                  isTyping: false,
-                  profiles: (Array.isArray(st.npcChat.profiles) ? st.npcChat.profiles : []).map((p) =>
-                    p.npcId === npcId
-                      ? { ...p, messages: [...(Array.isArray(p.messages) ? p.messages : []), npcMsg], lastUpdated: Date.now() }
-                      : p,
-                  ),
-                },
-              }));
+              await deliverReply(raw, settings.flashModel);
             } catch (fallbackErr) {
               console.error("[sendNPCMessage] Flash模型降级也失败:", fallbackErr);
               set((st) => ({
@@ -3984,6 +4072,16 @@ ${craft ? 11 : 10}. ${isDining
         if (!scene) {
           const gs = useGameStore.getState();
           const rel = (gs.relations || []).find((r) => r.id === npcId);
+          // 行踪不定的人，神念也无处可寻：修为再高也开不了口
+          if (!isNpcLocationKnown(rel)) {
+            set((st) => ({
+              npcChat: {
+                ...st.npcChat,
+                errorMsg: `「${rel?.name || "此人"}」行踪不定，纵有神念也寻不着，无从开口。`,
+              },
+            }));
+            return;
+          }
           const samePlace = isNpcAround(rel, {
             placeId: gs.currentPlaceId,
             placeName: useGameStore.getState().hereLabel(),
@@ -4231,7 +4329,13 @@ ${CRAFT_MARK}
               timeoutMs: 120000,
               retries: 1,
             });
-            const spoken = settleNPCMarks(raw, profile);
+            const checkBox: { check: SkillCheck | null } = { check: null };
+            const spoken = await reviewNarrative(
+              settings,
+              settleNPCMarks(raw, profile, (check) => {
+                if (check.success) checkBox.check = check;
+              }),
+            );
             const line: NPCGroupMessage = {
               id: `gmsg-${Date.now()}-${member.id}`,
               role: "npc",
@@ -4243,6 +4347,46 @@ ${CRAFT_MARK}
             transcript = [...transcript, line];
             set((st) => ({ npcChat: { ...st.npcChat, partyMessages: transcript } }));
             noteDown([member.id], { id: line.id, role: "npc", content: spoken, timestamp: line.timestamp });
+
+            // 同席里判定过了，也让这一位顺着话头把该交的底交出来
+            if (checkBox.check) {
+              try {
+                const followRaw = await chatWithModel(
+                  settings,
+                  settings.proModel,
+                  [
+                    ...prompt,
+                    { role: "assistant" as const, content: spoken },
+                    { role: "system" as const, content: checkPassedInstruction(profile, checkBox.check) },
+                  ],
+                  { timeoutMs: 120000, retries: 1 },
+                );
+                const followSpoken = await reviewNarrative(
+                  settings,
+                  settleNPCMarks(followRaw, profile),
+                );
+                if (followSpoken.trim()) {
+                  const followLine: NPCGroupMessage = {
+                    id: `gmsg-${Date.now()}-${member.id}-cont`,
+                    role: "npc",
+                    speakerId: member.id,
+                    speakerName: profile.name,
+                    content: followSpoken,
+                    timestamp: Date.now(),
+                  };
+                  transcript = [...transcript, followLine];
+                  set((st) => ({ npcChat: { ...st.npcChat, partyMessages: transcript } }));
+                  noteDown([member.id], {
+                    id: followLine.id,
+                    role: "npc",
+                    content: followSpoken,
+                    timestamp: followLine.timestamp,
+                  });
+                }
+              } catch (e) {
+                console.warn("[sendPartyMessage] 判定通过后的续话未成:", e);
+              }
+            }
           }
         } catch (e) {
           set((st) => ({ npcChat: { ...st.npcChat, errorMsg: (e as Error).message } }));

@@ -8,7 +8,7 @@ import { ReputationPanel } from "@/panels/ReputationPanel";
 import { BeastPanel } from "@/panels/BeastPanel";
 import { cn } from "@/lib/utils";
 import { migrateRelation, trustName } from "@/data/npcGen";
-import { MAX_TRAVEL_COMPANIONS, isNpcAround, relationTags, relationWhereabout, travelingCount } from "@/data/npcGen";
+import { MAX_TRAVEL_COMPANIONS, isNpcAround, isNpcLocationKnown, relationTags, relationWhereabout, travelingCount } from "@/data/npcGen";
 import { REALM_NAMES, TALK_MIN_REALM_INDEX, canTalkTo } from "@/data/mockData";
 import type { Relation, RelationType } from "@/data/types";
 import { Footprints, MessageCircle } from "lucide-react";
@@ -195,9 +195,10 @@ function RelationCard({ relation }: { relation: Relation }) {
   const c = TYPE_COLOR[relation.type] || DEFAULT_RELATION_COLOR;
   const isEnemy = relation.type === "enemy";
   const isCompanion = relation.type === "dao_companion";
-  // 人在一处随时可谈；不在一处，须到金丹以上方能以神念传音
+  // 人在一处随时可谈；不在一处，须到金丹以上方能以神念传音；行踪不定的，修为再高也寻不着
+  const locationKnown = isNpcLocationKnown(relation);
   const samePlace = isNpcAround(relation, { placeId: currentPlaceId, placeName });
-  const canTalk = canTalkTo(realmIndex, samePlace);
+  const canTalk = canTalkTo(realmIndex, samePlace, locationKnown);
   const traveling = !!relation.traveling;
   const partyFull = companions >= MAX_TRAVEL_COMPANIONS;
 
@@ -316,7 +317,9 @@ function RelationCard({ relation }: { relation: Relation }) {
               ? samePlace
                 ? "当面攀谈"
                 : "以神念传音"
-              : "他不在近前；未到金丹，传不出这一声"
+              : !locationKnown
+                ? "此人行踪不定，无从交谈"
+                : "他不在近前；未到金丹，传不出这一声"
           }
         >
           <MessageCircle size={12} className="mr-1" />
@@ -331,11 +334,13 @@ function RelationCard({ relation }: { relation: Relation }) {
             title={
               traveling
                 ? "就此作别，各走各的路"
-                : !samePlace
-                  ? "他不在近前，须先与他在一处才好同行"
-                  : partyFull
-                    ? `至多带 ${MAX_TRAVEL_COMPANIONS} 人同行`
-                    : "邀他同行；遇上打斗他会站到你这一边"
+                : !locationKnown
+                  ? "此人行踪不定，寻不着人，邀不动"
+                  : !samePlace
+                    ? "他不在近前，须先与他在一处才好同行"
+                    : partyFull
+                      ? `至多带 ${MAX_TRAVEL_COMPANIONS} 人同行`
+                      : "邀他同行；遇上打斗他会站到你这一边"
             }
           >
             <Footprints size={12} className="mr-1" />
@@ -346,8 +351,10 @@ function RelationCard({ relation }: { relation: Relation }) {
 
       {!canTalk && (
         <p className="mt-1.5 font-serif text-[11px] text-paper-400/45">
-          他眼下在{relationWhereabout(relation, districtNames)}，与你相隔两地。
-          你才{REALM_NAMES[realmIndex] ?? "引气初期"}，未到{REALM_NAMES[TALK_MIN_REALM_INDEX] ?? "金丹初期"}，还传不出这一声神念；须得与他在一处才好说话。
+          {!locationKnown
+            ? "此人行踪不定，纵到金丹也传不出这一声神念；须先寻着他的下落。"
+            : `他眼下在${relationWhereabout(relation, districtNames)}，与你相隔两地。
+          你才${REALM_NAMES[realmIndex] ?? "引气初期"}，未到${REALM_NAMES[TALK_MIN_REALM_INDEX] ?? "金丹初期"}，还传不出这一声神念；须得与他在一处才好说话。`}
         </p>
       )}
     </ScrollCard>

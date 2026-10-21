@@ -83,9 +83,15 @@ export function canConverse(realmIndex: number | undefined): boolean {
 /**
  * 能不能与这人交谈。
  * 人在一处，随时可谈，不必讲境界；
- * 不在一处，须到金丹以上，方能以神念传音。
+ * 不在一处，须到金丹以上，方能以神念传音；
+ * 行踪不定的人，纵有神念也寻不着，修为再高也谈不成。
  */
-export function canTalkTo(realmIndex: number | undefined, samePlace: boolean): boolean {
+export function canTalkTo(
+  realmIndex: number | undefined,
+  samePlace: boolean,
+  locationKnown = true,
+): boolean {
+  if (!locationKnown) return false;
   return samePlace || canConverse(realmIndex);
 }
 

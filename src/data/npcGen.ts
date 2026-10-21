@@ -348,17 +348,25 @@ function samePlaceName(a?: string, b?: string): boolean {
 /**
  * 这人眼下是不是与你在一处。
  * 同行的人自然在一处；写明了所在地的比地名；
- * 只记下城池的比城池；什么都没记下的不挡着，照旧算作在一处。
+ * 只记下城池的比城池；从没定下行踪的，便不算在一处。
  */
 export function isNpcAround(
   r: Relation | undefined,
   here: { placeId?: string; placeName?: string },
 ): boolean {
-  if (!r) return true;
+  if (!r) return false;
   if (r.traveling) return true;
   if (r.location) return samePlaceName(r.location, here.placeName);
   if (r.cityId) return r.cityId === here.placeId;
-  return true;
+  return false;
+}
+
+/** 这人的行踪是否有据可查：同行、写明了地点，或至少知道在哪座城 */
+export function isNpcLocationKnown(r: Relation | undefined): boolean {
+  if (!r) return false;
+  if (r.traveling) return true;
+  if (r.location && r.location.trim()) return true;
+  return !!(r.cityId && r.cityId.trim());
 }
 
 /** 至多带几个人同行；再多，一路上不像话，打起来也顾不过来 */
