@@ -728,8 +728,8 @@ function handOffChatToNarration(who: string, cue: string): void {
 }
 
 /**
- * 叙事里的人先开了口：把交谈窗叫起来，由玩家当面接话。
- * 只认尘缘里真有的那一位，且须就在近前；认不出、或人不在跟前，就不开这一席。
+ * 叙事里的人先开了口：记下这一席，等玩家看完正文再点头进去。
+ * 只认尘缘里真有的那一位，且须就在近前；认不出、或人不在跟前，就不留这个入口。
  */
 function openChatFromNarrative(converse: { npc: string } | null): void {
   if (!converse?.npc) return;
@@ -737,7 +737,8 @@ function openChatFromNarrative(converse: { npc: string } | null): void {
   const rel = (gs.relations || []).find((r) => r.name === converse.npc);
   if (!rel) return;
   if (!isNpcAround(rel, { placeId: gs.currentPlaceId, placeName: gs.hereLabel() })) return;
-  useAIStore.getState().openNPCChat(rel.id);
+  // 不替玩家转场：先摆一个入口，待他点过头才叫开交谈窗
+  useAIStore.setState({ pendingChat: { npc: rel.id, name: rel.name } });
 }
 
 /**
@@ -1007,6 +1008,20 @@ interface AIStore {
   restoreConversation: (conv: ConversationState) => void;
   /** 读档时把尘缘里的交谈记录一并换回；存档里没有这一项便清空，免得留着上一局的话 */
   restoreNPCChat: (chat?: Partial<NPCChatState> | null) => void;
+  /**
+   * 叙事里有人当面搭话，先记一笔，等玩家点过头才叫开交谈窗。
+   * 不能替玩家直接转场——正文还没看完，先收起来只留一个入口。
+   */
+  pendingChat: { npc: string; name: string } | null;
+  confirmPendingChat: () => void;
+  dismissPendingChat: () => void;
+  /**
+   * 交谈窗暂时收起去看叙事。人还坐在席上，话也没散，
+   * 点回来仍是方才那一席，不必重新开口。
+   */
+  chatHidden: boolean;
+  hideNPCChat: () => void;
+  showNPCChat: () => void;
   /**
    * 重开一局：把推演账与各扇临时窗口一并归零。
    * 起手开新游戏前必须叫一次，免得新局接着上一局的话头往下走。
@@ -2015,6 +2030,8 @@ export const useAIStore = create<AIStore>()(
       isCraftingOpen: false,
       narrativeHaggle: null,
       narrativeShop: null,
+      pendingChat: null,
+      chatHidden: false,
       isStoryOpen: true,
       isSaveManagerOpen: false,
 
@@ -2024,6 +2041,15 @@ export const useAIStore = create<AIStore>()(
       closeNarrativeHaggle: () => set({ narrativeHaggle: null }),
       openNarrativeShop: (brief) => set({ narrativeShop: brief }),
       closeNarrativeShop: () => set({ narrativeShop: null }),
+      confirmPendingChat: () => {
+        const pending = get().pendingChat;
+        if (!pending) return;
+        set({ pendingChat: null });
+        get().openNPCChat(pending.npc);
+      },
+      dismissPendingChat: () => set({ pendingChat: null }),
+      hideNPCChat: () => set({ chatHidden: true, isStoryOpen: true }),
+      showNPCChat: () => set({ chatHidden: false }),
 
       updateSettings: (patch) =>
         set((st) => {
@@ -2300,6 +2326,9 @@ export const useAIStore = create<AIStore>()(
 
         abortController = new AbortController();
         const signal = abortController.signal;
+
+        // 新的一回起笔，上一回摆着的入口便撤下
+        set({ pendingChat: null });
 
         const gameState = useGameStore.getState().getSnapshot() as any;
         const summary = conversation.summary;
@@ -2907,6 +2936,8 @@ export const useAIStore = create<AIStore>()(
       regenerate: async () => {
         const { conversation, settings } = get();
         if (conversation.stage === "flash" || conversation.stage === "pro") return;
+        // 重演即重来：先前摆着的入口一并撤下，等这一回写完再摆
+        set({ pendingChat: null });
         const lastTurn = conversation.turns[conversation.turns.length - 1];
         if (!lastTurn) return;
         if (!aiReady(settings)) {
@@ -3153,6 +3184,8 @@ export const useAIStore = create<AIStore>()(
           adventure: INITIAL_ADVENTURE,
           narrativeHaggle: null,
           narrativeShop: null,
+          pendingChat: null,
+          chatHidden: false,
         });
       },
 
@@ -4263,6 +4296,9 @@ ${craft ? 12 : 11}. ${isDining
           // 还是这一席（原先开口的那位没换）便接着谈；换了人另起一席，上一席的人与话都作废
           const sameSeat = party[0] === npcId;
           return {
+            // 人到了跟前，先前收起的交谈窗也该再露出来
+            chatHidden: false,
+            pendingChat: null,
             npcChat: {
               ...st.npcChat,
               activeNpcId: npcId,
@@ -4320,6 +4356,9 @@ ${craft ? 12 : 11}. ${isDining
         }
 
         set((st) => ({
+          // 收席之后，先前藏起的窗与待点的入口都一并作废
+          chatHidden: false,
+          pendingChat: null,
           npcChat: { ...st.npcChat, activeNpcId: null, isTyping: false, errorMsg: "" },
           conversation: {
             ...st.conversation,

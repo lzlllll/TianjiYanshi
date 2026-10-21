@@ -7,7 +7,6 @@ import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import { ChangeNotice } from "@/components/ui/ChangeNotice";
 import { BattlePanel } from "@/components/battle/BattlePanel";
-import { StoryAside } from "@/components/ai/SessionAside";
 import {
   Sparkles,
   Square,
@@ -59,6 +58,15 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const openNarrativeHaggle = useAIStore((s) => s.openNarrativeHaggle);
   const openNarrativeShop = useAIStore((s) => s.openNarrativeShop);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
+  // 叙事里有人当面搭话：先摆一个入口，点过头才开交谈窗
+  const pendingChat = useAIStore((s) => s.pendingChat);
+  const confirmPendingChat = useAIStore((s) => s.confirmPendingChat);
+  const dismissPendingChat = useAIStore((s) => s.dismissPendingChat);
+  // 交谈窗收起去看叙事时，留一个回去的入口
+  const chatHidden = useAIStore((s) => s.chatHidden);
+  const activeNpcId = useAIStore((s) => s.npcChat.activeNpcId);
+  const showNPCChat = useAIStore((s) => s.showNPCChat);
+  const closeNPCChat = useAIStore((s) => s.closeNPCChat);
 
   const quickDecisions = conversation.quickDecisions?.length
     ? conversation.quickDecisions
@@ -66,6 +74,14 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
 
   const [showRawOutput, setShowRawOutput] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  /**
+   * 翻看先前各回。null 表示停在最新；停了回头便只读旧页，
+   * 要落笔演化、或新的一回写完，自会回到最新那一页。
+   */
+  const [viewIndex, setViewIndex] = useState<number | null>(null);
+  /** 叙事挑起的铺面／讲价：先问一声，点过头才进那一扇窗 */
+  const [pendingKind, setPendingKind] = useState<"shop" | "haggle" | null>(null);
 
   const [decision, setDecision] = useState("");
   const narrativeRef = useRef<HTMLDivElement>(null);
@@ -90,16 +106,19 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     const lastTurn = conversation.turns[conversation.turns.length - 1];
     if (!lastTurn) return;
 
-    // 叙事挑起的讲价：弹出讲价窗；同一条回合只叫一次
+    // 新的一回落在页上，翻页自回最新
+    setViewIndex(null);
+
+    // 叙事挑起的讲价：先问一声，点过头才开那一扇窗；同一条回合只问一次
     if (lastTurn.haggle && haggleTurnRef.current !== lastTurn.id) {
       haggleTurnRef.current = lastTurn.id;
-      openNarrativeHaggle(lastTurn.haggle);
+      setPendingKind("haggle");
     }
 
-    // 叙事把玩家引到某家铺子买卖：开出铺面窗由玩家自己经手；同一条回合只开一次
-    if (lastTurn.shop && shopTurnRef.current !== lastTurn.id) {
+    // 叙事把玩家引到某家铺子买卖：同样先问一声，点过头再入内；同一条回合只问一次
+    if (!lastTurn.haggle && lastTurn.shop && shopTurnRef.current !== lastTurn.id) {
       shopTurnRef.current = lastTurn.id;
-      openNarrativeShop(lastTurn.shop);
+      setPendingKind("shop");
     }
 
     // 叙事挑起的宗门战另算一路：照对手宗门摆开阵势，攻方还要破它的护山大阵
@@ -162,13 +181,21 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const isGenerating = stage === "flash" || stage === "pro";
   const turns = conversation.turns;
   const lastTurn = turns[turns.length - 1];
+  // 当前翻到第几回：停在最新时看最后一回，翻回头便看那一页
+  const shownIndex = turns.length === 0
+    ? -1
+    : viewIndex === null
+      ? turns.length - 1
+      : Math.max(0, Math.min(viewIndex, turns.length - 1));
+  const shownTurn = shownIndex >= 0 ? turns[shownIndex] : undefined;
+  const reviewing = turns.length > 0 && shownIndex !== turns.length - 1;
   const hasApiKey = AI_BACKEND_READY;
   const streamingNarrative = conversation.streamingNarrative ?? "";
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
   const streaming = stage === "pro" && !!streamingNarrative;
   // 正文要过完内容闸才上屏，未开闸之前没有 streamingNarrative，仍得让玩家看见这一回在推演
   const generating = stage === "pro" && !streamingNarrative;
-  const displayNarrative = streaming ? streamingNarrative : lastTurn?.narrative ?? "";
+  const displayNarrative = streaming && !reviewing ? streamingNarrative : shownTurn?.narrative ?? "";
   const streamingReasoning = conversation.streamingReasoning ?? "";
   // 推理模型先长一段思考才落笔：正文还没出、思维链已经来了，便把「正在思考」亮出来，
   // 免得那一段长长的等待看着像是卡死了
@@ -178,11 +205,16 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     if (narrativeRef.current) {
       narrativeRef.current.scrollTop = narrativeRef.current.scrollHeight;
     }
-  }, [turns.length, lastTurn?.narrative, streamingNarrative]);
+  }, [turns.length, shownTurn?.narrative, streamingNarrative, shownIndex]);
 
   const handleSubmit = () => {
     const text = decision.trim();
     if (!text || isGenerating) return;
+    // 站在旧页上落笔，先回到最新，再演这一回
+    setViewIndex(null);
+    setPendingKind(null);
+    // 收起去看叙事的那一席，人已起身，便不再留着
+    if (chatHidden && activeNpcId) closeNPCChat();
     runTurn(text);
     setDecision("");
   };
@@ -230,8 +262,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 flex gap-4">
-        <div className="flex flex-col gap-3 flex-1 min-w-0 min-h-0">
+      <div className="flex flex-col gap-3 flex-1 min-h-0">
         {/* 叙事正文 */}
         <ScrollCard
           title="天机"
@@ -242,11 +273,49 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
                 <>
                   <span className="flex items-center gap-1">
                     <Database size={11} />
-                    {lastTurn?.ops.length ?? 0} 变
+                    {shownTurn?.ops.length ?? 0} 变
                   </span>
                   <span>·</span>
-                  <span>第 {turns.length} 回</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setViewIndex(Math.max(0, shownIndex - 1))}
+                      disabled={shownIndex <= 0 || isGenerating}
+                      title="退回到上一回"
+                      className="px-1.5 rounded border border-paper-400/25 hover:border-gold-500 hover:text-gold-400 transition disabled:opacity-30 disabled:hover:border-paper-400/25 disabled:hover:text-paper-400"
+                    >
+                      ‹
+                    </button>
+                    <span className="font-number text-xs">
+                      第 {shownIndex + 1} / {turns.length} 回{reviewing ? " · 回顾" : ""}
+                    </span>
+                    <button
+                      onClick={() => setViewIndex(Math.min(turns.length - 1, shownIndex + 1))}
+                      disabled={shownIndex >= turns.length - 1 || isGenerating}
+                      title="往后翻一回"
+                      className="px-1.5 rounded border border-paper-400/25 hover:border-gold-500 hover:text-gold-400 transition disabled:opacity-30 disabled:hover:border-paper-400/25 disabled:hover:text-paper-400"
+                    >
+                      ›
+                    </button>
+                    {reviewing && (
+                      <button
+                        onClick={() => setViewIndex(null)}
+                        title="翻回最新这一回"
+                        className="ml-1 px-2 py-0.5 rounded border border-gold-500/40 text-gold-600 hover:bg-gold-500/10 transition"
+                      >
+                        回到最新
+                      </button>
+                    )}
+                  </div>
                 </>
+              )}
+              {chatHidden && activeNpcId && (
+                <button
+                  onClick={showNPCChat}
+                  title="那一席还没散，回去接着谈"
+                  className="ml-1 px-2 py-0.5 rounded border border-jade-500/40 text-jade-600 hover:bg-jade-500/10 transition"
+                >
+                  回到交谈
+                </button>
               )}
             </div>
           }
@@ -290,10 +359,49 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
 
                 {/* 叙事之后列一笔这一回合落到账上的变化：得着的写绿，折了的写红。
                     开篇那一段只立人物、铺世界，不列变化 */}
-                {!streaming && !lastTurn?.opening && <ChangeNotice ops={lastTurn?.ops} className="mt-6" />}
+                {!streaming && !shownTurn?.opening && <ChangeNotice ops={shownTurn?.ops} className="mt-6" />}
               </>
             )}
           </div>
+
+          {/* 输出写完先摆一个入口：转交谈、入铺面、当面讲价，都等玩家点过头再进去 */}
+          {(pendingChat || pendingKind) && (
+            <div className="mt-3 shrink-0 rounded border border-gold-500/35 bg-gold-500/10 px-4 py-2.5 flex items-center gap-3">
+              <p className="flex-1 font-serif text-sm text-ink-dark leading-snug">
+                {pendingChat
+                  ? `「${pendingChat.name}」似有话要与你当面说。`
+                  : pendingKind === "shop"
+                    ? "眼前到了一处铺面，可入内挑拣。"
+                    : "有人要与你讲价，可当面议定。"}
+              </p>
+              <SealButton
+                onClick={() => {
+                  if (pendingChat) {
+                    confirmPendingChat();
+                    return;
+                  }
+                  if (pendingKind === "shop" && lastTurn?.shop) {
+                    openNarrativeShop(lastTurn.shop);
+                  } else if (pendingKind === "haggle" && lastTurn?.haggle) {
+                    openNarrativeHaggle(lastTurn.haggle);
+                  }
+                  setPendingKind(null);
+                }}
+                className="shrink-0 px-3 py-1 text-xs"
+              >
+                {pendingChat ? "转入交谈" : "入内查看"}
+              </SealButton>
+              <button
+                onClick={() => {
+                  if (pendingChat) dismissPendingChat();
+                  setPendingKind(null);
+                }}
+                className="shrink-0 font-serif text-xs text-ink-light hover:text-cinnabar-500 transition px-2 py-1"
+              >
+                暂且不去
+              </button>
+            </div>
+          )}
 
         </ScrollCard>
 
@@ -428,8 +536,6 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
             )}
           </ScrollCard>
         )}
-        </div>
-        <StoryAside />
       </div>
     </div>
   );

@@ -6,8 +6,7 @@ import { isAroundHere } from "@/data/npcGen";
 import type { Relation } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { migrateRelation } from "@/data/npcGen";
-import { ChatAside } from "@/components/ai/SessionAside";
-import { X, Loader2, Send, Trash2, UserPlus } from "lucide-react";
+import { X, Loader2, Send, Trash2, UserPlus, ScrollText } from "lucide-react";
 
 export function NPCChatModal() {
   const npcChat = useAIStore((s) => s.npcChat);
@@ -18,6 +17,8 @@ export function NPCChatModal() {
   const inviteToParty = useAIStore((s) => s.inviteToParty);
   const removeFromParty = useAIStore((s) => s.removeFromParty);
   const sendPartyMessage = useAIStore((s) => s.sendPartyMessage);
+  const chatHidden = useAIStore((s) => s.chatHidden);
+  const hideNPCChat = useAIStore((s) => s.hideNPCChat);
   const relations = useGameStore((s) => s.relations);
   const currentPlaceId = useGameStore((s) => s.currentPlaceId);
 
@@ -111,7 +112,7 @@ export function NPCChatModal() {
     }
   }, [npcChat.errorMsg]);
 
-  if (!activeNpcId) return null;
+  if (!activeNpcId || chatHidden) return null;
 
   const busy = isTyping || isPartyTyping;
 
@@ -161,7 +162,7 @@ export function NPCChatModal() {
       />
 
       <div
-        className="relative scroll-card corner-ornament spiritual-particles rounded-lg w-full max-w-5xl h-[75vh] flex flex-col overflow-hidden"
+        className="relative scroll-card corner-ornament spiritual-particles rounded-lg w-full max-w-3xl h-[70vh] flex flex-col"
         style={{ animation: "inkSpread 0.4s ease-out" }}
       >
         <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b-2 border-gold-500 bg-ink-800 cloud-border">
@@ -203,6 +204,13 @@ export function NPCChatModal() {
 
           <div className="flex items-center gap-2">
             <button
+              onClick={hideNPCChat}
+              title="先收起这一席，回问道窗看前情；人还坐在席上，随时可回来"
+              className="font-serif text-xs text-paper-400/50 hover:text-gold-400 px-2 py-1 rounded border border-paper-400/10 hover:border-gold-400/40 transition flex items-center gap-1"
+            >
+              <ScrollText size={10} /> 看叙事
+            </button>
+            <button
               onClick={() => {
                 if (confirm("确定要清空与该 NPC 的对话记录？")) {
                   clearNPCChat(activeNpcId);
@@ -222,9 +230,6 @@ export function NPCChatModal() {
           </div>
         </div>
 
-        {/* 左边这一席话，右边一栏旁记：前情、此人、相干机缘 */}
-        <div className="flex-1 min-h-0 flex">
-          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {/* 在场的人：点名字可请入、可请出 */}
         <div className="px-6 py-2 border-b border-gold-500/15 bg-ink-800/70 flex flex-wrap items-center gap-1.5">
           <span className="font-serif text-[11px] text-paper-400/55 mr-1">在场</span>
@@ -390,9 +395,6 @@ export function NPCChatModal() {
             )}
           </div>
         )}
-          </div>
-          <ChatAside />
-        </div>
       </div>
     </div>
   );
