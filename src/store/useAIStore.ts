@@ -1416,7 +1416,41 @@ let lastAdventureSpawnDay = 0;
 /** 补档前歇一口气，免得连着打过去；头一遍已是齐发，这里只稍作间隔 */
 const OPENING_PAUSE_MS = 300;
 
+/**
+ * 开局建档的总时限。八门虽并发，模型一慢便没有尽头——
+ * 到点便不再补档，先把已落的收下，缺的那几门留待后续回合补全
+ * （回合提示词里有「身外补全」，见 buildOpsPrompt）。
+ */
+const OPENING_BUDGET_MS = 180000;
+
+/** 单门单遍的时限。慢在这一步的多半是首字迟迟不来，给足两分半，胜过掐断后重打一遍 */
+const OPENING_CALL_TIMEOUT_MS = 150000;
+
 const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 把外头的取消信号与一个时限并作一根：到点即断。
+ * 只用来束住开局建档那几趟，别让它把整局开局一直吊着。
+ */
+function withinDeadline(signal: AbortSignal, ms: number): AbortSignal {
+  const ctrl = new AbortController();
+  if (signal.aborted) {
+    ctrl.abort();
+    return ctrl.signal;
+  }
+  const onAbort = () => ctrl.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => ctrl.abort(), Math.max(0, ms));
+  ctrl.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    },
+    { once: true },
+  );
+  return ctrl.signal;
+}
 
 /**
  * 开局的修为由所选境界定档，不该由推演随手填。
@@ -1457,6 +1491,7 @@ async function runOpeningExtraction(
     domain: (typeof OPENING_DOMAINS)[number],
     model = settings.flashModel,
     terse = false,
+    budgetMs = OPENING_CALL_TIMEOUT_MS,
   ) => {
     const raw = await chatWithModel(
       settings,
@@ -1469,10 +1504,12 @@ async function runOpeningExtraction(
         terse,
       }),
       {
-        timeoutMs: 90000,
-        signal,
+        timeoutMs: budgetMs,
+        // 单遍的时限之外还压着开局总时限：到点便断，别让这一门拖住整局
+        signal: withinDeadline(signal, budgetMs),
         jsonMode: true,
-        retries: 1,
+        // 重打由下面那条补档梯子管，这里不再叠一层，免得一趟超时被算成两趟
+        retries: 0,
         // 建档要的是合法 JSON，不是文采，温度压低些，少出岔子
         temperature: 0.25,
         // 八门建档在后台跑，429 不必弹窗惊动玩家；哪一门没写全由开局的提示统一说明
@@ -1590,6 +1627,9 @@ async function runOpeningExtraction(
    * 故整段耗时由「最慢的一门」而非「各遍之和」决定；落空得早的门也能更早开始补档。
    * 一门之内始终只有一次调用在途，故同时在途的请求数不会超过门数，接口不至于被一轮轰满。
    */
+  // 八门共用一个到点时刻：到点便不再补档，先落定的不受影响
+  const deadline = Date.now() + OPENING_BUDGET_MS;
+
   const runDomain = async (domain: (typeof OPENING_DOMAINS)[number]) => {
     const ladder = [
       { model: settings.flashModel, terse: false, note: "首遍" },
@@ -1600,13 +1640,15 @@ async function runOpeningExtraction(
       if (signal.aborted) return;
       // 前一遍刚打过去，歇一口气再续
       if (i > 0) await waitMs(OPENING_PAUSE_MS);
-      if (signal.aborted) return;
+      const remaining = deadline - Date.now();
+      // 到点便收手：这一门已落下的照收，缺的留待后续回合补全
+      if (signal.aborted || remaining < 5000) return;
       const step = ladder[i];
       const startedAt = Date.now();
       // 这一遍开始打过去了：先报一声，等待页好立刻报出正在办的那一门
       onDomainStart?.(domain.id);
       try {
-        const parsed = await ask(domain, step.model, step.terse);
+        const parsed = await ask(domain, step.model, step.terse, Math.min(OPENING_CALL_TIMEOUT_MS, remaining));
         noteSalvage(domain, parsed.salvaged);
         const count = take(domain, parsed);
         if (i > 0) console.info(`[openingExtraction] ${domain.label} ${step.note}得 ${count} 条`);

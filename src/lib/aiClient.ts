@@ -93,8 +93,9 @@ function isOpenAiOSeries(model: string): boolean {
  */
 const THINKING_TEMPERATURES = [0, 0.6, 1];
 
-function isThinkingTemperatureLocked(model: string, reasoning: boolean): boolean {
-  return reasoning && /kimi-k3/i.test(String(model ?? ""));
+/** K3 这一档不论请求里有没有点思考量，上游都按思考档收温度，故只看模型名 */
+function isThinkingTemperatureLocked(model: string): boolean {
+  return /kimi-k3/i.test(String(model ?? ""));
 }
 
 function snapThinkingTemperature(temperature: number): number {
@@ -122,7 +123,7 @@ function buildRequestBody(params: {
   const maxTokens = reasoning ? MAX_OUTPUT_TOKENS_REASONING : MAX_OUTPUT_TOKENS;
   const oSeries = isOpenAiOSeries(model);
   // 思考档认得出的模型，温度须先归到它认的那几档
-  const appliedTemperature = isThinkingTemperatureLocked(model, reasoning)
+  const appliedTemperature = isThinkingTemperatureLocked(model)
     ? snapThinkingTemperature(temperature)
     : temperature;
 
