@@ -30,6 +30,7 @@ import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
 import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQuest, parseQuestOutcome, pickOpenQuest, type QuestLedgerTarget } from "@/data/quests";
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizeAdventure } from "@/data/adventures";
+import { CULTIVATION_PER_HOUR, localCultivationFrom } from "@/data/cultivation";
 import { emptyPlot } from "@/data/manors";
 import { makeModifier } from "@/data/sectModifiers";
 import { buffFromTemplate, findBuffTemplate } from "@/data/buffs";
@@ -950,6 +951,33 @@ export function applyOpsToState(state: GameState, ops: DataOp[]): GameState {
 
   // 时间是模型给的值，写回前统一夹一遍：时辰认名也认数，月日夹在合法区间
   next.currentTime = normalizeGameTime(next.currentTime, state.currentTime ?? OPENING_GAME_TIME);
+
+  /*
+   * 叙事里打坐、闭关，功法进度照所耗时辰算，一夜不过几点。
+   * 模型偶尔一笔写个满值，或把百分比当成进度写进去，一回合便把一门功法推到顶；
+   * 这里按这一回真走过的时辰收一收，只收涨上去的那一截——掉下来的不拦。
+   */
+  const startTime = normalizeGameTime(state.currentTime ?? OPENING_GAME_TIME, OPENING_GAME_TIME);
+  const elapsedHours = Math.max(0, timeSerial(next.currentTime) - timeSerial(startTime));
+  const eff = localCultivationFrom({
+    facilities: next.sect?.facilities,
+    location: next.currentLocation,
+  });
+  // 这一回合最多能长多少：所耗时辰 × 每时辰进度 × 所在之处倍数；短回合留六点余量
+  const profGainCap = Math.max(6, Math.round(elapsedHours * CULTIVATION_PER_HOUR * eff.mul));
+  const beforeProf = new Map(
+    (Array.isArray(state.techniques) ? state.techniques : []).map((t) => [t.id, Number(t.proficiency) || 0]),
+  );
+  next.techniques = (Array.isArray(next.techniques) ? next.techniques : []).map((t) => {
+    const before = beforeProf.get(t.id);
+    // 这一回合新得的功法没有旧进度可比，原样留着
+    if (before === undefined) return t;
+    const max = Math.max(1, Number(t.proficiencyMax) || 100);
+    const raw = Number(t.proficiency) || 0;
+    const gain = raw > before ? Math.min(profGainCap, raw - before) : raw - before;
+    const after = Math.max(0, Math.min(max, before + gain));
+    return after === raw ? t : { ...t, proficiency: after };
+  });
 
   const newDateKey = next.currentTime ? gameDateKey(next.currentTime) : "";
 
