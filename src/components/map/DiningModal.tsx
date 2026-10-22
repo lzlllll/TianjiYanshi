@@ -10,7 +10,7 @@ import { HOURS_PER_DAY, MAX_LODGE_DAYS, ROOMS, lodgeCost, recoverAmount, roomByI
 import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
 import { formatGameTime, formatTimeShort, shiftGameTime } from "@/lib/gameTime";
 import type { Dish } from "@/data/dishes";
-import type { Relation, Seat, Shop } from "@/data/types";
+import type { DineResult, Relation, Seat, Shop } from "@/data/types";
 import { BedDouble, Coins, Loader2, MessageCircle, UserRound, UtensilsCrossed, X } from "lucide-react";
 
 /** 在气血未过八成之前，客栈里怎么歇也补不回来 */
@@ -58,9 +58,7 @@ export function DiningModal({
   const [view, setView] = useState<"eat" | "lodge">("eat");
   const [seated, setSeated] = useState<string | null>(null);
   const [pickedDish, setPickedDish] = useState<string>("");
-  const [telling, setTelling] = useState<{ narration: string; rumors: { text: string; source: string }[] } | null>(
-    null,
-  );
+  const [telling, setTelling] = useState<DineResult | null>(null);
   const [lodged, setLodged] = useState<{ room: string; days: number } | null>(null);
   const [days, setDays] = useState(1);
   const [resting, setResting] = useState("");
@@ -135,6 +133,12 @@ export function DiningModal({
     addLog(`你在「${live.name}」租下${room.name}，一住 ${n} 日，付了 ${total} 下品灵石。`);
   };
 
+  /** 店中打听到的事，缀在叙事末尾一并说明 */
+  const withScuttleNote = (res: { text: string; questName?: string; adventureName?: string }) =>
+    res.text +
+    (res.questName ? `\n\n店中应下一桩事：${res.questName}，已记在「福缘」。` : "") +
+    (res.adventureName ? `\n\n听人说起一处去处：${res.adventureName}，已在舆图上落了一处。` : "");
+
   /** 歇下：时辰往前走，灵力与气血按房钱与天数补回来 */
   const rest = async () => {
     if (!lodged || busy) return;
@@ -160,7 +164,7 @@ export function DiningModal({
     );
 
     try {
-      const text = await lodgeAt({
+      const res = await lodgeAt({
         shop: live.name,
         market: label,
         culture,
@@ -168,7 +172,7 @@ export function DiningModal({
         roomDesc: room.desc,
         days: lodged.days,
       });
-      setResting(text);
+      setResting(withScuttleNote(res));
       setLodged(null);
     } catch (e) {
       setError((e as Error).message);
@@ -200,7 +204,7 @@ export function DiningModal({
     );
 
     try {
-      const text = await lodgeAt({
+      const res = await lodgeAt({
         shop: live.name,
         market: label,
         culture,
@@ -208,7 +212,7 @@ export function DiningModal({
         roomDesc: `${room.desc}；这一回是闭门静坐，不是安睡`,
         days: lodged.days,
       });
-      setResting(text);
+      setResting(withScuttleNote(res));
       setLodged(null);
     } catch (e) {
       setError((e as Error).message);
@@ -459,6 +463,20 @@ export function DiningModal({
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {(telling.questName || telling.adventureName) && (
+                <div className="mt-3 pt-3 border-t border-gold-500/15 space-y-1">
+                  {telling.questName && (
+                    <p className="font-serif text-[12px] leading-relaxed text-gold-300/90">
+                      席间应下一桩事：{telling.questName}，已记在「福缘」。
+                    </p>
+                  )}
+                  {telling.adventureName && (
+                    <p className="font-serif text-[12px] leading-relaxed text-jade-300/90">
+                      听人说起一处去处：{telling.adventureName}，已在舆图上落了一处。
+                    </p>
+                  )}
                 </div>
               )}
             </ScrollCard>

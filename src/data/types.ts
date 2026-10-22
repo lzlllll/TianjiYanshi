@@ -982,20 +982,23 @@ export type QuestPenaltyKind = "灵石" | "修为" | "业力" | "状态" | "正�
 
 /**
  * 一桩机缘给下的状态：赏的助益、罚的负累都照它立。
- * 先照状态名录挑——给了 template 便照名录那一条立起；名录里没有的，
- * 才照 name 与效力自编一条，效力须落在程序认得的字段上，立不起来便作罢。
+ * 只认状态名录里的那一条——名目、类别、图标与效力都以名录为准；
+ * 名录里没有的便立不起来，赏罚只留字面上的话。
  */
 export interface QuestBuffSpec {
-  /** 状态名录里的 id 或名目 */
+  /** 状态名录里的 id；写入时一律归一到名录的 id */
   template?: string;
-  /** 名录外自编的名目，不超过 10 字 */
+  /**
+   * 旧存档里留下的自编名目；现已不收，只为读旧档时点得出名目。
+   * 新写入的一律只有 template 与 hours。
+   */
   name?: string;
   icon?: string;
   isDebuff?: boolean;
-  /** 自编时的效力：落在 BuffTargetStat 里的一项上 */
+  /** 旧档字段，现已不用 */
   stat?: BuffTargetStat;
   value?: number;
-  /** 顶几个时辰 */
+  /** 顶几个时辰；不写照名录上的常例 */
   hours?: number;
   desc?: string;
 }
@@ -1772,6 +1775,10 @@ export interface DineArgs {
 export interface DineResult {
   narration: string;
   rumors: { text: string; source: string }[];
+  /** 席间领下的那一桩事；没有便空着 */
+  questName?: string;
+  /** 席间听说的一处野外去处；没有便空着 */
+  adventureName?: string;
 }
 
 /** 交给模型写一段「在瓦舍听戏」的素材 */
@@ -1892,6 +1899,14 @@ export interface LodgeArgs {
   days: number;
   /** 睡下之前，玩家自己说了句什么 */
   words?: string;
+}
+
+export interface LodgeResult {
+  text: string;
+  /** 住店时听来的那一桩事；没有便空着 */
+  questName?: string;
+  /** 住店时听说的一处野外去处；没有便空着 */
+  adventureName?: string;
 }
 
 /** 讲价时交给模型的口风与账目 */

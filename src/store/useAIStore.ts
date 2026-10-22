@@ -26,6 +26,7 @@ import type {
   DineArgs,
   DineResult,
   LodgeArgs,
+  LodgeResult,
   PlayArgs,
   AppraiseArgs,
   AppraiseResult,
@@ -662,14 +663,50 @@ function settleDoneMark(text: string): string {
  * 卖艺、酒楼、客栈、瓦舍、宝物阁、镖局、自家铺面这些叙事都带上一份，
  * 玩家在哪儿把事办成了，都认得了。
  */
-function questSettleHint(inJson = false): string {
+function questSettleHint(field?: string): string {
   const quests = (useGameStore.getState().quests ?? [])
     .filter((q) => q?.status === "open")
     .slice(0, 12);
   if (quests.length === 0) return "";
   const list = quests.map((q) => `「${q.name}」〔${q.id}〕`).join("、");
-  const where = inJson ? "text 字段之末另起一行" : "正文之末另起一行";
+  const where = field ? `「${field}」字段之末另起一行` : "正文之末另起一行";
   return `【在办的机缘】${list}\n若这一段叙事里确把其中某一桩办成了、或确已黄了，就在${where}只写 ${SETTLE_MARK} 名称或编号 | done（办成）或 failed（黄了）；没有就一个字也不写。`;
+}
+
+/**
+ * 席间、店中打探来的机缘与奇遇：与问道走同一套落账，
+ * 去处、接头的人、舆图点位都由系统现钉，这里只把模型写的那一笔记下。
+ */
+function applyScuttle(payload: any): { questName?: string; adventureName?: string } {
+  const quest = payload?.quest;
+  const adventure = payload?.adventure;
+  const questName =
+    quest && typeof quest === "object" ? String(quest.name ?? "").trim().slice(0, 20) : "";
+  const adventureName =
+    adventure && typeof adventure === "object" ? String(adventure.name ?? "").trim().slice(0, 12) : "";
+
+  const ops: DataOp[] = [];
+  if (questName) ops.push({ kind: "add", collection: "quests", payload: quest });
+  if (adventureName) ops.push({ kind: "add", collection: "adventures", payload: adventure });
+  if (ops.length === 0) return {};
+
+  // 落账前先数一数：立不起来的那几笔，不要回头跟玩家说已经记下了
+  const before = useGameStore.getState();
+  const hadQuests = (before.quests ?? []).filter((q) => q.name === questName).length;
+  const hadAdventures = (before.adventures ?? []).filter((a) => a.name === adventureName).length;
+  before.applyOps(ops);
+
+  const after = useGameStore.getState();
+  return {
+    questName:
+      questName && (after.quests ?? []).filter((q) => q.name === questName).length > hadQuests
+        ? questName
+        : undefined,
+    adventureName:
+      adventureName && (after.adventures ?? []).filter((a) => a.name === adventureName).length > hadAdventures
+        ? adventureName
+        : undefined,
+  };
 }
 
 /**
@@ -1192,8 +1229,8 @@ interface AIStore {
   appraiseEnding: (narrative: string) => Promise<string>;
   /** 在客栈茶棚坐下吃口东西，返回一段叙事与席间听来的闲话 */
   dineAt: (args: DineArgs) => Promise<DineResult>;
-  /** 在客栈住下歇息，返回一段睡过去之后外界变化的叙事 */
-  lodgeAt: (args: LodgeArgs) => Promise<string>;
+  /** 在客栈住下歇息，返回一段睡过去之后外界变化的叙事，以及店中听来的事 */
+  lodgeAt: (args: LodgeArgs) => Promise<LodgeResult>;
   /** 在瓦舍听一场戏，返回一段戏文与座间的叙事 */
   listenToPlay: (args: PlayArgs) => Promise<string>;
   /** 请宝物阁的行家看一件旧物，返回一段叙事与这东西究竟是什么 */
@@ -2250,7 +2287,7 @@ export const useAIStore = create<AIStore>()(
           facilities: shop.facilities,
           instruction: instruction.trim(),
         };
-        const raw = await chatWithModel(settings, settings.flashModel, buildShopManagePrompt(brief, questSettleHint(true)), {
+        const raw = await chatWithModel(settings, settings.flashModel, buildShopManagePrompt(brief, questSettleHint("text")), {
           timeoutMs: 60000,
           jsonMode: true,
           retries: 1,
@@ -4969,7 +5006,7 @@ ${nature ? `【宗门性质】${nature}\n` : ""}${climate ? `【宗门风气】$
 【堂内的人】${seats}
 【食客的市井本事】${brief.skills}
 【最近的判定】${brief.checks}
-${questSettleHint()}
+${questSettleHint("narration")}
 
 「${player.name}」在${shop}拣了副座头坐下，叫了这一道，慢慢吃完。
 
@@ -4979,7 +5016,11 @@ ${questSettleHint()}
 
 以 JSON 输出，不要有别的东西：
 {"narration":"上面那段叙事正文","rumors":[{"text":"席间听到的一句闲话","source":"${shop}·邻桌"}]}
+需要时另在同级加 "quest" 与 "adventure" 两项，用不上就整项省去。
 关于 rumors：给 1 到 3 条，每条 15 到 40 字，要像市井口风，是这一顿里真听来的零碎消息——谁家出了事、哪条路上不太平、什么货要涨价、谁跟谁有了嫌隙之类，可以含糊、可以只是风闻，但不要空话。source 写清是打哪儿听来的，如「${shop}·邻桌」「堂中行商」。
+关于 quest：只有席间确有人托你办一件事时才写，寻常客套、空口许诺不要写成机缘。字段与问道里的机缘相同：name、kind（事件、地点、人物、修为、物品、灵石 之一）、desc、place、dueDay、giver、condition、reward、rewardKind、rewardAmount、penalty、penaltyKind、penaltyAmount；地点类与人物类才写 place，且须是本城或别城真有的去处；没有托付就整项省去。
+关于 adventure：只有有人说起城外某处值得一去的野地方时才写，字段为 {"name","summary","kind","danger","reward","rewardKind","rewardAmount","penalty","penaltyKind","penaltyAmount","persistent"}：name 不超过 12 字，summary 不超过 60 字，kind 只取 秘境、遗迹、机缘、凶险、异象 之一，danger 取 1 至 5，集市洞天这类常设的去处 persistent 写 true；没有这样的去处就整项省去。
+十顿里不过一两回有这些，寻常吃食不要硬凑。
 ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不要有别的东西。`,
           },
         ];
@@ -5003,7 +5044,10 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
           .filter((r: { text: string }) => r.text)
           .slice(0, 3);
 
-        return { narration, rumors };
+        // 席间若有人托了事、或说起一处野外去处，照问道那一套落账
+        const scuttled = applyScuttle(parsed);
+
+        return { narration, rumors, ...scuttled };
       },
 
       lodgeAt: async ({ shop, market, culture, room, roomDesc, days, words }) => {
@@ -5030,17 +5074,28 @@ ${words ? `【睡前撂下的话】${words}\n` : ""}
 - 这几日里外头发生了些什么：谁家办事、市面上的东西涨了还是落了、路上多了什么人、客栈里换过几拨客人
 - 身子歇过来的那点松快：乏解了、气顺了，或是伤处仍不济事
 
-用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了几日」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题；除末尾的了事标记外，不要任何标记。
+用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了几日」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。
 
-${questSettleHint()}`,
+以 JSON 输出，不要有别的东西：
+{"narration":"这一觉的叙事正文"}
+需要时另在同级加 "quest" 与 "adventure" 两项，用不上就整项省去。
+关于 quest：只有店中确有人托你办一件事时才写，字段与问道里的机缘相同：name、kind（事件、地点、人物、修为、物品、灵石 之一）、desc、place、dueDay、giver、condition、reward、rewardKind、rewardAmount、penalty、penaltyKind、penaltyAmount；地点类与人物类才写 place，且须是真有的去处；没有就整项省去。
+关于 adventure：只有听人说起城外某处值得一去的野地方时才写，字段为 {"name","summary","kind","danger","reward","rewardKind","rewardAmount","penalty","penaltyKind","penaltyAmount","persistent"}：kind 只取 秘境、遗迹、机缘、凶险、异象 之一，danger 取 1 至 5；没有就整项省去。
+十回里不过一两回有这些，寻常一觉不要硬凑。
+${questSettleHint("narration")}`,
           },
         ];
 
         const raw = await chatWithModel(settings, settings.proModel, prompt, {
           timeoutMs: 90000,
           retries: 1,
+          jsonMode: true,
         });
-        return settleDoneMark(raw.trim());
+        const parsed = parseJsonPayload(raw);
+        const text = settleDoneMark(String(parsed?.narration ?? "").trim() || raw.trim());
+        // 店中若打听到一桩事、或一处野外去处，照问道那一套落账
+        const scuttled = applyScuttle(parsed);
+        return { text, ...scuttled };
       },
 
       listenToPlay: async ({ shop, market, culture, skill }) => {
@@ -5231,7 +5286,7 @@ ${ESCORT_MARK}
 客人新说了一句，你要以掌柜的身份回话${openTalk ? "" : "，并给出这一轮之后谈成的价码与剩下的耐心"}。
 ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要有别的东西。
 
-${questSettleHint(true)}
+${questSettleHint("reply")}
 
 以 JSON 输出，不要有别的东西：
 {"reply":"掌柜的原话，40~120 字，古风白话，带着做买卖的精明与生意人的客气","factor":0,"patience":60}

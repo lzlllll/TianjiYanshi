@@ -10,7 +10,6 @@
 
 import type {
   Buff,
-  BuffTargetStat,
   GameTime,
   InventoryItem,
   JobTarget,
@@ -25,7 +24,7 @@ import type {
   SpiritStones,
 } from "@/data/types";
 import { EMPTY_REPUTATION, REPUTATION_BY_KIND, REPUTATION_LABELS, shiftReputation } from "@/data/reputation";
-import { BUFF_TARGET_STATS, buffFromTemplate, findBuffTemplate } from "@/data/buffs";
+import { buffFromTemplate, findBuffTemplate } from "@/data/buffs";
 import { REALMS, REALM_NAMES } from "@/data/mockData";
 import { lowStonesWorth } from "@/data/spiritStones";
 import { shiftGameTime } from "@/lib/gameTime";
@@ -187,69 +186,36 @@ function normalizeSectTask(raw: any): Quest["sectTask"] {
 }
 
 /**
- * 把机缘给下的状态理一理。
- * 名录里的 id 或名目、或是自编的名目与效力，二者有其一才立得起来；
- * 都认不出便作罢——赏罚只留字面上的话。
+ * 把机缘给下的状态理一理：只认名录里的那一条，且正负要对得上。
+ * 赏只收增益、罚只收减益；报 id 或名目都行，认得出便收下，顶多久按它给的时辰。
+ * 名录里没有、或正负对不上的，这一条作废——赏罚只留字面上的话。
  */
-function normalizeQuestBuff(raw: any): QuestBuffSpec | undefined {
+function normalizeQuestBuff(raw: any, expect: "buff" | "debuff"): QuestBuffSpec | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const template = clean(raw.template, 40) || undefined;
-  const name = clean(raw.name, 10) || undefined;
-  if (!template && !name) return undefined;
+  const asked = clean(raw.template ?? raw.id ?? raw.name, 40);
+  const tpl = findBuffTemplate(asked);
+  if (!tpl) return undefined;
+  if (expect === "buff" ? tpl.isDebuff : !tpl.isDebuff) return undefined;
 
-  const rawStat = String(raw.stat ?? "").trim() as BuffTargetStat;
-  const rawValue = Math.trunc(Number(raw.value));
   const hours = Math.trunc(Number(raw.hours));
-
   return {
-    template,
-    name,
-    icon: clean(raw.icon, 1) || undefined,
-    isDebuff: raw.isDebuff === true,
-    stat: BUFF_TARGET_STATS.includes(rawStat) ? rawStat : undefined,
-    value: Number.isFinite(rawValue) ? rawValue : undefined,
+    template: tpl.id,
     hours: Number.isFinite(hours) && hours > 0 ? Math.min(720, hours) : undefined,
-    desc: clean(raw.desc, 60) || undefined,
   };
 }
 
 /**
- * 照一份说明立起一条状态。
- * 名录里找得到就照名录那一条，名目、类别、图标与效力都以名录为准；
- * 名录外才照给的效力自编——效力落不到程序认得的字段上，便立不起来。
- * 顶多久以 hours 为准，没写就照名录上的常例，自编的一律算十二个时辰。
+ * 照一份说明立起一条状态：只从名录里取那一条。
+ * 名目、类别、图标与效力一律以名录为准；名录里认不出，便立不起来，只留字面上的话。
+ * 顶多久以 hours 为准，没写就照名录上的常例。
  */
 export function buildQuestBuff(spec: QuestBuffSpec, now: GameTime): Buff | null {
-  const tpl = findBuffTemplate(spec.template ?? spec.name);
-  if (tpl) {
-    return buffFromTemplate(tpl, {
-      until: shiftGameTime(now, spec.hours ?? tpl.hours),
-      source: "机缘",
-    });
-  }
-
-  const name = String(spec.name ?? "").trim().slice(0, 10);
-  const stat = spec.stat;
-  const value = Number(spec.value);
-  // 效力落不到程序认得的字段上，就立不起来——宁可只留字面上的话
-  if (!name || !stat || !BUFF_TARGET_STATS.includes(stat) || !Number.isFinite(value) || value === 0) {
-    return null;
-  }
-
-  return {
-    id: `quest-buff-${stat}-${Math.round(value)}`,
-    name,
-    category: "status",
-    icon: (spec.icon || name.slice(0, 1) || "机").slice(0, 1),
-    durationType: "until",
-    until: shiftGameTime(now, spec.hours ?? 12),
-    stacks: 1,
-    maxStacks: 1,
-    effects: [{ stat, valueType: "fixed", value: Math.round(value) }],
-    isDebuff: spec.isDebuff === true,
+  const tpl = findBuffTemplate(spec.template);
+  if (!tpl) return null;
+  return buffFromTemplate(tpl, {
+    until: shiftGameTime(now, spec.hours ?? tpl.hours),
     source: "机缘",
-    description: spec.desc || "",
-  };
+  });
 }
 
 /**
@@ -287,11 +253,11 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     rewardKind,
     rewardAmount: rewardKind ? clampAmount(raw.rewardAmount) : undefined,
     // 赏的是状态才收这份说明；名目对不上便不收，免得多存一份死数据
-    rewardBuff: rewardKind === "状态" ? normalizeQuestBuff(raw.rewardBuff) : undefined,
+    rewardBuff: rewardKind === "状态" ? normalizeQuestBuff(raw.rewardBuff, "buff") : undefined,
     penalty: clean(raw.penalty, 60),
     penaltyKind,
     penaltyAmount: penaltyKind ? clampAmount(raw.penaltyAmount) : undefined,
-    penaltyBuff: penaltyKind === "状态" ? normalizeQuestBuff(raw.penaltyBuff) : undefined,
+    penaltyBuff: penaltyKind === "状态" ? normalizeQuestBuff(raw.penaltyBuff, "debuff") : undefined,
     status,
     day: Number.isFinite(Number(raw.day)) ? Math.trunc(Number(raw.day)) : 0,
     settledDay: Number.isFinite(Number(raw.settledDay)) ? Math.trunc(Number(raw.settledDay)) : undefined,
