@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { PLAYER_SHOP_KINDS, shopLeaseCost, SHOP_SETUP_TYPE_SUGGESTS } from "@/data/playerShops";
@@ -26,7 +27,7 @@ export function ShopSetupModal({
   onOpened: (shopId: string) => void;
 }) {
   const openShop = useGameStore((s) => s.openShop);
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const setupNewShop = useAIStore((s) => s.setupNewShop);
 
   const [typeText, setTypeText] = useState("");
@@ -91,7 +92,7 @@ export function ShopSetupModal({
             <div className="min-w-0">
               <h2 className="font-brush text-xl text-gold-400 tracking-widest truncate">新设铺面</h2>
               <p className="font-serif text-xs text-paper-400 mt-0.5 truncate">
-                {place} · 盘店费 {lease} · 现有下品灵石 {stones}
+                {place} · 盘店费 {lease} · 现有折合下品灵石 {stones}
               </p>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Users, Award, Flag } from "lucide-react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
@@ -40,7 +41,7 @@ export function SectPanel() {
 
   const player = useGameStore((s) => s.player);
   const sectSites = useGameStore((s) => s.sectSites);
-  const lowStones = useGameStore((s) => s.spiritStones.low);
+  const lowStones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   // 本门名号以宗门数据为准，缺了再退回角色卡上那一栏；都没有才写「本门」，
   // 免得某一处写死一个名号，与本门实际对不上
   const sectName = (sect.name || player.sectName || "").trim() || "本门";
@@ -776,7 +777,7 @@ function ContributionExchange() {
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const position = useGameStore((s) => s.player.position);
   const positions = useGameStore((s) => (Array.isArray(s.sect?.positions) ? s.sect.positions : []));
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const inventory = useGameStore((s) => (Array.isArray(s.inventory) ? s.inventory : []));
   const donateStonesToSect = useGameStore((s) => s.donateStonesToSect);
   const donateItemToSect = useGameStore((s) => s.donateItemToSect);

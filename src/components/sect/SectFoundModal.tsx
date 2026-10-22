@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import { WORLD_SCENE_ID, getMarker } from "@/data/map";
 import { freeAdventurePoints } from "@/data/adventures";
@@ -28,7 +29,7 @@ export function SectFoundModal({ onClose, onFounded }: { onClose: () => void; on
   const sectSites = useGameStore((s) => s.sectSites);
   const adventures = useGameStore((s) => s.adventures);
   const currentPlaceId = useGameStore((s) => s.currentPlaceId);
-  const lowStones = useGameStore((s) => s.spiritStones.low);
+  const lowStones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const foundSect = useGameStore((s) => s.foundSect);
   const runTurn = useAIStore((s) => s.runTurn);
 

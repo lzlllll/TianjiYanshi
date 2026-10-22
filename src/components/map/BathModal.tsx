@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
 import { aliveBuffs } from "@/lib/buffTime";
@@ -27,7 +28,7 @@ export function BathModal({
   onClose: () => void;
 }) {
   const buffs = useGameStore((s) => s.player.buffs);
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const currentTime = useGameStore((s) => s.currentTime);
   const takeBath = useGameStore((s) => s.takeBath);
 

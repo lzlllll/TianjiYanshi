@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
 import { manorKey } from "@/data/npcGen";
@@ -36,7 +37,7 @@ export function DiningModal({
 }) {
   const key = manorKey(cityId, districtId);
   const live = useGameStore((s) => s.markets[key]?.shops.find((x) => x.id === shop.id)) ?? shop;
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const player = useGameStore((s) => s.player);
   const sect = useGameStore((s) => s.sect);
   const currentTime = useGameStore((s) => s.currentTime);
@@ -240,7 +241,7 @@ export function DiningModal({
           <div className="flex items-center gap-3 shrink-0">
             <span className="flex items-center gap-1 font-serif text-xs text-paper-200">
               <Coins size={13} className="text-gold-400" />
-              下品灵石 {stones}
+              折合下品灵石 {stones}
             </span>
             {canLodge && (
               <div className="flex rounded border border-gold-500/25 overflow-hidden">

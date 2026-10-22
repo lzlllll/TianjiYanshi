@@ -45,7 +45,7 @@ import type {
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
-import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome } from "@/data/quests";
+import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome, questRealmGoalLabel } from "@/data/quests";
 import { buffCatalogBrief } from "@/data/buffs";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
@@ -449,7 +449,9 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
       name: parts[0] || "",
       kind,
       desc: parts[3] || "",
-      place: parts[1] || "",
+      // 修为类没有去处：那一栏填的是境界名，交给 realmGoal 认
+      place: kind === "修为" ? "" : parts[1] || "",
+      realmGoal: kind === "修为" ? parts[1] || "" : undefined,
       dueDay: Number.isFinite(days) && days > 0 ? today + days : undefined,
       giver,
       condition: parts[3] || "",
@@ -4093,7 +4095,8 @@ ${DIALOGUE_STYLE}`;
         const questBrief = listedQuests.length
           ? listedQuests
               .map((q) => {
-                const where = q.target?.label || q.place || "去处未定";
+                const goal = questRealmGoalLabel(q);
+                const where = goal ? `修到${goal}` : q.target?.label || q.place || "去处未定";
                 const due =
                   q.dueDay === undefined
                     ? "不限时"
@@ -4139,7 +4142,7 @@ ${DIALOGUE_STYLE}
 4. 根据剧情上下文和对话历史，做出合理的回应
 5. 回复长度适中，不要太长也不要太短（50-200字）
 6. ${checkInstruction()}
-7. 若你话语间把一桩事托付给了玩家（请他替你跑一趟、捎个口信、寻一样东西），就在回话的最后另起一行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额。类别只写 事件、地点、人物 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写具体。名称不超过 10 字；去处写去哪儿办，如「城南药铺」，事件类不限定可留空；到期只写数字，如 3，表示三日之内，不限时可留空；赏的名目只取 灵石、修为、物品、人情、正道名声、魔道名声、平民名声、官府名声 之一，罚的名目只取 灵石、修为、业力、正道名声、魔道名声、平民名声、官府名声 之一，名目不在其内的就留空；不托付就不写这一行。${isBroker ? "你替柜上交代的差事，同样照这个格式写在末尾，去处与限期要写实在。" : ""}
+7. 若你话语间把一桩事托付给了玩家（请他替你跑一趟、捎个口信、寻一样东西，或与他约定期限修到某一层境界），就在回话的最后另起一行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额。类别只写 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写具体；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人。名称不超过 10 字；去处写去哪儿办，如「城南药铺」，事件类与修为类之外都要写；到期只写数字，如 3，表示三日之内，不限时可留空；赏的名目只取 灵石、修为、物品、人情、正道名声、魔道名声、平民名声、官府名声 之一，罚的名目只取 灵石、修为、业力、正道名声、魔道名声、平民名声、官府名声 之一，名目不在其内的就留空；不托付就不写这一行。${isBroker ? "你替柜上交代的差事，同样照这个格式写在末尾，去处与限期要写实在。" : ""}
 8. 成与不成由你照剧情判，系统只照单落账。若玩家当真办成了你先前托付的那件事，就在回话的最后另起一行只写 ${SETTLE_MARK} 编号或名称 | done；若这桩事黄了、误了期，写 ${SETTLE_MARK} 编号或名称 | failed。编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出是哪一桩就不写。事没到那一步也不写。${isBroker ? "你柜上记下的差事也照此认下；认得之后就让他回柜上来领赏，赏钱此刻还在柜上押着。" : ""}
 9. 若你与玩家当面说定了一桩口头的约定（约他改日再来、替他留一样东西、应下替他办件事），就在回话的最后另起一行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明。名目不超过 10 字；地点写去哪儿了结，说不清可留空；几日后只写数字，如 3，表示三日之内。没跟他说定就不写这一行。${craft ? `\n10. 你若把这件定做的活计应下了、并把价钱与取货的日子也说定了，就在回话的最后另起一块，只输出下面这一块：
 ${CRAFT_MARK}
@@ -4542,7 +4545,8 @@ ${craft ? 12 : 11}. ${isDining
         const questBrief = listedQuests.length
           ? listedQuests
               .map((q) => {
-                const where = q.target?.label || q.place || "去处未定";
+                const goal = questRealmGoalLabel(q);
+                const where = goal ? `修到${goal}` : q.target?.label || q.place || "去处未定";
                 const due =
                   q.dueDay === undefined
                     ? "不限时"
@@ -4595,7 +4599,7 @@ ${heard || "（刚坐下，还没人开口）"}
 2. 用古风白话，合乎你的性情与在场各人与你的干系；可以接旁人的话、驳他、帮腔，也可以只应一声
 3. 50 到 150 字，说话之外可以带一两笔神态动作
 4. ${checkInstruction()}
-5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方。成与不成由你照剧情判：若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 编号或名称 | done，黄了则写 ${SETTLE_MARK} 编号或名称 | failed；编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出就不写。两样都没有就不写。
+5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人。成与不成由你照剧情判：若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 编号或名称 | done，黄了则写 ${SETTLE_MARK} 编号或名称 | failed；编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出就不写。两样都没有就不写。
 6. 若你与玩家当面说定了一桩口头的约定，末行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明；没跟他说定就不写。${profile.scene?.craft ? `若他把定做的活计说定了、你也报过了价与取货的日子，末行之后另起一块只写：
 ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
@@ -6190,13 +6194,11 @@ MODIFY player.mp - 10
         if (!aft || aft.stage !== "surrender") return;
         const gs = useGameStore.getState();
         const ransom = 60;
-        const have = Number(gs.spiritStones?.low) || 0;
+        // 下品不够时，payStones 会自个儿从上级按一比一百兑下来
+        const paid = gs.payStones(ransom);
 
-        if (have >= ransom) {
-          // 赎金付得出：扣灵石，敌方耐心见长
-          useGameStore.getState().applyOps([
-            { kind: "modify", path: "spiritStones.low", op: "-", value: String(ransom) },
-          ]);
+        if (paid) {
+          // 赎金付得出：敌方耐心见长
           const patience = Math.min(100, aft.patience + 25);
           set((st) =>
             st.battle.aftermath

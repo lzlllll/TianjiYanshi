@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
 import { daySerial } from "@/lib/gameTime";
@@ -26,7 +27,7 @@ export function TheatreModal({
   const skills = useGameStore((s) => s.skills);
   const waseShows = useGameStore((s) => s.waseShows);
   const currentTime = useGameStore((s) => s.currentTime);
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const payStones = useGameStore((s) => s.payStones);
   const recordPlay = useGameStore((s) => s.recordPlay);
   const advanceTime = useGameStore((s) => s.advanceTime);
@@ -111,7 +112,7 @@ export function TheatreModal({
           <div className="flex items-center gap-3 shrink-0">
             <span className="flex items-center gap-1 font-serif text-xs text-paper-200">
               <Coins size={13} className="text-gold-400" />
-              下品灵石 {stones}
+              折合下品灵石 {stones}
             </span>
             <button
               onClick={onClose}

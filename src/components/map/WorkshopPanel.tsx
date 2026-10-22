@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
 import { tradeOf } from "@/data/craftsmen";
@@ -32,7 +33,7 @@ export function WorkshopPanel({
   workshop,
   onClose,
 }: WorkshopTarget & { onClose: () => void }) {
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const currentTime = useGameStore((s) => s.currentTime);
   const pacts = useGameStore((s) => s.pacts);
   const settlePact = useGameStore((s) => s.settlePact);
@@ -96,7 +97,7 @@ export function WorkshopPanel({
           <div className="flex items-center gap-3 shrink-0">
             <span className="flex items-center gap-1 font-serif text-xs text-paper-200">
               <Coins size={13} className="text-gold-400" />
-              下品灵石 {stones}
+              折合下品灵石 {stones}
             </span>
             <button
               onClick={onClose}

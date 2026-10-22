@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
@@ -29,7 +30,7 @@ import { Coins, Hammer, Home, Loader2, Sparkles, Wrench, X } from "lucide-react"
  */
 export function ManorPlotModal({ plot, onClose }: { plot: ManorPlot; onClose: () => void }) {
   const live = useGameStore((s) => s.manorPlots?.find((p) => p.id === plot.id)) ?? plot;
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const buildShape = useGameStore((s) => s.buildShape);
   const assignManorFunction = useGameStore((s) => s.assignManorFunction);
   const upgradeManorCell = useGameStore((s) => s.upgradeManorCell);
@@ -134,7 +135,7 @@ export function ManorPlotModal({ plot, onClose }: { plot: ManorPlot; onClose: ()
             <Home size={18} className="text-gold-400 shrink-0" />
             <div className="min-w-0">
               <h2 className="font-brush text-xl text-gold-400 tracking-widest truncate">{live.place}·宅邸</h2>
-              <p className="font-serif text-xs text-paper-400 mt-0.5">7×7 宅地 · 现有下品灵石 {stones}</p>
+              <p className="font-serif text-xs text-paper-400 mt-0.5">7×7 宅地 · 现有折合下品灵石 {stones}</p>
             </div>
           </div>
           <button

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import type { MartialArtOption } from "@/store/useAIStore";
 import { ScrollCard } from "@/components/ui/ScrollCard";
@@ -36,7 +37,7 @@ export function MartialHallModal({
   onClose: () => void;
 }) {
   const techniques = useGameStore((s) => s.techniques);
-  const stones = useGameStore((s) => s.spiritStones.low);
+  const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const payStones = useGameStore((s) => s.payStones);
   const advanceTime = useGameStore((s) => s.advanceTime);
   const addLog = useGameStore((s) => s.addLog);
@@ -224,7 +225,7 @@ export function MartialHallModal({
                   </span>
                 </SealButton>
                 <span className="font-serif text-[11px] text-ink-lightest">
-                  现有下品灵石 {stones}；演武至 {formatTimeShort(shiftGameTime(currentTime, days * HOURS_PER_DAY))}
+                  现有折合下品灵石 {stones}；演武至 {formatTimeShort(shiftGameTime(currentTime, days * HOURS_PER_DAY))}
                 </span>
               </div>
             </ScrollCard>

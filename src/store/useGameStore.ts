@@ -110,8 +110,9 @@ import { applySectFeatureBias, sectBuildingRoster, sectBuildingSpec } from "@/da
 import { SHOP_KINDS, rollMarket, syncMarket } from "@/data/shops";
 import { aliveRumors } from "@/data/rumors";
 import { findSkill, rollSkillCheck, trainOnceADay, trainSkill } from "@/data/skills";
-import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest } from "@/data/quests";
+import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest, questRealmGoalMet } from "@/data/quests";
 import { EMPTY_REPUTATION, normalizeReputation, reputationFirstImpression, shiftReputation } from "@/data/reputation";
+import { spendLowStones } from "@/data/spiritStones";
 import type { BuskResult } from "@/data/types";
 import { beastFromItem, normalizeBeast, raiseBond } from "@/data/beast";
 import {
@@ -372,6 +373,8 @@ interface GameStore extends GameState {
   checkSkill: (args: { skill: string; dc: number; context: string }) => SkillCheck | null;
   /** 了结一桩机缘：交差或作罢；成不成由叙事里那人点头，这里只管落账 */
   settleQuest: (args: { name: string; status: "done" | "failed" }) => boolean;
+  /** 修到修为类机缘指的那一层，便自行办成 */
+  settleRealmQuests: () => void;
   /** 误了期的机缘，到日子一并罚了 */
   expireQuests: () => void;
   /** 立一处奇遇；只落在空闲的预设点位上 */
@@ -1106,6 +1109,8 @@ export const useGameStore = create<GameStore>()(
               ...st.log,
             ].slice(0, 30),
           }));
+          // 修为类机缘若正指着这一层，破关之后便算办到
+          get().settleRealmQuests();
         } else {
           const damage = 50 + Math.floor(Math.random() * 100);
           set((st) => ({
@@ -2719,9 +2724,11 @@ EFFECT: [效果描述]`,
         // 只收整份，零头留着
         const gain = Math.floor(want / STONES_PER_CONTRIBUTION_IN);
         const spend = gain * STONES_PER_CONTRIBUTION_IN;
-        if (gain <= 0 || (Number(st.spiritStones.low) || 0) < spend) return 0;
+        // 下品不够时，自动从中品往上兑下来
+        const paid = spendLowStones(st.spiritStones, spend);
+        if (gain <= 0 || !paid) return 0;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - spend },
+          spiritStones: paid,
           sect: { ...s.sect, contribution: (Number(s.sect.contribution) || 0) + gain },
           log: [`你向门中上交 ${spend} 下品灵石，记贡献 ${gain} 点。`, ...s.log].slice(0, 30),
         }));
@@ -2892,6 +2899,17 @@ EFFECT: [效果描述]`,
           log: [`「${target.name}」${outcome}`, ...st.log].slice(0, 30),
         });
         return true;
+      },
+
+      settleRealmQuests: () => {
+        const st = get();
+        // 修到了那一层，事便算办到；照常走 settleQuest 落账，赏罚一并结清
+        const reached = (Array.isArray(st.quests) ? st.quests : []).filter((q) =>
+          questRealmGoalMet(q, st.player.realmIndex),
+        );
+        for (const quest of reached) {
+          get().settleQuest({ name: quest.id, status: "done" });
+        }
       },
 
       expireQuests: () => {
@@ -3166,9 +3184,10 @@ EFFECT: [效果描述]`,
           return { ok: false, message: "你已是一派之主，不必再立门户。" };
         }
         const cost = SECT_FOUND_STONE_COST;
-        const stones = Number(st.spiritStones.low) || 0;
-        if (stones < cost) {
-          return { ok: false, message: `开山立派须下品灵石 ${cost}，眼下还差 ${cost - stones}。` };
+        // 下品不够时，自动从中品往上兑下来
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) {
+          return { ok: false, message: `开山立派须下品灵石 ${cost}，眼下的灵石兑尽了也不够。` };
         }
         const site = buildFoundingSite(input, st.sectSites);
         if (!site) {
@@ -3179,7 +3198,7 @@ EFFECT: [效果描述]`,
         // 山门图当场注册，立完便进得去
         registerSectScenes(sites);
         set({
-          spiritStones: { ...st.spiritStones, low: stones - cost },
+          spiritStones: paid,
           sectSites: sites,
           sect: {
             ...st.sect,
@@ -3464,10 +3483,11 @@ EFFECT: [效果描述]`,
         const st = get();
         const ticket = st.pawns.find((t) => t.id === ticketId);
         if (!ticket) return false;
-        if (st.spiritStones.low < ticket.price) return false;
+        const paid = spendLowStones(st.spiritStones, ticket.price);
+        if (!paid) return false;
 
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - ticket.price },
+          spiritStones: paid,
           inventory: [...st.inventory, { ...ticket.item, id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}` }],
           pawns: st.pawns.filter((t) => t.id !== ticketId),
           log: [
@@ -3612,11 +3632,12 @@ EFFECT: [效果描述]`,
         const st = get();
         // 身边带不了那么多人，佣金也得当场付清
         if (travelingCount(st.relations) >= MAX_TRAVEL_COMPANIONS) return false;
-        if (st.spiritStones.low < offer.fee) return false;
+        const paid = spendLowStones(st.spiritStones, offer.fee);
+        if (!paid) return false;
 
         const npc = escortToRelation(offer, daySerial(st.currentTime), { cityId, districtId, metAt });
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - offer.fee },
+          spiritStones: paid,
           relations: [...st.relations, npc],
           log: [
             `在「${metAt}」雇下镖师「${npc.name}」，付佣金 ${offer.fee} 下品灵石，雇到第 ${npc.hireUntilDay} 日。`,
@@ -3732,8 +3753,9 @@ EFFECT: [效果描述]`,
         const count = clampHours(hours);
         const cost = bathCost(count);
 
-        if (st.spiritStones.low < cost) {
-          return { ok: false, cost, washed: [] as string[], reason: `下品灵石不够，还差 ${cost - st.spiritStones.low}。` };
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) {
+          return { ok: false, cost, washed: [] as string[], reason: "灵石不够：下品兑尽了，中品、上品与极品也一并兑尽仍不够。" };
         }
 
         // 每泡一个时辰，身上的负面状态便往前挪八个时辰；挪过此刻的就算养好了
@@ -3744,7 +3766,7 @@ EFFECT: [效果描述]`,
         );
 
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost },
+          spiritStones: paid,
           player: { ...st.player, buffs },
           log: [
             `在汤池里泡了 ${count} 个时辰，${washed.length > 0 ? `${washed.join("、")}就此养好了。` : "周身的滞涩松快了些。"}`,
@@ -3978,6 +4000,8 @@ EFFECT: [效果描述]`,
         get().alignPlayerPosition();
         // 叙事把气血或寿元算到了头，就地立终局
         get().tickMortality(0);
+        // 叙事若把境界推上了某一桩修为类机缘所指的那一层，就地认下
+        get().settleRealmQuests();
         // 叙事里启程去了别处，这一路也算走过一段，路上同样可能生变
         if (placeBefore !== get().currentPlaceId) {
           void import("@/store/useAIStore")
@@ -4179,9 +4203,10 @@ EFFECT: [效果描述]`,
         const e = (st.estates ?? []).find((x) => x.id === id);
         if (!e || e.condition >= 100) return false;
         const cost = maintainCost(e.condition);
-        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          spiritStones: paid,
           estates: (s.estates ?? []).map((x) => (x.id === id ? { ...x, condition: 100 } : x)),
           log: [`你花 ${cost} 下品灵石把「${e.name}」修葺一新。`, ...s.log].slice(0, 30),
         }));
@@ -4193,9 +4218,10 @@ EFFECT: [效果描述]`,
         const e = (st.estates ?? []).find((x) => x.id === id);
         if (!e || e.condition > 0) return false;
         const cost = rebuildCost(e);
-        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          spiritStones: paid,
           estates: (s.estates ?? []).map((x) => (x.id === id ? { ...x, condition: REBUILD_CONDITION } : x)),
           log: [`你雇人重建「${e.name}」，耗时 ${REBUILD_DAYS} 日，花 ${cost} 下品灵石。`, ...s.log].slice(0, 30),
         }));
@@ -4350,7 +4376,8 @@ EFFECT: [效果描述]`,
         const st = get();
         const lease = shopLeaseCost(input.culture);
         const capital = Math.max(0, Math.round(Number(input.capital) || 0));
-        if ((Number(st.spiritStones.low) || 0) < lease + capital) return null;
+        const paid = spendLowStones(st.spiritStones, lease + capital);
+        if (!paid) return null;
         const shop: PlayerShop = {
           id: `shop-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
           name: input.name.trim() || "无名铺子",
@@ -4371,7 +4398,7 @@ EFFECT: [效果描述]`,
           arrears: 0,
         };
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - lease - capital },
+          spiritStones: paid,
           playerShops: [...(s.playerShops ?? []), shop],
           log: [
             `你在${input.place}盘下一间铺面「${shop.name}」，盘店花 ${lease} 下品灵石，另投 ${capital} 作本钱。`,
@@ -4482,10 +4509,11 @@ EFFECT: [效果描述]`,
 
       buyPlot: (input) => {
         const st = get();
-        if ((Number(st.spiritStones.low) || 0) < MANOR_PLOT_PRICE) return null;
+        const paid = spendLowStones(st.spiritStones, MANOR_PLOT_PRICE);
+        if (!paid) return null;
         const plot = emptyPlot(input);
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - MANOR_PLOT_PRICE },
+          spiritStones: paid,
           manorPlots: [...(s.manorPlots ?? []), plot],
           log: [`你在${input.place}买下一块宅地，花 ${MANOR_PLOT_PRICE} 下品灵石。`, ...s.log].slice(0, 30),
         }));
@@ -4497,9 +4525,10 @@ EFFECT: [效果描述]`,
         const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
         if (!plot || plot.cells[index]) return false;
         const cost = SHAPE_COST[shape];
-        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          spiritStones: paid,
           manorPlots: (s.manorPlots ?? []).map((p) =>
             p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index ? { shape, level: 1 } : c)) } : p,
           ),
@@ -4526,9 +4555,10 @@ EFFECT: [效果描述]`,
         const cell = plot?.cells[index];
         if (!plot || !cell) return false;
         const cost = manorUpgradeCost(cell.shape, cell.level);
-        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          spiritStones: paid,
           manorPlots: (s.manorPlots ?? []).map((p) =>
             p.id === plotId
               ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, level: c.level + 1 } : c)) }
@@ -4560,9 +4590,10 @@ EFFECT: [效果描述]`,
         const cell = plot?.cells[index];
         if (!plot || !cell) return false;
         const cost = convertCost(cell.shape, shape, cell.level);
-        if ((Number(st.spiritStones.low) || 0) < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
         set((s) => ({
-          spiritStones: { ...s.spiritStones, low: (Number(s.spiritStones.low) || 0) - cost },
+          spiritStones: paid,
           manorPlots: (s.manorPlots ?? []).map((p) =>
             p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, shape } : c)) } : p,
           ),
@@ -4677,8 +4708,9 @@ EFFECT: [效果描述]`,
 
       placeCustomOrder: ({ offer, npcId, giver, place, cityId, districtId }) => {
         const st = get();
-        // 料钱工钱得当面付清
-        if (st.spiritStones.low < offer.price) return false;
+        // 料钱工钱得当面付清；下品不够时自动从上级兑下来
+        const paid = spendLowStones(st.spiritStones, offer.price);
+        if (!paid) return false;
 
         const today = daySerial(st.currentTime);
         const item = normalizeItemElements({
@@ -4709,7 +4741,7 @@ EFFECT: [效果描述]`,
         };
 
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - offer.price },
+          spiritStones: paid,
           pacts: [...st.pacts, pact],
           log: [
             `在「${place}」与${giver}说定，付 ${offer.price} 下品灵石定做「${item.name}」，第 ${pact.dueDay} 日来取。`,
@@ -4799,9 +4831,10 @@ EFFECT: [效果描述]`,
         const shop = market?.shops.find((s) => s.id === shopId);
         const good = shop?.goods?.find((g) => g.name === goodName);
         if (!market || !shop || !good || good.stock <= 0) return false;
-        if (st.spiritStones.low < price) return false;
-
         const taken = Math.max(0, Math.trunc(price));
+        const paid = spendLowStones(st.spiritStones, taken);
+        if (!paid) return false;
+
         const patchShop = (s: typeof shop) =>
           s.id === shopId && s.goods
             ? { ...s, goods: s.goods.map((g) => (g.name === goodName ? { ...g, stock: g.stock - 1 } : g)) }
@@ -4812,7 +4845,7 @@ EFFECT: [效果描述]`,
         const stacked = st.inventory.find((i) => i.name === good.name && i.type === type);
 
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - taken },
+          spiritStones: paid,
           inventory: stacked
             ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + 1 } : i))
             : [
@@ -4843,7 +4876,8 @@ EFFECT: [效果描述]`,
         const take = Math.max(1, Math.min(99, Math.trunc(count) || 1));
         const unit = Math.max(0, Math.round(price));
         const cost = unit * take;
-        if (st.spiritStones.low < cost) return false;
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
 
         const kind = type ?? "杂物";
         // 品阶看单价定，讲价讲下来的便宜不该把东西的品阶也压下去
@@ -4852,7 +4886,7 @@ EFFECT: [效果描述]`,
         const stacked = st.inventory.find((i) => i.name === itemName && i.type === kind);
 
         set({
-          spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost },
+          spiritStones: paid,
           inventory: stacked
             ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + take } : i))
             : [
@@ -4976,8 +5010,10 @@ EFFECT: [效果描述]`,
       payStones: (amount) => {
         const st = get();
         const cost = Math.max(0, Math.trunc(amount));
-        if (st.spiritStones.low < cost) return false;
-        set({ spiritStones: { ...st.spiritStones, low: st.spiritStones.low - cost } });
+        // 下品不够时，自动从中品往上按一比一百兑下来
+        const paid = spendLowStones(st.spiritStones, cost);
+        if (!paid) return false;
+        set({ spiritStones: paid });
         return true;
       },
 

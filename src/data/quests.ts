@@ -25,6 +25,7 @@ import type {
 } from "@/data/types";
 import { EMPTY_REPUTATION, REPUTATION_BY_KIND, REPUTATION_LABELS, shiftReputation } from "@/data/reputation";
 import { BUFF_TARGET_STATS, buffFromTemplate, findBuffTemplate } from "@/data/buffs";
+import { REALMS, REALM_NAMES } from "@/data/mockData";
 import { shiftGameTime } from "@/lib/gameTime";
 
 /** 交差后能兑现的酬谢 */
@@ -60,8 +61,8 @@ const LEGACY_KIND_ALIAS: Record<string, QuestPenaltyKind> = { 声望: "平民名
 
 export const QUEST_STATUSES: QuestStatus[] = ["open", "done", "failed"];
 
-/** 机缘的三类；地点与人物这两类必有具体去处与接头的人 */
-export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物"];
+/** 机缘的四类；地点与人物这两类必有具体去处与接头的人，修为类只看境界 */
+export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物", "修为"];
 
 /** 这一类是不是必有具体去处：事件类可以没有，地点类与人物类必有 */
 export const questKindNeedsPlace = (kind: QuestKind | undefined): boolean =>
@@ -91,6 +92,27 @@ const clampAmount = (raw: unknown): number | undefined => {
 };
 
 const clean = (raw: unknown, max: number) => String(raw ?? "").trim().slice(0, max);
+
+/**
+ * 修为类目标的境界序号：认「炼气后期」这样的全称，也认 REALMS 里的序号；
+ * 只写了「炼气」「筑基」的，认作这一境的初期。
+ */
+function normalizeRealmGoal(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    const idx = Math.trunc(asNumber);
+    if (idx >= 0 && idx < REALMS.length) return idx;
+  }
+  const text = String(raw).trim().replace(/\s+/g, "");
+  if (!text) return undefined;
+  const exact = REALM_NAMES.indexOf(text);
+  if (exact >= 0) return exact;
+  const byName = REALMS.findIndex((r) => r.name === text);
+  if (byName >= 0) return byName;
+  const byPrefix = REALMS.findIndex((r) => text.startsWith(r.name));
+  return byPrefix >= 0 ? byPrefix : undefined;
+}
 
 /** 把差事的去处理出来；缺了名目就当没这一笔，地图上也就无从星标 */
 function normalizeTarget(raw: any): JobTarget | undefined {
@@ -245,6 +267,7 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     broker: normalizeBroker(raw.broker),
     claimed: raw.claimed === true,
     target: normalizeTarget(raw.target),
+    realmGoal: normalizeRealmGoal(raw.realmGoal ?? raw.realm ?? raw.targetRealm),
     carryItemId: clean(raw.carryItemId, 60) || undefined,
     sectTask: normalizeSectTask(raw.sectTask),
   };
@@ -283,6 +306,19 @@ export function attachQuestCarryItem(quest: Quest, inventory: InventoryItem[]): 
   if (!item) return;
   quest.carryItemId = item.id;
   if (!inventory.some((i) => i?.id === item.id)) inventory.push(item);
+}
+
+/** 修为类机缘的目标名目，如「炼气后期」；没写目标的返回空串 */
+export function questRealmGoalLabel(quest: Quest): string {
+  const idx = quest.realmGoal;
+  if (idx === undefined || !Number.isFinite(idx)) return "";
+  const at = Math.max(0, Math.min(REALM_NAMES.length - 1, Math.trunc(idx)));
+  return REALM_NAMES[at] ?? "";
+}
+
+/** 这一桩修到目标那一层了没有 */
+export function questRealmGoalMet(quest: Quest, realmIndex: number): boolean {
+  return quest.status === "open" && quest.realmGoal !== undefined && realmIndex >= quest.realmGoal;
 }
 
 /** 这桩事是不是已经误了期（还没了结的那种） */
