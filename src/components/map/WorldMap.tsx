@@ -38,6 +38,8 @@ import type { ManorTarget } from "./ManorPanel";
 import type { MarketTarget } from "./MarketPanel";
 import type { WorkshopTarget } from "./WorkshopPanel";
 import type { ForestTarget } from "./ForestExploreModal";
+import { ClosedPlaceModal } from "./ClosedPlaceModal";
+import type { ClosedPlaceTarget } from "./ClosedPlaceModal";
 import { PresetPointModal } from "./PresetPointModal";
 import { SectSiteCard } from "./SectSiteCard";
 import { VillagePanel } from "./VillagePanel";
@@ -188,8 +190,8 @@ export function WorldMap({
   const [plotOffer, setPlotOffer] = useState<{ index: number; label: string } | null>(null);
   // 地图模式：寻常舆图，或按所属门派给各处图标染色的势力图
   const [mapMode, setMapMode] = useState<"normal" | "territory">("normal");
-  // 点到的宗教场所或官府：这两处暂未开放，只回一句
-  const [comingSoon, setComingSoon] = useState<string | null>(null);
+  // 点到的宗教场所或官府：这两处还没做成常设界面，改开一扇自述行动的叙事窗
+  const [closedPlace, setClosedPlace] = useState<ClosedPlaceTarget | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -559,7 +561,18 @@ export function WorldMap({
     const district = districtByCell.get(index);
     if (!district) return;
 
-    // 有差事办在这一处的，先摊这一处的人：坊市、匠人区、宗教场所都照此办
+    // 官府与寺观还没做成常设界面：点开便是一扇自述行动的叙事窗。
+    // 差事就算点在这一处，也照旧在这儿办、在这儿交，不必另开一间空屋子
+    if (district.nature === "宗教场所" || district.nature === "政府部门") {
+      setClosedPlace({
+        label: `${place.name}·${district.name || district.nature}`,
+        nature: district.nature,
+        culture: scene.culture,
+      });
+      return;
+    }
+
+    // 有差事办在这一处的，先摊这一处的人：坊市、匠人区都照此办
     const hasErrand = (Array.isArray(quests) ? quests : []).some(
       (q) => q.status === "open" && q.target?.cityId === place.id && q.target.districtId === district.id,
     );
@@ -625,11 +638,6 @@ export function WorldMap({
         workshop,
       });
       return;
-    }
-
-    // 宗教场所与官府眼下还没开出来，点一下只回一句「敬请期待」
-    if (district.nature === "宗教场所" || district.nature === "政府部门") {
-      setComingSoon(`${place.name}·${district.name || district.nature}`);
     }
   };
 
@@ -1424,32 +1432,6 @@ export function WorldMap({
         </div>
       )}
 
-      {/* 宗教场所与官府暂未开放，点一下只回一句 */}
-      {comingSoon && (
-        <div
-          className="absolute inset-0 z-40 flex items-center justify-center bg-ink-950/60 px-4"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => setComingSoon(null)}
-        >
-          <div
-            className="w-full max-w-xs rounded-lg border border-gold-500/40 bg-ink-900/95 p-5 text-center backdrop-blur-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="font-brush text-lg text-gold-300">暂未开放</div>
-            <p className="mt-2 font-serif text-xs leading-relaxed text-paper-300/80">
-              {comingSoon}——此处暂未开放，敬请期待。
-            </p>
-            <button
-              type="button"
-              onClick={() => setComingSoon(null)}
-              className="mt-4 rounded border border-jade-400/50 bg-jade-500/20 px-4 py-1.5 font-serif text-sm text-jade-200 transition hover:bg-jade-500/30"
-            >
-              好
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* 点开的那一处位置：只记位置，故这儿也只报坐标，另给一个抹掉的去处 */}
       {openPreset && (
         <div
@@ -1694,6 +1676,9 @@ export function WorldMap({
       {villageKey && villages[villageKey] && (
         <VillagePanel village={villages[villageKey]} onClose={() => setVillageKey(null)} />
       )}
+
+      {/* 官府与寺观：常设界面未成，改由玩家自述行动、照此写一段 */}
+      {closedPlace && <ClosedPlaceModal {...closedPlace} onClose={() => setClosedPlace(null)} />}
 
       <PresetPointModal
         open={presetModalOpen}

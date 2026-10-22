@@ -27,7 +27,7 @@ import { resolveLocation } from "@/data/locations";
 import { isKnownGood } from "@/data/goods";
 import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data/skills";
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
-import { applyQuestLedger, holdRewardOutcome, normalizeQuest, parseQuestOutcome, type QuestLedgerTarget } from "@/data/quests";
+import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQuest, parseQuestOutcome, pickOpenQuest, type QuestLedgerTarget } from "@/data/quests";
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizeAdventure } from "@/data/adventures";
 import { emptyPlot } from "@/data/manors";
@@ -643,68 +643,57 @@ export function salvageOpObjects(text: string): any[] {
 
 type JsonOpKind = "modify" | "add" | "delete";
 
-const JSON_KIND_ALIASES: { pattern: RegExp; kind: JsonOpKind }[] = [
-  { pattern: /^(modify|update|set|change)$/i, kind: "modify" },
-  { pattern: /^(add|append|create|insert|new)$/i, kind: "add" },
-  { pattern: /^(delete|remove|del|drop)$/i, kind: "delete" },
-];
+/**
+ * 每条 op 只许带提示词里点名的这几个字段。
+ * 模型偶尔会另写 type、action、key、val、target 一类别名，或塞一句说明进来——
+ * 这些都不是约定的写法，一律不收。
+ */
+const JSON_OP_KEYS: Record<JsonOpKind, string[]> = {
+  modify: ["kind", "path", "op", "value"],
+  add: ["kind", "collection", "payload"],
+  delete: ["kind", "collection", "id"],
+};
 
-/** 把 JSON payload 归一化为 applyOne 可消费的字符串或对象 */
-function normalizeJsonPayload(payload: any): string | Record<string, unknown> {
-  if (typeof payload === "string") return payload;
-  if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
-    return payload as Record<string, unknown>;
-  }
-  return JSON.stringify(payload);
+/** 值只取数字或字符串；灵根是提示词里点明要写数组的那一处例外 */
+function jsonOpValue(raw: unknown, path: string): string | null {
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  if (path === "player.spiritRoots" && Array.isArray(raw)) return JSON.stringify(raw);
+  return null;
 }
 
-/** 把单条 JSON 操作归一化为 DataOp */
+/** 把单条 JSON 操作归一化为 DataOp；不合约定格式的整条丢掉 */
 function normalizeJsonOp(item: any): DataOp | null {
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
 
-  const rawKind = String(
-    item.kind ?? item.type ?? item.action ?? item.operation ?? item.opType ?? "",
-  ).trim();
-
-  let kind: JsonOpKind | "" = "";
-  for (const alias of JSON_KIND_ALIASES) {
-    if (alias.pattern.test(rawKind)) {
-      kind = alias.kind;
-      break;
-    }
-  }
-  if (!kind) {
-    if (/修改|变更|更新/.test(rawKind)) kind = "modify";
-    else if (/新增|添加|获得/.test(rawKind)) kind = "add";
-    else if (/删除|移除|失去/.test(rawKind)) kind = "delete";
-    else if (item.path !== undefined) kind = "modify";
-    else if (item.collection === undefined) return null;
-    else if (item.id !== undefined && item.payload === undefined && item.data === undefined && item.item !== undefined) kind = "delete";
-    else kind = "add";
-  }
+  const kind = item.kind;
+  if (kind !== "modify" && kind !== "add" && kind !== "delete") return null;
+  const allowedKeys = JSON_OP_KEYS[kind];
+  if (Object.keys(item).some((key) => !allowedKeys.includes(key))) return null;
 
   if (kind === "modify") {
-    const path = String(item.path ?? item.key ?? "").trim();
+    const path = typeof item.path === "string" ? item.path.trim() : "";
+    const operator = item.op;
     if (!path) return null;
-    let operator = String(item.op ?? item.operator ?? "=").trim();
-    if (operator !== "+" && operator !== "-") operator = "=";
-    const rawValue = item.value ?? item.val ?? "";
-    const value = typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue ?? "");
-    return { kind: "modify", path, op: operator as "=" | "+" | "-", value };
+    if (operator !== "=" && operator !== "+" && operator !== "-") return null;
+    const value = jsonOpValue(item.value, path);
+    if (value === null) return null;
+    return { kind, path, op: operator, value };
   }
 
   if (kind === "add") {
-    const collection = String(item.collection ?? item.target ?? item.into ?? "").trim();
+    const collection = typeof item.collection === "string" ? item.collection.trim() : "";
+    const payload = item.payload;
     if (!collection) return null;
-    const payload = item.payload ?? item.data ?? item.item ?? item.value;
-    if (payload === undefined || payload === null) return null;
-    return { kind: "add", collection, payload: normalizeJsonPayload(payload) };
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    return { kind, collection, payload: payload as Record<string, unknown> };
   }
 
-  const collection = String(item.collection ?? item.target ?? item.from ?? "").trim();
-  const id = String(item.id ?? item.itemId ?? item.key ?? "").trim();
+  const collection = typeof item.collection === "string" ? item.collection.trim() : "";
+  const id =
+    typeof item.id === "string" ? item.id.trim() : typeof item.id === "number" ? String(item.id) : "";
   if (!collection || !id) return null;
-  return { kind: "delete", collection, id };
+  return { kind, collection, id };
 }
 
 export interface JsonOpsResult {
@@ -738,14 +727,19 @@ export function parseJsonOps(raw: string): JsonOpsResult {
     return { ops: [], opsRaw: "", quickDecisions: [], salvaged: false };
   }
 
-  const container: any = Array.isArray(parsed) ? { ops: parsed } : parsed;
-  const rawOps: any[] = Array.isArray(container.ops)
-    ? container.ops
-    : Array.isArray(container.operations)
-      ? container.operations
-      : Array.isArray(container.changes)
-        ? container.changes
-        : [];
+  // 提示词只认一种顶层写法：{"ops": [...], "quickDecisions": [...]}。
+  // 整段给成数组、或另写成 operations／changes 的，都不是约定的格式，不作数。
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    console.warn("[parseJsonOps] 顶层不是约定的 ops 对象，本轮不作数");
+    return { ops: [], opsRaw: "", quickDecisions: [], salvaged };
+  }
+
+  const container = parsed as Record<string, any>;
+  if (!Array.isArray(container.ops)) {
+    console.warn("[parseJsonOps] 缺少 ops 数组，本轮不作数");
+    return { ops: [], opsRaw: "", quickDecisions: [], salvaged };
+  }
+  const rawOps: any[] = container.ops;
 
   const ops: DataOp[] = [];
   for (const item of rawOps.slice(0, MAX_TOTAL_OPS)) {
@@ -753,8 +747,7 @@ export function parseJsonOps(raw: string): JsonOpsResult {
     if (op) ops.push(op);
   }
 
-  const rawQuick =
-    container.quickDecisions ?? container.quick_decisions ?? container.quick ?? container.suggestions;
+  const rawQuick = container.quickDecisions;
   const quickDecisions = Array.isArray(rawQuick)
     ? rawQuick.map((q: any) => String(q ?? "").trim()).filter(Boolean).slice(0, 8)
     : [];
@@ -1599,25 +1592,28 @@ function resolveCheck(root: any, skillName: string, success: boolean): void {
   );
 }
 
-/** 机缘的名字对得上就算它：全名相同，或者一头包含另一头 */
-function questMatches(quest: Quest, asked: string): boolean {
-  return quest.name === asked || asked.includes(quest.name) || quest.name.includes(asked);
-}
-
 /**
  * 把一桩机缘了结掉：改状态、记一笔结果，再照单把酬谢或责罚兑成实数。
  * 只动还开着的那一桩，了结过的再写也不再生效。
  */
 function settleQuest(root: any, name: string, status: "done" | "failed"): void {
   const quests: Quest[] = Array.isArray(root.quests) ? root.quests : [];
-  const target = [...quests].reverse().find((q) => q?.status === "open" && questMatches(q, name));
+  // 名字照最贴近的那一桩认：先认全同，再认包含，取名字最长的，免得认错邻家的事
+  const target = pickOpenQuest(quests, name);
   if (!target) return;
 
   const today = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
-  // 期限还没到就不作误期：日子过了，自会由 expireQuests 照单落账
-  if (status === "failed" && target.dueDay !== undefined && today <= target.dueDay) return;
+  // 成与不成由 AI 判，本地只照单落账；日子过没过只是到期结算另算
   target.status = status;
   target.settledDay = today;
+
+  // 门派交办的差事，任务板上也翻过这一页：办成与误期都算结了
+  if (target.sectTask && root?.sect && Array.isArray(root.sect.tasks)) {
+    const taskId = target.sectTask.taskId;
+    root.sect.tasks = root.sect.tasks.map((t: any) =>
+      t?.id === taskId ? { ...t, settled: true } : t,
+    );
+  }
   // 赏罚是一条状态时，须照眼下时辰算出顶到几时；少了这一笔，状态便立不起来，只剩字面上的一句话
   const ledger: QuestLedgerTarget = {
     ...(root as QuestLedgerTarget),
@@ -1630,6 +1626,10 @@ function settleQuest(root: any, name: string, status: "done" | "failed"): void {
       : applyQuestLedger(ledger, target, status);
   if (status === "done" && target.broker) target.claimed = false;
   root.quests = quests;
+  // 捎信捎物一类的事，事一了，手里那件东西也一并销去
+  if (target.carryItemId && Array.isArray(root.inventory)) {
+    root.inventory = root.inventory.filter((i: any) => i?.id !== target.carryItemId);
+  }
   // 这桩事一了，替它现开的那一处去处也撤去；原本就在舆图上的去处没有 questId，不动
   if (Array.isArray(root.adventures)) {
     root.adventures = root.adventures.filter((a: any) => a?.questId !== target.id);
@@ -2193,6 +2193,20 @@ function applyOne(root: any, op: DataOp): void {
     const normalized = normalizeModifyPath(root, op.path, op.value);
     if (!normalized) return; // 已直接处理
 
+    // 时间的加减要按时辰进位，不能照字面硬加：
+    // 「+3日」落在月底若只加到 33 再折回，日子就白过了，故整份往后推
+    if (normalized.path.startsWith("currentTime.") && op.op !== "=") {
+      const field = normalized.path.slice("currentTime.".length);
+      const hoursPer: Record<string, number> = { hour: 1, day: 12, month: 360, year: 4320 };
+      const amount = Number(parseValue(normalized.value));
+      const hours = hoursPer[field] ? amount * hoursPer[field] : 0;
+      if (Number.isFinite(hours) && hours !== 0) {
+        const now = normalizeGameTime(root.currentTime, OPENING_GAME_TIME);
+        root.currentTime = shiftGameTime(now, op.op === "-" ? -hours : hours);
+      }
+      return;
+    }
+
     const segs = parsePath(normalized.path);
     if (segs.length === 0) return;
     let parent: any = root;
@@ -2363,6 +2377,8 @@ function applyOne(root: any, op: DataOp): void {
           const advArr = resolveCollection(root, "adventures");
           if (!advArr.some((a: any) => a?.id === pinned.adventure!.id)) advArr.push(pinned.adventure);
         }
+        // 捎信捎物一类的事，托付时得把该带的东西真放进行囊
+        attachQuestCarryItem(pinned.quest, resolveCollection(root, "inventory"));
         arr.push(pinned.quest);
         if (arr.length > 40) arr.splice(0, arr.length - 40);
       } else if (op.collection === "adventures") {

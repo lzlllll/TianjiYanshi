@@ -110,7 +110,7 @@ import { applySectFeatureBias, sectBuildingRoster, sectBuildingSpec } from "@/da
 import { SHOP_KINDS, rollMarket, syncMarket } from "@/data/shops";
 import { aliveRumors } from "@/data/rumors";
 import { findSkill, rollSkillCheck, trainOnceADay, trainSkill } from "@/data/skills";
-import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld } from "@/data/quests";
+import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest } from "@/data/quests";
 import { EMPTY_REPUTATION, normalizeReputation, reputationFirstImpression, shiftReputation } from "@/data/reputation";
 import type { BuskResult } from "@/data/types";
 import { beastFromItem, normalizeBeast, raiseBond } from "@/data/beast";
@@ -296,6 +296,8 @@ interface GameStore extends GameState {
   }) => boolean;
   /** 卖出一样东西：行囊里减掉、灵石入袋；totalPrice 是整笔的价钱 */
   sellItem: (args: { itemId: string; totalPrice: number; count: number }) => boolean;
+  /** 把行囊里的东西递出去：从行囊里扣下，记一笔流水 */
+  giveItemAway: (args: { itemId: string; count?: number; toName?: string }) => boolean;
   /** 花掉几枚下品灵石，如打尖叫菜；不够则不成 */
   payStones: (amount: number) => boolean;
   /** 街头卖艺：对选定本事连考五回，过则得钱，失手折平民名声并压低后续判定 */
@@ -2817,15 +2819,11 @@ EFFECT: [效果描述]`,
 
       settleQuest: ({ name, status }) => {
         const st = get();
-        const target = [...st.quests]
-          .reverse()
-          .find((q) => q.status === "open" && (q.name === name || name.includes(q.name) || q.name.includes(name)));
+        // 名字照最贴近的那一桩认：先认全同，再认包含，取名字最长的，免得认错邻家的事
+        const target = pickOpenQuest(st.quests, name);
         if (!target) return false;
 
-        // 期限还写着后头的日子，便不作误期——日子到了、过期了，自会由 expireQuests 照单落账。
-        // 叙事里的人就算先摇了头，也不该把还没到期的桩子记成黄了
-        const today = daySerial(st.currentTime);
-        if (status === "failed" && target.dueDay !== undefined && today <= target.dueDay) return false;
+        // 成与不成由 AI 判，本地只照单落账；日子过没过只是到期结算另算
 
         // 为这桩事现开的那一处去处，事一了便撤去；原本就在舆图上的去处不归它管
         const questAdventure = (Array.isArray(st.adventures) ? st.adventures : []).find(
@@ -2843,6 +2841,10 @@ EFFECT: [效果描述]`,
           set({
             adventures,
             currentAdventureId,
+            // 捎信捎物一类的事了结，手里那件东西一并销去
+            inventory: target.carryItemId
+              ? st.inventory.filter((i) => i.id !== target.carryItemId)
+              : st.inventory,
             quests: st.quests.map((q) =>
               q.id === target.id
                 ? { ...q, status: "done", settledDay: daySerial(st.currentTime), claimed: false, outcome: held }
@@ -2878,6 +2880,10 @@ EFFECT: [效果描述]`,
           relations,
           adventures,
           currentAdventureId,
+          // 捎信捎物一类的事了结，手里那件东西一并销去
+          inventory: target.carryItemId
+            ? st.inventory.filter((i) => i.id !== target.carryItemId)
+            : st.inventory,
           quests: st.quests.map((q) =>
             q.id === target.id
               ? { ...q, status, settledDay: daySerial(st.currentTime), outcome }
@@ -2917,6 +2923,12 @@ EFFECT: [效果描述]`,
 
         // 这些事一了，替它们现开的去处也一并撤去
         const failedIds = new Set(overdue.map((q) => q.id));
+        // 捎信捎物一类的事误了期，手里那件东西也一并销去
+        const carryIds = new Set(
+          overdue.map((q) => q.carryItemId).filter((id): id is string => !!id),
+        );
+        const inventory =
+          carryIds.size > 0 ? st.inventory.filter((i) => !carryIds.has(i.id)) : st.inventory;
         const goneAdventures = new Set(
           (Array.isArray(st.adventures) ? st.adventures : [])
             .filter((a) => a.questId && failedIds.has(a.questId))
@@ -2936,6 +2948,7 @@ EFFECT: [效果描述]`,
           relations,
           adventures,
           currentAdventureId,
+          inventory,
           quests: st.quests.map((q) =>
             outcomes.has(q.id) ? { ...q, status: "failed", settledDay: today, outcome: outcomes.get(q.id)! } : q,
           ),
@@ -4875,6 +4888,26 @@ EFFECT: [效果描述]`,
               ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: rest } : i))
               : st.inventory.filter((i) => i.id !== itemId),
           log: [`你卖掉「${item.name}」${take} 件，得 ${gain} 下品灵石。`, ...st.log].slice(0, 30),
+        });
+        return true;
+      },
+
+      giveItemAway: ({ itemId, count = 1, toName }) => {
+        const st = get();
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!item) return false;
+
+        const take = Math.max(1, Math.min(Math.trunc(count) || 1, item.count));
+        const rest = item.count - take;
+        set({
+          inventory:
+            rest > 0
+              ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: rest } : i))
+              : st.inventory.filter((i) => i.id !== itemId),
+          log: [
+            `你把「${item.name}」${take > 1 ? `${take}件` : ""}递与${toName || "人"}。`,
+            ...st.log,
+          ].slice(0, 30),
         });
         return true;
       },

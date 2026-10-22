@@ -1009,8 +1009,9 @@ export function buildOpsExtractionPrompt(params: {
 }
 
 【ops 规则】
+- 只按上面这一种写法输出，别的写法一律不收：kind 只写 modify、add、delete；modify 只带 kind、path、op、value 四个字段，add 只带 kind、collection、payload，delete 只带 kind、collection、id。不许用 type、action、key、val、target、data 之类的别名，也不许在一条 op 里夹带说明字段。
 - modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
-- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
+- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、sectRelations、occupations、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
 - 宅地：叙事中若确有一处产业落到玩家名下（受赠、置办、承继），可用 add manorPlots 给他一处宅地，payload 只需写 {"place":"地名"}；地块一律由空地起，屋里盖什么由玩家自己张罗。寻常的落脚、借宿不要立宅地。
 - 铺面添货：叙事里若给某家铺子调来了货、补了存货（新到一批药材、庄上送来新酒、行商送来紧俏物事），用 add shop.goods，payload 写 {"shop":"铺子名","goods":[{"name":"货名","price":单价下品灵石,"stock":存货数,"desc":"一句说明"}]}；铺子名须与摘要中「本城铺面」那一行的名号一字不差，已有的货便添存量，没有的便新上一样。玩家自己去铺子挑货、出货那一类买卖不要写这一条，那由铺面界面结算。
 - delete：用 collection 与 id 两个字段，id 必须是摘要中已存在的条目 id。
@@ -1019,7 +1020,7 @@ export function buildOpsExtractionPrompt(params: {
 【内容规则】
 1. 只输出叙事中确实发生的变化，没有发生就不要编造；本轮若无任何变化，ops 输出空数组。
 2. 数值幅度必须与叙事相符，不要夸大，也不要凭空赠送珍稀物品。
-3. 时间：每轮都要回传最新日期。正文里时间若确实走动，用 modify currentTime.year / currentTime.month / currentTime.day / currentTime.hour 把它写足；时辰字段只写十二时辰的名字，取 ${SHICHEN_NAMES.join("、")} 之一；时间没动就照原值再写一遍。当前时间：${formatGameTime(now)}。
+3. 时间：每轮都要回传最新日期。正文里时间若确实走动，用 modify currentTime.year / currentTime.month / currentTime.day / currentTime.hour 把它写足：正文写「三日后」「过了半月」「闭关一月」这类跨度，须照上面给的今日日期折算成新的年月日一并写上，不能只改时辰；时辰字段只写十二时辰的名字，取 ${SHICHEN_NAMES.join("、")} 之一；时间没动就照原值再写一遍。当前时间：${formatGameTime(now)}。
 4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复；物品的 type 只取 材料、丹药、符箓、法宝、灵兽、杂物 之一——叙事里收服、买下一头活物，就用 add inventory 记下，type 写「灵兽」、name 写兽的名目，玩家往后可在灵兽栏把它收作随身；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
 5. 可修改的玩家字段：player.name、player.title、player.realmIndex、player.cultivation、player.hp、player.hpMax、player.mp、player.mpMax、player.spirit、player.spiritMax、player.lifespanCurrent、player.lifespanMax、player.body、player.fortune、player.karma、player.personality、player.description、player.background、player.spiritRoots.<元素>、player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。
 6. 新闻 news.items 仅在跨天时新增，同一天内不要重复生成；每条需含 category（官府公告/宗门布告/市井传言）、title、content、source 四个字段。
@@ -1042,7 +1043,7 @@ ${buffCatalogBrief()}
    - 赏的是一条状态，就把说明写进 rewardBuff；罚的是一条状态，写进 penaltyBuff。先照上面那份状态名录挑，写 {"template":"名录里的 id 或名目","hours":顶几个时辰}；名录里确没有合用的，才自编一条，写 {"name":"名目不超过10字","icon":"一个汉字","isDebuff":true或false,"stat":"效力落在哪一项","value":数值,"hours":顶几个时辰,"desc":"一句说明"}。自编时效力只许从 ${BUFF_TARGET_STATS.join("、")} 里挑一项，正数助益、负数负累；顶的时辰取 1 到 720。挑不出也编不出的就别写，宁可按字面给句话。
    - reward 与 penalty 是写给人看的字面话，与名目/amount 不冲突时可一并写；赏罚是一条状态时，这两句话要与会落到身上的那条状态对得上。
    - 同一件事只立一次；已有在办的机缘不要重复立。
-19. 机缘了结：只有叙事里明说了成与不成——那人点了头，或是事在那一处办到了头——才用 modify quest.<机缘名> 记下，value 写「了」或「误」。办妥写「了」，黄了写「误」；酬谢与责罚由系统照单落账，你不要另写 add player.buffs 之类去兑现。拿不准就先留着，不要替人点头。
+19. 机缘了结：成与不成由你照剧情判，系统只照单落账，不再替你判。只有叙事里明说了成与不成——那人点了头，或是事在那一处办到了头、确已黄了——才用 modify quest.<机缘编号或名目> 记下，value 只写 done 或 failed：办成写 done，黄了、废了、误了写 failed。路径里的编号照摘要中 quests[id] 的 id 抄最稳，抄不出再写名目。酬谢与责罚由系统照单落账，你不要另写 add player.buffs 之类去兑现。拿不准就先留着，不要替人点头。
 20. 固定出没的人物：正文里若冒出一个有头有脸、往后还会再遇上的人物，在 add relations 时用 persona 写定他的人设（一段话，交代脾气、口风、来历、与玩家的干系，往后每回都照它演），并可用 cityId 写他所在的城池名、metAt 写具体去处、fixedUntilDay 写他钉在此处的截止日（今日为第 ${todaySerial} 日，如「这一阵子都在」就写 ${todaySerial + 7}）。期限一过他便不再守在原处，往后随缘在别处露面。只在城中一面之缘的路人不必写这几项。
 21. 人物行踪：尘缘里的人各有各的去处，摘要里写作「现在在某某城·某某处」。正文里若有人说要走了、动身去了别处、或是打听到谁如今在哪儿，用 modify relations[<id>].place 改写他的行踪，value 写成「城名」或「城名·去处」，城池必须是摘要中 currentPlaceId 可选值里的一个，去处写城中具体的地方（如「西市」「城南山货铺」）；只改到城池也认，那时他在那一带出没。没提到谁挪了地方就不要改；与你同行的人（摘要中标着「与你同行」）一路都跟着你，他的行踪不必另写。
 22. 修炼：正文里若写到打坐、静修、闭关、参悟功法，照摘要里「修炼效率」那一行算——打坐几个时辰就给几点进度，用 modify techniques[<id>].proficiency 加到对应功法上。千万不要另给 player.cultivation：这门功法进度长了多少，境界进度会照数自动补上，写了便是重复记账。修炼多则进度多、少则进度少，闭门一日不过几点到十几点，闭关一月也不过百余点，别把大数随手给出；叙事里根本没有修炼之事，就不要动 proficiency。${fillRule}${missingRule}${craftingRule}${adventureRule}
@@ -2207,6 +2208,51 @@ ${FOREST_EVENT_MARK}<一句由头，十到二十字><<<END>>>
   return [
     { role: "system", content: system },
     { role: "user", content: "请写这一趟探索。" },
+  ];
+}
+
+/**
+ * 官署、寺观这两处眼下还没做成常设界面，可它们照旧能做差事的去处。
+ * 玩家自述要做什么，就照这一处的人情规矩写一段，事办到哪一步落在实处。
+ */
+export function buildClosedPlacePrompt(args: {
+  place: string;
+  nature: string;
+  culture?: string;
+  action: string;
+  brief: EventPlayerBrief;
+  history?: { role: "player" | "narrator"; text: string }[];
+}): ChatMessage[] {
+  const office = args.nature === "政府部门";
+  const scene = office
+    ? "衙门前石狮森然，鸣冤鼓立在阶下，差役按刀分立，廊下悬着匾额，堂上有人低声说话。"
+    : "山门里香烟缭绕，钟磬声时断时续，殿前有人洒扫，廊下坐着解签的执事，香客往来。";
+  // 前情只带最近几回，免得越说越长
+  const history = (args.history ?? [])
+    .slice(-6)
+    .map((h) => `${h.role === "player" ? "玩家" : "此处"}：${h.text}`)
+    .join("\n");
+
+  const system = `你是这个修真世界的叙事者。玩家正在${args.place}，要在此办一件具体的事。请就着他的举动写一段叙事。
+
+${PROSE_STYLE}
+
+【去处】${args.place}（${office ? "官署" : "寺观"}）
+【城池风土】${args.culture ? `${args.culture}一带` : "中原一带"}
+【此处的光景】${scene}
+【玩家要做的事】${args.action}
+${history ? `【先前经过】\n${history}\n` : ""}${briefLines(args.brief)}
+
+请写一百八十到三百五十字，规矩如下：
+1. 只就玩家真做了的事往下写：门房、差役、执事、僧道如何应对，事情办到哪一步，都落在实处。他没做的事不要替他做，也不要替他拿主意。
+2. 此处不是有求必应。所托不合规矩、或要考较见识手段的，照实写为难、推诿、盘问或考较；不要凭空给赏，也不要无端加罚。
+3. 成与不成、交付与了结，留待核对与结算，正文里不要替人宣布成败。
+4. 用第三人称古风白话，只写这一处的光景与经过，不要列条目，不要提数值与规则，不要出现「系统」「数据」「玩家」这类出戏的字眼。
+5. 除正文外不要输出任何标记、说明或数据操作。`;
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: args.action },
   ];
 }
 

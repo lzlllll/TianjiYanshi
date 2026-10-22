@@ -12,6 +12,7 @@ import type {
   Buff,
   BuffTargetStat,
   GameTime,
+  InventoryItem,
   JobTarget,
   Quest,
   QuestBroker,
@@ -244,8 +245,44 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     broker: normalizeBroker(raw.broker),
     claimed: raw.claimed === true,
     target: normalizeTarget(raw.target),
+    carryItemId: clean(raw.carryItemId, 60) || undefined,
     sectTask: normalizeSectTask(raw.sectTask),
   };
+}
+
+/**
+ * 捎信、捎物一类的事，手里得真有一封书信或一件东西，
+ * 才谈得上走到人前递过去。
+ */
+export function questCarryItem(quest: Quest): InventoryItem | null {
+  const text = `${quest.name} ${quest.condition} ${quest.desc}`;
+  const letter =
+    /捎信|送信|带信|传信|捎个?口信|带个?口信|带话|捎话|书信|信件|一封.{0,6}信|信一封|信物/.test(text);
+  const parcel = /捎带|捎去|捎件|带件|捎一样|带一样|送物|送东西|包裹|匣子|礼盒|物什|物件/.test(text);
+  if (!letter && !parcel) return null;
+
+  const name = letter ? (/信物/.test(text) ? "信物" : "书信") : "包裹";
+  return {
+    id: `quest-item-${quest.id}`,
+    name,
+    type: "杂物",
+    grade: "凡品",
+    count: 1,
+    icon: name.slice(0, 1),
+    desc: `受托「${quest.name}」${quest.target?.person ? `，须交到${quest.target.person}手上` : ""}。`,
+  };
+}
+
+/**
+ * 托付时把该带的东西放进行囊，记在机缘名下；
+ * 已经给过一次的不再给第二件。
+ */
+export function attachQuestCarryItem(quest: Quest, inventory: InventoryItem[]): void {
+  if (quest.carryItemId && inventory.some((i) => i?.id === quest.carryItemId)) return;
+  const item = questCarryItem(quest);
+  if (!item) return;
+  quest.carryItemId = item.id;
+  if (!inventory.some((i) => i?.id === item.id)) inventory.push(item);
 }
 
 /** 这桩事是不是已经误了期（还没了结的那种） */
@@ -257,26 +294,60 @@ export function isQuestOverdue(quest: Quest, today: number): boolean {
 }
 
 /**
- * 从叙事或交谈里那句判词认出「成了」还是「误了」。
+ * 从在办的机缘里按名字认一桩。
  *
- * 只认说得明白的成败。「未」「还没」「没办完」这些只是说眼下没办成，
- * 不能当作误期——否则期限还没到，机缘就先被记成黄了。
+ * 先认一模一样的；认不出再认互相包含的，从中取名字最长的那一桩——
+ * 「送信」与「替师父送信」都在办时，才不会因为谁记在后面就认错。
+ */
+export function pickOpenQuest<T extends { id?: string; name: string; status?: string }>(
+  quests: T[],
+  asked: string,
+): T | undefined {
+  const want = String(asked ?? "").trim();
+  if (!want) return undefined;
+  const open = (Array.isArray(quests) ? quests : []).filter(
+    (q) => q && (q.status === undefined || q.status === "open"),
+  );
+
+  for (let i = open.length - 1; i >= 0; i--) {
+    if (open[i].name === want) return open[i];
+  }
+  // 摘要里写作 quests[id] = 名称：模型偶尔照 id 写，也认
+  for (let i = open.length - 1; i >= 0; i--) {
+    if (open[i].id && open[i].id === want) return open[i];
+  }
+
+  let best: T | undefined;
+  for (let i = open.length - 1; i >= 0; i--) {
+    const q = open[i];
+    if (!q.name) continue;
+    // 只认两个字以上的包含关系：单字太容易撞上不相干的一桩
+    if (Math.min(want.length, q.name.length) < 2) continue;
+    if (want.includes(q.name) || q.name.includes(want)) {
+      if (!best || q.name.length > best.name.length) best = q;
+    }
+  }
+  return best;
+}
+
+/**
+ * 认 AI 给出的那一个状态。
+ *
+ * 成与不成由 AI 照剧情定，本地只照单落账，不再从「未办完」「无误」这类话里猜——
+ * 猜来猜去，反把没到日子的机缘判黄了。只认说得明白的状态词：
+ * done / failed，兼容 成功、完成、了 与 失败、误、黄。
  */
 export function parseQuestOutcome(value: unknown): "done" | "failed" | null {
-  const text = String(value ?? "").replace(/\s+/g, "");
-  if (!text) return null;
-
-  // 明说黄了的字样先认：「误了」「黄了」里也带一个「了」字，不能算办成。
-  // 「没办成」「未办成」不算——那只是说眼下还没办到，并未说这桩事黄了
-  if (/误|黄|败|砸|告吹|落空|办不到|办不成/.test(text)) {
-    return "failed";
-  }
-  // 带「未」「没」而没明说办不成的，是在说还没办完，留待后话
-  if (/未|没/.test(text)) return null;
-
-  if (/成了|办成|办妥|交差|交了差|了结|已了|^了$|^成$|^妥$|^完成$|^已完成$|办好了/.test(text)) {
-    return "done";
-  }
+  const cleaned = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[「『（(“"']+/, "")
+    .replace(/[」』）)”"']+$/, "");
+  // 只取头一个词：模型偶尔在状态后头缀一句说明，别让那句说明误了事
+  const token = (cleaned.split(/[\s，。；;、|（）()【】\[\].,!?！？]+/)[0] ?? "").trim();
+  if (!token) return null;
+  if (/^(done|complete|completed|success|succeeded|成功|完成|了)$/.test(token)) return "done";
+  if (/^(failed|fail|failure|失败|误|黄)$/.test(token)) return "failed";
   return null;
 }
 

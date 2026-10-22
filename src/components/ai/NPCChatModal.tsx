@@ -3,10 +3,11 @@ import { MAX_PARTY_SIZE, useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { isAroundHere } from "@/data/npcGen";
+import { aiReady } from "@/data/backend";
 import type { Relation } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { migrateRelation } from "@/data/npcGen";
-import { X, Loader2, Send, Trash2, UserPlus, ScrollText } from "lucide-react";
+import { X, Loader2, Send, Trash2, UserPlus, ScrollText, Package } from "lucide-react";
 
 export function NPCChatModal() {
   const npcChat = useAIStore((s) => s.npcChat);
@@ -21,10 +22,15 @@ export function NPCChatModal() {
   const hideNPCChat = useAIStore((s) => s.hideNPCChat);
   const relations = useGameStore((s) => s.relations);
   const currentPlaceId = useGameStore((s) => s.currentPlaceId);
+  const inventory = useGameStore((s) => s.inventory);
+  const settings = useAIStore((s) => s.settings);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [giftOpen, setGiftOpen] = useState(false);
+  const [giftId, setGiftId] = useState<string | null>(null);
+  const [giftCount, setGiftCount] = useState(1);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
 
@@ -61,6 +67,15 @@ export function NPCChatModal() {
           isAroundHere(r, seat.cityId, seat.districtId),
       ),
     [relations, activeNpcId, partyIds, seat.cityId, seat.districtId],
+  );
+
+  /** 能递出去的东西：活物不送，身上正用着的法器也不列，免得误送 */
+  const giftable = useMemo(
+    () =>
+      (Array.isArray(inventory) ? inventory : []).filter(
+        (i) => i && i.count > 0 && i.type !== "灵兽" && !i.equipped,
+      ),
+    [inventory],
   );
 
   useEffect(() => {
@@ -138,6 +153,38 @@ export function NPCChatModal() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  /** 选中的那一样；行囊变了就跟着失效 */
+  const giftItem = giftable.find((i) => i.id === giftId) ?? null;
+  const giftTo = (group ? members[0]?.name : relation?.name) || profile?.name || "他";
+
+  /** 从行囊里取一样递过去：东西当场从行囊扣下，再请对方就着这一递答话 */
+  const handleGift = () => {
+    if (busy || !giftItem) return;
+    // 递了东西却没人应声，不如先拦住：东西不能白扣
+    if (!aiReady(settings)) {
+      setError("推演接口尚未接通：先在设置里接上模型，再递东西。");
+      return;
+    }
+    const n = Math.max(1, Math.min(giftCount, giftItem.count));
+    const unit = giftItem.type === "丹药" || giftItem.type === "符箓" ? "枚" : "件";
+    const desc = String(giftItem.desc || "").trim().slice(0, 40);
+    const text = `（你从行囊里取出${n > 1 ? `${n}${unit}` : `一${unit}`}「${giftItem.name}」，递到${giftTo}面前${desc ? `：${desc}` : ""}）`;
+
+    const ok = useGameStore
+      .getState()
+      .giveItemAway({ itemId: giftItem.id, count: n, toName: giftTo });
+    if (!ok) {
+      setError("行囊里已经没有这件东西了。");
+      return;
+    }
+    setGiftOpen(false);
+    setGiftId(null);
+    setGiftCount(1);
+    setError("");
+    if (group) sendPartyMessage(text);
+    else sendNPCMessage(activeNpcId, text);
   };
 
   const typeLabels: Record<string, string> = {
@@ -351,6 +398,77 @@ export function NPCChatModal() {
         {/* 输入区域 */}
         {(profile || group) && (
           <div className="sticky bottom-0 px-6 py-4 border-t-2 border-gold-500 bg-ink-800">
+            {giftOpen && (
+              <div className="mb-3 rounded border border-gold-500/25 bg-ink-900/50 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-serif text-xs text-gold-400">从行囊取一件，递与{giftTo}</span>
+                  <button
+                    onClick={() => setGiftOpen(false)}
+                    className="text-paper-400/50 hover:text-paper-100 transition"
+                    aria-label="收起"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+
+                {giftable.length === 0 ? (
+                  <p className="font-serif text-xs text-paper-400/45 mt-2">行囊里没有可送的东西。</p>
+                ) : (
+                  <div className="mt-2 max-h-36 overflow-y-auto space-y-1 pr-1">
+                    {giftable.map((it) => (
+                      <button
+                        key={it.id}
+                        onClick={() => {
+                          setGiftId(it.id);
+                          setGiftCount(1);
+                        }}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-2 py-1 rounded border font-serif text-xs transition",
+                          giftId === it.id
+                            ? "border-gold-500/60 bg-gold-500/15 text-paper-100"
+                            : "border-paper-400/15 text-paper-300/80 hover:border-gold-400/40",
+                        )}
+                      >
+                        <span className="text-gold-400">{it.icon}</span>
+                        <span className="flex-1 text-left">{it.name}</span>
+                        <span className="text-paper-400/45">{it.type}·{it.grade}</span>
+                        <span className="font-number text-paper-400/60">×{it.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {giftItem && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="font-serif text-[11px] text-paper-400/55">数量</span>
+                    <button
+                      onClick={() => setGiftCount((c) => Math.max(1, c - 1))}
+                      disabled={giftCount <= 1}
+                      className="w-6 h-6 rounded border border-paper-400/20 text-paper-300/80 hover:border-gold-400/50 disabled:opacity-40 transition"
+                    >
+                      －
+                    </button>
+                    <span className="font-number text-xs text-paper-100 w-6 text-center">{giftCount}</span>
+                    <button
+                      onClick={() => setGiftCount((c) => Math.min(giftItem.count, c + 1))}
+                      disabled={giftCount >= giftItem.count}
+                      className="w-6 h-6 rounded border border-paper-400/20 text-paper-300/80 hover:border-gold-400/50 disabled:opacity-40 transition"
+                    >
+                      ＋
+                    </button>
+                    <SealButton
+                      variant="ghost"
+                      onClick={handleGift}
+                      disabled={busy}
+                      className="ml-auto px-3 py-1 text-xs"
+                    >
+                      递过去
+                    </SealButton>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-3">
               <textarea
                 value={input}
@@ -388,11 +506,26 @@ export function NPCChatModal() {
                 )}
               </div>
             </div>
-            {group && (
-              <p className="mt-2 font-serif text-[11px] text-paper-400/40">
-                你说一句，{members.map((m) => m.name).join("、")}依次接话；不想开口就点「略过」。
-              </p>
-            )}
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <button
+                onClick={() => setGiftOpen((v) => !v)}
+                disabled={busy}
+                title="从行囊里取一样东西递过去"
+                className={cn(
+                  "font-serif text-[11px] px-2 py-1 rounded border transition flex items-center gap-1 disabled:opacity-40",
+                  giftOpen
+                    ? "border-gold-500/50 text-gold-400 bg-gold-500/10"
+                    : "border-paper-400/15 text-paper-400/55 hover:border-gold-400/40 hover:text-gold-400",
+                )}
+              >
+                <Package size={11} /> 赠物
+              </button>
+              {group && (
+                <p className="font-serif text-[11px] text-paper-400/40">
+                  你说一句，{members.map((m) => m.name).join("、")}依次接话；不想开口就点「略过」。
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>

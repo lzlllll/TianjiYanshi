@@ -45,7 +45,7 @@ import type {
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
-import { normalizeQuest, parseQuestKind, parseQuestOutcome } from "@/data/quests";
+import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome } from "@/data/quests";
 import { buffCatalogBrief } from "@/data/buffs";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
@@ -91,6 +91,7 @@ import {
   buildSurrenderPrompt,
   buildBattleIntentPrompt,
   buildForestExplorePrompt,
+  buildClosedPlacePrompt,
   bondLabel,
   type NewsReportParams,
   type BuskBrief,
@@ -482,8 +483,12 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
       villages: Object.values(gs.villages ?? {}),
       sectSites: Array.isArray(gs.sectSites) ? gs.sectSites : [],
     });
+    // 捎信捎物一类的事：托付时把该带的东西真放进他的行囊
+    const inventory = [...(Array.isArray(gs.inventory) ? gs.inventory : [])];
+    attachQuestCarryItem(pinned.quest, inventory);
     useGameStore.setState((s) => ({
       quests: [...s.quests, pinned.quest],
+      inventory,
       // 点名的地方舆图上没有、现开了一处：这一处也得落进舆图，不然这桩事走过去是一片空白
       adventures: pinned.adventure
         ? [...(Array.isArray(s.adventures) ? s.adventures : []), pinned.adventure]
@@ -634,18 +639,18 @@ function settlePactMark(text: string, profile: NPCProfile): string {
  * 成与不成由说话的人说了算，这里只照单落账。
  */
 function settleDoneMark(text: string): string {
-  const found = new RegExp(`${SETTLE_MARK}\\s*([^\\n]+)`).exec(text);
-  if (!found) return text;
-
-  const parts = found[1].split("|").map((p) => p.trim());
-  const name = parts[0] || "";
-  if (name) {
-    // 判词只认说得明白的成与败：「未」「还没」只是没办完，不作误期
-    const outcome = parseQuestOutcome(parts[1] || "");
-    if (outcome) useGameStore.getState().settleQuest({ name, status: outcome });
-  }
-
-  return text.replace(found[0], "");
+  // 一回话里可能同时认下几桩事，逐条都认，不能只摘头一条
+  const pattern = new RegExp(`${SETTLE_MARK}\\s*([^\\n]+)`, "g");
+  return text.replace(pattern, (_full, body: string) => {
+    const parts = String(body).split("|").map((p) => p.trim());
+    const name = parts[0] || "";
+    if (name) {
+      // 判词只认说得明白的成与败：「未」「还没」只是没办完，不作误期
+      const outcome = parseQuestOutcome(parts[1] || "");
+      if (outcome) useGameStore.getState().settleQuest({ name, status: outcome });
+    }
+    return "";
+  });
 }
 
 /**
@@ -1119,6 +1124,17 @@ interface AIStore {
     ops: DataOp[];
     eventReason: string;
   }>;
+  /**
+   * 官署、寺观这两处还没做成常设界面，却仍可能被差事点名。
+   * 玩家自述要做什么，就照这一处的规矩写一段；交差、见人、了结照旧走同一条结算。
+   */
+  visitClosedPlace: (args: {
+    place: string;
+    nature: string;
+    culture?: string;
+    action: string;
+    history?: { role: "player" | "narrator"; text: string }[];
+  }) => Promise<{ text: string; ops: DataOp[] }>;
   /** 请武馆教习现列一份低阶武学名录 */
   listMartialArts: (args: { culture?: string }) => Promise<MartialArtOption[]>;
   /** 为一场街头卖艺写一段叙事；成败已由代码定下 */
@@ -4061,6 +4077,33 @@ ${DIALOGUE_STYLE}`;
               .filter((r) => r.cityId === gameState.currentPlaceId && r.type !== "enemy")
               .map((r) => r.name)
           : [];
+        // 把玩家身上在办的事摊给这一位：认下哪一桩时，名称照抄，别另编
+        const todaySerial = daySerial(gameState.currentTime);
+        const openQuests = (Array.isArray(gameState.quests) ? gameState.quests : []).filter(
+          (q) => q?.status === "open",
+        );
+        // 与这位相干的排前头：他托付的、或要找他交差的，别被十桩以外的挤掉
+        const relatedQuests = openQuests.filter(
+          (q) => q.giver === profile.name || q.target?.person === profile.name,
+        );
+        const listedQuests = [
+          ...relatedQuests,
+          ...openQuests.filter((q) => !relatedQuests.includes(q)),
+        ].slice(0, 12);
+        const questBrief = listedQuests.length
+          ? listedQuests
+              .map((q) => {
+                const where = q.target?.label || q.place || "去处未定";
+                const due =
+                  q.dueDay === undefined
+                    ? "不限时"
+                    : q.dueDay < todaySerial
+                      ? `已误期${todaySerial - q.dueDay}日`
+                      : `第${q.dueDay}日止`;
+                return `「${q.name}」〔编号 ${q.id}〕｜托自${q.giver || "某人"}｜${where}｜交差：${q.condition || "未写明"}｜${due}`;
+              })
+              .join("\n")
+          : "（眼下没有在办的事）";
 
         const prompt: import("@/lib/aiClient").ChatMessage[] = [
           {
@@ -4077,6 +4120,8 @@ ${DIALOGUE_STYLE}`;
 ${profile.scene && !craft ? `【这一席】：你们正在「${profile.scene.shop}」的堂里同席，桌上摊着吃食酒水。\n` : ""}${craft ? `【这一处】：你正在「${profile.scene!.shop}」的作坊里，手边是${craft}的家什。玩家找上门，多半是要定做一件东西——你先掂量料钱与工钱，问他用途与分量，嫌麻烦也好、说这料不好凑也好，都由着你的性子；掂量完了再报一个价与取货的日子。价钱落在 ${CRAFT_PRICE_RANGE[0]} 到 ${CRAFT_PRICE_RANGE[1]} 枚下品灵石之间，取货的日子落在 ${CRAFT_DAYS_RANGE[0]} 到 ${CRAFT_DAYS_RANGE[1]} 日之内。价钱只是报下，须得他当面付了钱才算定下；他若出不起，你只管把话说死，或干脆说不接这活。\n` : ""}${isBroker ? `【这一处】：你正在「${profile.scene!.shop}」的柜上主事。牙行替四方牵线揽差事，柜上常年挂着几桩等人来接。玩家问起有什么可做的，你就拣一桩交代下去——去处、限期、交差的条件、赏多少，都要说清楚；赏钱由柜上先押着，事办成了要他回柜上领才算到手，别在话里把赏当场给了他。\n【去处只许这几处】：${brokerPlaces.join("、") || "（眼下没有）"}；【能托付的人只许这几位】：${brokerPeople.join("、") || "（眼下没有，就只交代跑地方的事）"}。去处与人名都要照抄这几个，一个字都不要另编。\n` : ""}
 【玩家的市井本事】：${brief.skills}
 【最近的判定】：${brief.checks}
+【玩家身上在办的事】（认下时只认与你相干的：你托付的，或该交到你手上的）：
+${questBrief}
 
 【当前剧情上下文】：
 ${conversation.summary || "暂无"}
@@ -4095,7 +4140,7 @@ ${DIALOGUE_STYLE}
 5. 回复长度适中，不要太长也不要太短（50-200字）
 6. ${checkInstruction()}
 7. 若你话语间把一桩事托付给了玩家（请他替你跑一趟、捎个口信、寻一样东西），就在回话的最后另起一行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额。类别只写 事件、地点、人物 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写具体。名称不超过 10 字；去处写去哪儿办，如「城南药铺」，事件类不限定可留空；到期只写数字，如 3，表示三日之内，不限时可留空；赏的名目只取 灵石、修为、物品、人情、正道名声、魔道名声、平民名声、官府名声 之一，罚的名目只取 灵石、修为、业力、正道名声、魔道名声、平民名声、官府名声 之一，名目不在其内的就留空；不托付就不写这一行。${isBroker ? "你替柜上交代的差事，同样照这个格式写在末尾，去处与限期要写实在。" : ""}
-8. 若玩家当真办成了你先前托付的那件事，你当面点头认下，就在回话的最后另起一行只写 ${SETTLE_MARK} 名称 | 了；若这桩事黄了、误了期，写 ${SETTLE_MARK} 名称 | 误。事没到那一步就不写。${isBroker ? "你柜上记下的差事也照此认下；认得之后就让他回柜上来领赏，赏钱此刻还在柜上押着。" : ""}
+8. 成与不成由你照剧情判，系统只照单落账。若玩家当真办成了你先前托付的那件事，就在回话的最后另起一行只写 ${SETTLE_MARK} 编号或名称 | done；若这桩事黄了、误了期，写 ${SETTLE_MARK} 编号或名称 | failed。编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出是哪一桩就不写。事没到那一步也不写。${isBroker ? "你柜上记下的差事也照此认下；认得之后就让他回柜上来领赏，赏钱此刻还在柜上押着。" : ""}
 9. 若你与玩家当面说定了一桩口头的约定（约他改日再来、替他留一样东西、应下替他办件事），就在回话的最后另起一行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明。名目不超过 10 字；地点写去哪儿了结，说不清可留空；几日后只写数字，如 3，表示三日之内。没跟他说定就不写这一行。${craft ? `\n10. 你若把这件定做的活计应下了、并把价钱与取货的日子也说定了，就在回话的最后另起一块，只输出下面这一块：
 ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene!.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
@@ -4483,6 +4528,31 @@ ${craft ? 12 : 11}. ${isDining
         const locationName = LOCATIONS.find((l) => l.id === gs.currentLocation)?.name ?? gs.currentLocation;
         const timeStr = formatGameTime(gs.currentTime);
         const brief = skillBrief();
+        // 同席的几位也该知道玩家身上在办什么，认下时名称照抄
+        const todaySerial = daySerial(gs.currentTime);
+        const openQuests = (Array.isArray(gs.quests) ? gs.quests : []).filter((q) => q?.status === "open");
+        // 在座几位托付的、或要交给他们的，排前头，免得被挤到十桩以外
+        const relatedQuests = openQuests.filter((q) =>
+          members.some((m) => q.giver === m.name || q.target?.person === m.name),
+        );
+        const listedQuests = [
+          ...relatedQuests,
+          ...openQuests.filter((q) => !relatedQuests.includes(q)),
+        ].slice(0, 12);
+        const questBrief = listedQuests.length
+          ? listedQuests
+              .map((q) => {
+                const where = q.target?.label || q.place || "去处未定";
+                const due =
+                  q.dueDay === undefined
+                    ? "不限时"
+                    : q.dueDay < todaySerial
+                      ? `已误期${todaySerial - q.dueDay}日`
+                      : `第${q.dueDay}日止`;
+                return `「${q.name}」〔编号 ${q.id}〕｜托自${q.giver || "某人"}｜${where}｜交差：${q.condition || "未写明"}｜${due}`;
+              })
+              .join("\n")
+          : "（眼下没有在办的事）";
         const roster = members.map((m) => `- ${m.name}（${m.title}）`).join("\n");
         const briefs = members
           .map((m) => `- ${m.name}（${m.title}）：${m.persona || m.note || "说不上底细"}`)
@@ -4514,6 +4584,8 @@ ${roster}
 ${briefs}
 ${profile.scene?.craft ? `【这一处】：你正在「${profile.scene.shop}」的作坊里，手边是${profile.scene.craft}的家什。玩家若开口要定做东西，你先掂量料钱与工钱，再报一个价与取货的日子；价钱落在 ${CRAFT_PRICE_RANGE[0]} 到 ${CRAFT_PRICE_RANGE[1]} 枚下品灵石之间，日子落在 ${CRAFT_DAYS_RANGE[0]} 到 ${CRAFT_DAYS_RANGE[1]} 日之内。\n` : ""}${profile.scene?.kind === "牙行" ? `【柜上的规矩】：你在牙行的柜上主事，交代差事时，去处只许从这几处里挑：${getDistricts(gs.currentPlaceId).map((d) => gs.districtNames?.[`${gs.currentPlaceId}:${d.id}`] || d.nature).join("、") || "（眼下没有）"}；不许另编地名。\n` : ""}【玩家的市井本事】：${brief.skills}
 【最近的判定】：${brief.checks}
+【玩家身上在办的事】（认下时只认与你相干的）：
+${questBrief}
 
 【这一席的对话记录】：
 ${heard || "（刚坐下，还没人开口）"}
@@ -4523,7 +4595,7 @@ ${heard || "（刚坐下，还没人开口）"}
 2. 用古风白话，合乎你的性情与在场各人与你的干系；可以接旁人的话、驳他、帮腔，也可以只应一声
 3. 50 到 150 字，说话之外可以带一两笔神态动作
 4. ${checkInstruction()}
-5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方。若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 名称 | 了，黄了则写 ${SETTLE_MARK} 名称 | 误。两样都没有就不写。
+5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方。成与不成由你照剧情判：若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 编号或名称 | done，黄了则写 ${SETTLE_MARK} 编号或名称 | failed；编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出就不写。两样都没有就不写。
 6. 若你与玩家当面说定了一桩口头的约定，末行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明；没跟他说定就不写。${profile.scene?.craft ? `若他把定做的活计说定了、你也报过了价与取货的日子，末行之后另起一块只写：
 ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
@@ -4793,6 +4865,31 @@ ${nature ? `【宗门性质】${nature}\n` : ""}${climate ? `【宗门风气】$
         if (reason) void get().triggerRandomEvent(`在${place}探索时：${reason}`);
 
         return { text, ops, eventReason: reason };
+      },
+
+      visitClosedPlace: async ({ place, nature, culture, action, history }) => {
+        const { settings } = get();
+        if (!aiReady(settings)) {
+          throw new Error("推演接口尚未接通：先在设置里接上模型，再来此处办事。");
+        }
+        const ask = String(action ?? "").trim();
+        if (!ask) throw new Error("先写下你打算做什么。");
+
+        const gs = useGameStore.getState();
+        const brief = buildEventBrief(gs as unknown as GameState, place);
+        const raw = await chatWithModel(
+          settings,
+          settings.proModel,
+          buildClosedPlacePrompt({ place, nature, culture, action: ask, brief, history }),
+          { timeoutMs: 120000, retries: 1, temperature: 0.9 },
+        );
+        const text = String(raw ?? "").trim();
+        if (!text) throw new Error("这一处没写出什么，再试一回。");
+
+        // 这一段里交的差、见的人、了的事，照旧走同一条结算落账
+        const controller = new AbortController();
+        const ops = await extractEventOps(settings, text, controller.signal);
+        return { text, ops };
       },
 
       dineAt: async ({ shop, kind, market, culture, dish, dishDesc, guests }) => {

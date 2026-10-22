@@ -32,8 +32,6 @@ export const LEGACY_DAY_OFFSET =
   OPENING_GAME_TIME.day -
   OPENING_DAY_SERIAL;
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
 /** 数字折时辰：0-11 视为时辰序号，12-23 视为二十四小时制钟点 */
 function hourNumberToIndex(value: number): number | null {
   const n = Math.trunc(value);
@@ -85,10 +83,27 @@ export function normalizeGameTime(value: unknown, fallback: GameTime = OPENING_G
   const month = Number(raw.month);
   const day = Number(raw.day);
 
+  let nextYear = Number.isFinite(year) && year > 0 ? Math.trunc(year) : fallback.year;
+  let nextMonth = Number.isFinite(month) ? Math.trunc(month) : fallback.month;
+  let nextDay = Number.isFinite(day) ? Math.trunc(day) : fallback.day;
+
+  // 月日若越界，往前折而不是一夹了事：第 33 日折成下月初三，
+  // 免得跨月的日子被夹回月末，白过一场
+  if (nextDay < 1) nextDay = 1;
+  while (nextDay > DAYS_PER_MONTH) {
+    nextDay -= DAYS_PER_MONTH;
+    nextMonth += 1;
+  }
+  if (nextMonth < 1) nextMonth = 1;
+  while (nextMonth > MONTHS_PER_YEAR) {
+    nextMonth -= MONTHS_PER_YEAR;
+    nextYear += 1;
+  }
+
   return {
-    year: Number.isFinite(year) && year > 0 ? Math.trunc(year) : fallback.year,
-    month: Number.isFinite(month) ? clamp(Math.trunc(month), 1, MONTHS_PER_YEAR) : fallback.month,
-    day: Number.isFinite(day) ? clamp(Math.trunc(day), 1, DAYS_PER_MONTH) : fallback.day,
+    year: nextYear,
+    month: nextMonth,
+    day: nextDay,
     hour: raw.hour === undefined ? fallback.hour : normalizeHour(raw.hour, fallback.hour),
   };
 }
