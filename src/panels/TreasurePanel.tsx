@@ -86,7 +86,7 @@ export function TreasurePanel() {
                   <div className="w-5 h-5 rounded-full bg-gradient-to-br from-gold-300 to-gold-600 shadow-glow opacity-70" />
                 </div>
                 <div className={cn("font-number text-2xl", tier.color)}>
-                  {(spiritStones[tier.key] ?? 0).toLocaleString()}
+                  {Number(spiritStones[tier.key] ?? 0).toLocaleString()}
                 </div>
                 <div className="font-serif text-xs text-paper-400/50 mt-0.5">枚</div>
 

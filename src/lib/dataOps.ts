@@ -662,7 +662,55 @@ function jsonOpValue(raw: unknown, path: string): string | null {
   if (typeof raw === "string") return raw;
   if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
   if (path === "player.spiritRoots" && Array.isArray(raw)) return JSON.stringify(raw);
+  // 四等灵石有时整块写成对象，如 {"low":120,"mid":2}；照字面收下，落账时再拆
+  if ((path === "spiritStones" || path === "player.spiritStones") && raw && typeof raw === "object") {
+    return JSON.stringify(raw);
+  }
   return null;
+}
+
+/** 中文数字读成数：三十、一百二十、两千五百、三万 */
+function cnToNumber(text: string): number | null {
+  let total = 0;
+  let section = 0;
+  let digit: number | null = null;
+  let seen = false;
+  for (const ch of text) {
+    const unit = ch === "十" ? 10 : ch === "百" ? 100 : ch === "千" ? 1000 : ch === "万" ? 10000 : 0;
+    if (unit) {
+      seen = true;
+      if (unit === 10000) {
+        total += (section + (digit ?? 0)) * 10000;
+        section = 0;
+      } else {
+        section += (digit ?? 1) * unit;
+      }
+      digit = null;
+      continue;
+    }
+    if (ch in CN_DIGITS) {
+      digit = CN_DIGITS[ch];
+      seen = true;
+      continue;
+    }
+    return null;
+  }
+  return seen ? total + section + (digit ?? 0) : null;
+}
+
+/**
+ * 宽松读数：模型常把价钱写成「30枚」「三十」或「30 下品灵石」，
+ * 认得出便照数收下，认不出返回 null，由调用方决定丢不丢。
+ */
+function looseNumber(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!text) return null;
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) return Number(text);
+  const digits = text.match(/-?\d+(?:\.\d+)?/);
+  if (digits) return Number(digits[0]);
+  return cnToNumber(text.replace(/[^零〇一二两三四五六七八九十百千万]/g, ""));
 }
 
 /** 把单条 JSON 操作归一化为 DataOp；不合约定格式的整条丢掉 */
@@ -671,21 +719,24 @@ function normalizeJsonOp(item: any): DataOp | null {
 
   const kind = item.kind;
   if (kind !== "modify" && kind !== "add" && kind !== "delete" && kind !== "buy") return null;
-  const allowedKeys = JSON_OP_KEYS[kind];
-  if (Object.keys(item).some((key) => !allowedKeys.includes(key))) return null;
+  // buy 允许带铺名、卖主一类说明字段：这些不影响钱货，整条丢掉反倒让买下的东西没进囊
+  if (kind !== "buy") {
+    const allowedKeys = JSON_OP_KEYS[kind];
+    if (Object.keys(item).some((key) => !allowedKeys.includes(key))) return null;
+  }
 
   if (kind === "buy") {
     const name = typeof item.name === "string" ? item.name.trim() : "";
-    const price = Number(item.price);
     if (!name) return null;
-    if (!Number.isFinite(price) || price < 0) return null;
-    const count = Number(item.count);
+    const price = looseNumber(item.price);
+    if (price === null || price < 0) return null;
+    const count = looseNumber(item.count);
     return {
       kind,
       what: item.what === "manor" ? "manor" : "item",
       name,
       price: Math.round(price),
-      count: Number.isFinite(count) && count > 0 ? Math.min(99, Math.trunc(count)) : undefined,
+      count: count !== null && count > 0 ? Math.min(99, Math.trunc(count)) : undefined,
       type: typeof item.type === "string" ? item.type.trim() : undefined,
       grade: typeof item.grade === "string" ? item.grade.trim() : undefined,
       desc: typeof item.desc === "string" ? item.desc.trim() : undefined,
@@ -707,8 +758,11 @@ function normalizeJsonOp(item: any): DataOp | null {
     const collection = typeof item.collection === "string" ? item.collection.trim() : "";
     const payload = item.payload;
     if (!collection) return null;
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-    return { kind, collection, payload: payload as Record<string, unknown> };
+    // 字串也收：模型偶尔把一件物、一段说明直接写成字面，落账时会再解析
+    if (!payload || (typeof payload !== "object" && typeof payload !== "string") || Array.isArray(payload)) {
+      return null;
+    }
+    return { kind, collection, payload: payload as string | Record<string, unknown> };
   }
 
   const collection = typeof item.collection === "string" ? item.collection.trim() : "";
@@ -963,6 +1017,12 @@ function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | n
   return null;
 }
 
+/** 灵石四等一律折成非负整数：旧档或模型给的「一百二十」也认得出 */
+function stoneAmount(v: unknown): number {
+  const n = typeof v === "string" ? looseNumber(v) : Number(v);
+  return Math.max(0, Math.trunc(Number.isFinite(Number(n)) ? Number(n) : 0));
+}
+
 export function applyOpsToState(
   state: GameState,
   ops: DataOp[],
@@ -1015,6 +1075,14 @@ export function applyOpsToState(
     manorPlots: Array.isArray(state.manorPlots) ? state.manorPlots.map((p) => ({ ...p })) : [],
   };
 
+  // 先收拾一遍灵石：旧档里若留着字面，后面的加减与付账都会算错
+  next.spiritStones = {
+    low: stoneAmount(next.spiritStones?.low),
+    mid: stoneAmount(next.spiritStones?.mid),
+    high: stoneAmount(next.spiritStones?.high),
+    supreme: stoneAmount(next.spiritStones?.supreme),
+  };
+
   const oldDateKey = state.currentTime ? gameDateKey(state.currentTime) : "";
 
   let addCount = 0, modifyCount = 0, deleteCount = 0, buyCount = 0;
@@ -1038,6 +1106,14 @@ export function applyOpsToState(
 
   // 时间是模型给的值，写回前统一夹一遍：时辰认名也认数，月日夹在合法区间
   next.currentTime = normalizeGameTime(next.currentTime, state.currentTime ?? OPENING_GAME_TIME);
+
+  // 四等灵石一律收拾成非负整数：模型偶尔写成「一百二十」「-5」，面板与付账都按数算
+  next.spiritStones = {
+    low: stoneAmount(next.spiritStones?.low),
+    mid: stoneAmount(next.spiritStones?.mid),
+    high: stoneAmount(next.spiritStones?.high),
+    supreme: stoneAmount(next.spiritStones?.supreme),
+  };
 
   /*
    * 叙事里打坐、闭关，功法进度照所耗时辰算，一夜不过几点。
@@ -1600,6 +1676,7 @@ export function normalizeAppraisal(reading: unknown, fallback: InventoryItem): I
 const REALMS_LIST = REALM_NAMES;
 
 const CN_DIGITS: Record<string, number> = {
+  零: 0, 〇: 0,
   一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
 };
 
@@ -1843,6 +1920,35 @@ function findRentTargetByName(root: any, name: string): { kind: "estate" | "plot
 function normalizeModifyPath(root: any, path: string, value: string): { path: string; value: string } | null {
   // 处理 player.maxHp → player.hpMax 等
   let normalizedPath = path;
+
+  // 四等灵石：模型有时照玩家字段写成 player.spiritStones.low，或在一条里整块给出四本账。
+  // 灵石在存档里是顶层的一本，照原样写只会落到 player 底下，面板一分也认不出来
+  if (normalizedPath.startsWith("player.spiritStones")) {
+    normalizedPath = normalizedPath.slice("player.".length);
+  }
+  if (normalizedPath === "spiritStones") {
+    let parsed: any = value;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return null;
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const tier = (v: unknown) => Math.max(0, Math.trunc(Number(v) || 0));
+    root.spiritStones = {
+      low: tier(parsed.low ?? parsed.下品),
+      mid: tier(parsed.mid ?? parsed.中品),
+      high: tier(parsed.high ?? parsed.上品),
+      supreme: tier(parsed.supreme ?? parsed.极品),
+    };
+    return null; // 已直接处理
+  }
+  if (/^spiritStones\.(low|mid|high|supreme)$/.test(normalizedPath)) {
+    const n = looseNumber(value);
+    return n === null ? null : { path: normalizedPath, value: String(Math.trunc(n)) };
+  }
 
   // 时辰：模型写「午时」或写 6 都收，统一折成 0-11 的时辰序号再落库
   if (normalizedPath === "currentTime.hour") {
@@ -2378,7 +2484,19 @@ function applyOne(root: any, op: DataOp): void {
       if (op.collection === "techniques") {
         arr.push(normalizeTechnique(payload));
       } else if (op.collection === "inventory") {
-        arr.push(normalizeItemElements(payload));
+        // 模型偶尔只丢来一个名目字串；认作杂物收下，别让买来的东西凭空没了
+        const rawItem = typeof payload === "string" ? { name: payload } : payload;
+        const named =
+          rawItem && typeof rawItem === "object" && !String((rawItem as any).name ?? "").trim()
+            ? {
+                ...rawItem,
+                name:
+                  String((rawItem as any).text ?? (rawItem as any).desc ?? (rawItem as any).description ?? "")
+                    .trim()
+                    .slice(0, 30) || "无名之物",
+              }
+            : rawItem;
+        arr.push(normalizeItemElements(named));
       } else if (op.collection === "sect.modifiers") {
         // 宗门修正：只认名录里的 id，名目与生效到哪一日由系统照名录补齐，模型自造的作废
         const spec = makeModifier(
