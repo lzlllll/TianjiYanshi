@@ -881,7 +881,7 @@ ${PROSE_STYLE}
 【固定机制交由本地系统】战斗、炼丹、画符、铺面买卖这类自有定规的事，不由你替它定夺：
 - 交手：正文只写势成与两下照面，点到即止；不要写招式往来、胜负与伤亡，也不要写气血、灵力、伤害的数字。
 - 炼丹、画符：不要复述开炉、运笔的经过，也不要写丹药符箓的成色、数量与成败；这些由百艺界面当场定夺。
-- 铺面买卖：只写他寻到铺子、有意买或卖；不要写议价、成交的经过，也不要写价钱与得失，那些交给铺面界面由玩家自己经手。
+- 铺面买卖：走铺面界面、讲价界面、屋舍界面的买卖，只写他寻到铺子、有意买或卖；不要写议价、成交的经过与价钱，那些交给界面由玩家自己经手。叙事里当场成交的买卖（路边摊、行商、拍卖、买宅地）可以写成买成了，但下笔前先照摘要里的灵石算：够便写成交；四等灵石按一比一百兑尽了仍不够，就写他拿不出钱、终究没能买下，不要写成买成了。
 
 【世界观】灵根九系（金、木、水、火、土、风、雷、冰、暗）决定修炼速度。功法分五品（凡、灵、玄、地、天）五类（心法、炼体、神通、身法、秘术）。心性任意中文词汇，0-100分影响修炼与奇遇。经脉通畅度0-100影响气血运行。
 
@@ -1013,7 +1013,7 @@ export function buildOpsExtractionPrompt(params: {
 }
 
 【ops 规则】
-- 只按上面这一种写法输出，别的写法一律不收：kind 只写 modify、add、delete；modify 只带 kind、path、op、value 四个字段，add 只带 kind、collection、payload，delete 只带 kind、collection、id。不许用 type、action、key、val、target、data 之类的别名，也不许在一条 op 里夹带说明字段。
+- 只按上面这一种写法输出，别的写法一律不收：kind 只写 modify、add、delete、buy；modify 只带 kind、path、op、value 四个字段，add 只带 kind、collection、payload，delete 只带 kind、collection、id，buy 只带 kind、what、name、price、count、type、grade、desc、place。不许用 type、action、key、val、target、data 之类的别名，也不许在一条 op 里夹带说明字段。
 - modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
 - add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、sectRelations、occupations、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
 - 宅地：叙事中若确有一处产业落到玩家名下（受赠、置办、承继），可用 add manorPlots 给他一处宅地，payload 只需写 {"place":"地名"}；地块一律由空地起，屋里盖什么由玩家自己张罗。寻常的落脚、借宿不要立宅地。
@@ -1062,6 +1062,7 @@ ${buffCatalogBrief()}
 31. 城村易主：正文里若有宗门攻下了一座城或一个村（城名取自摘要中「九州城池可往来者」那一行，村名取自摘要中的村庄），用 add occupations 记下，payload 写 {"kind":"city 或 village","targetName":"城名或村名","ownerName":"占家宗门的名号"}。ownerName 须是摘要中「江湖上的门派」里认得出的一处，本门也照它的名号写。同一处再去一笔便是易主，改旧的即可。占了便按月收贡金，正文里可顺带提一句纳贡之事。别家占的城村也照这一条记；本门要不要去夺，留待玩家自己动手。
 32. 驻城执事：正文里若某家宗门占了城、或派了人坐镇某城理事，可 add relations 添一位「执事」或「总督」，写全字段：name、title 写「执事」或「总督」、affiliation 写那家宗门的名号、cityId 写该城标点编号（见摘要中 currentPlaceId 可选值）、metAt 写「城名·官署」一类去处、persona 一段话交代其脾性与职守、fixedUntilDay 写一个较远的日序（如今日为第 ${todaySerial} 日，常驻写 ${todaySerial + 360}）。只在正文确实点到这么一个人时才添，不要凭空派官。
 33. 交付界面的事不由你记账：正文里若写到玩家动身去某家铺子买卖、与人交手、或开炉炼丹／画符，这几桩的经过与得失——钱财、货物、丹符的成色与数量、胜负与伤亡、气血与灵力——都由对应的界面或系统当场结算，你不要在 ops 里重复记这一笔（不要 modify spiritStones、inventory、player.hp、player.mp，也不要 add 产物）；只照常记时间推进与玩家去向。
+34. 当场买卖：叙事里当场买成了东西（路边摊、行商、拍卖，或铺子里当场付钱拿货），用一条 buy 记下：{"kind":"buy","what":"item","name":"货名","price":单价,"count":1,"type":"材料/丹药/符箓/法宝/灵兽/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句说明","place":"在哪儿买的"}；买下一处宅地写 {"kind":"buy","what":"manor","name":"宅地名目","price":地价,"place":"所在地"}。price 按下品灵石计，count 为件数，不给便是 1 件。buy 由系统当场兑钱交货，不要另写 modify spiritStones，也不要 add inventory／manorPlots。只写真买成了的：先照摘要里的灵石算，四等按一比一百兑尽了仍不够，就不要写 buy，正文里直接写他钱不够、终究没能买下。走铺面界面、讲价界面、屋舍界面的买卖仍由界面结算，不要写 buy。
 【宗门修正名录】
 ${sectModifierBrief()}`;
 

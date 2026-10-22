@@ -1637,8 +1637,19 @@ export interface Estate {
 /** 宅邸里能盖的建筑形体：盖的时候只管样式，功能另配 */
 export type ManorShape = "亭" | "正房" | "厢房" | "工坊" | "水榭" | "高阁" | "花园" | "水域";
 
-/** 一间屋子可分配的功能：分派之后才谈得上加成 */
-export type ManorFunction = "聚灵" | "丹房" | "锻坊" | "经阁" | "演武" | "仓廪" | "客舍" | "园圃";
+/** 一间屋子可分配的功能：分派之后才谈得上加成与各自的用场 */
+export type ManorFunction =
+  | "聚灵"
+  | "丹房"
+  | "锻坊"
+  | "经阁"
+  | "演武"
+  | "仓廪"
+  | "客舍"
+  | "园圃"
+  | "茶室"
+  | "书房"
+  | "兽栏";
 
 /** 宅邸里的一格：空地为 null */
 export interface ManorCell {
@@ -1651,6 +1662,8 @@ export interface ManorCell {
   crop?: string;
   /** 上一次收获落在哪个季度，记「年-Q季」，免得一季里反复入库 */
   lastHarvest?: string;
+  /** 这一间租出去了没有；租着便按月收租，自家人用不得，功能加成也不计 */
+  rent?: Rental;
 }
 
 /** 一处宅邸：7×7 空地，盖满与否全看玩家 */
@@ -1664,10 +1677,51 @@ export interface ManorPlot {
   cells: (ManorCell | null)[];
   /** 整座宅邸租出去了没有；租着便按月收租、不可歇息自用 */
   rent?: Rental;
+  /** 仓廪里存着的东西；只有配了仓廪才用得上 */
+  storage?: InventoryItem[];
 }
 
 /** 宅邸的边长 */
 export const MANOR_GRID = 7;
+
+/** 宅邸里能亲手做的事 */
+export type ManorActionId =
+  | "打坐"
+  | "参悟"
+  | "演练"
+  | "研读"
+  | "会客"
+  | "驯兽"
+  | "熔炼"
+  | "存物"
+  | "取物";
+
+/** 一次宅邸互动要选的参数 */
+export interface ManorActArgs {
+  plotId: string;
+  /** 在哪一格上做 */
+  index: number;
+  action: ManorActionId;
+  /** 打坐、参悟、演练、研读所耗时辰 */
+  hours?: number;
+  /** 参悟、演练挑的功法 */
+  techniqueId?: string;
+  /** 研读挑的本事 */
+  skillName?: string;
+  /** 会客请的人 */
+  relationId?: string;
+  /** 熔炼、存物取物挑的东西 */
+  itemId?: string;
+  count?: number;
+}
+
+/** 一次宅邸互动的结果，文字给界面显示 */
+export interface ManorActResult {
+  ok: boolean;
+  text: string;
+  /** 这一回长了多少进度 */
+  gain?: number;
+}
 
 /** 交给模型写一段「在铺子门前驻足所见」的素材 */
 export interface ShopProbeArgs {
@@ -2022,7 +2076,23 @@ export interface GameState {
 export type DataOp =
   | { kind: "modify"; path: string; op: "=" | "+" | "-"; value: string }
   | { kind: "add"; collection: string; payload: string | Record<string, unknown> }
-  | { kind: "delete"; collection: string; id: string };
+  | { kind: "delete"; collection: string; id: string }
+  /**
+   * 叙事里当场买成的一笔：钱货同结，不另写 modify spiritStones 与 add inventory。
+   * 系统先按四等灵石一比一百兑开再付；付不出便不成交易。
+   */
+  | {
+      kind: "buy";
+      /** 买的是寻常物件还是宅地 */
+      what: "item" | "manor";
+      name: string;
+      price: number;
+      count?: number;
+      type?: string;
+      grade?: string;
+      desc?: string;
+      place?: string;
+    };
 
 /**
  * 某档模型是不是带思维链的推理模型。

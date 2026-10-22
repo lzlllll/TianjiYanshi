@@ -1672,7 +1672,9 @@ async function runOpeningExtraction(
           ? `m:${op.path}`
           : op.kind === "delete"
             ? `d:${op.collection}:${op.id}`
-            : `a:${op.collection}:${payloadId || seen.size}`;
+            : op.kind === "buy"
+              ? `b:${op.name}:${op.price}`
+              : `a:${op.collection}:${payloadId || seen.size}`;
       seen.set(key, op);
     }
     byDomain.set(domain.id, Array.from(seen.values()));
@@ -2477,7 +2479,11 @@ export const useAIStore = create<AIStore>()(
         const ops = extraction.ops;
         const opsRaw = extraction.opsRaw;
 
-        useGameStore.getState().applyOps(ops);
+        // 结算里没能做成的买卖，回一句缀在正文末尾，让玩家看见「钱不够，没买成」
+        const settleNotes = useGameStore.getState().applyOps(ops);
+        if (settleNotes.length > 0) {
+          narrative = `${narrative}\n\n${settleNotes.join("\n")}`;
+        }
 
         const turn: Turn = {
           id: `turn-${Date.now()}`,
@@ -2843,7 +2849,11 @@ export const useAIStore = create<AIStore>()(
 
         // 回合推进时结算按回合计的增益与减益
         useGameStore.getState().updateBuffDuration();
-        useGameStore.getState().applyOps(ops);
+        // 结算里没能做成的买卖，回一句缀在正文末尾，让玩家看见「钱不够，没买成」
+        const settleNotes = useGameStore.getState().applyOps(ops);
+        if (settleNotes.length > 0) {
+          narrative = `${narrative}\n\n${settleNotes.join("\n")}`;
+        }
 
         // 前往奇遇的那一轮，结算之后由代码把位置钉到该点位，叙事只负责行路的经过
         if (opts?.travelToAdventureId) {

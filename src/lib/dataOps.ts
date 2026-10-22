@@ -31,6 +31,7 @@ import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQue
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizeAdventure } from "@/data/adventures";
 import { CULTIVATION_PER_HOUR, localCultivationFrom } from "@/data/cultivation";
+import { spendLowStones } from "@/data/spiritStones";
 import { emptyPlot } from "@/data/manors";
 import { makeModifier } from "@/data/sectModifiers";
 import { buffFromTemplate, findBuffTemplate } from "@/data/buffs";
@@ -642,7 +643,7 @@ export function salvageOpObjects(text: string): any[] {
   return found;
 }
 
-type JsonOpKind = "modify" | "add" | "delete";
+type JsonOpKind = "modify" | "add" | "delete" | "buy";
 
 /**
  * 每条 op 只许带提示词里点名的这几个字段。
@@ -653,6 +654,7 @@ const JSON_OP_KEYS: Record<JsonOpKind, string[]> = {
   modify: ["kind", "path", "op", "value"],
   add: ["kind", "collection", "payload"],
   delete: ["kind", "collection", "id"],
+  buy: ["kind", "what", "name", "price", "count", "type", "grade", "desc", "place"],
 };
 
 /** 值只取数字或字符串；灵根是提示词里点明要写数组的那一处例外 */
@@ -668,9 +670,28 @@ function normalizeJsonOp(item: any): DataOp | null {
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
 
   const kind = item.kind;
-  if (kind !== "modify" && kind !== "add" && kind !== "delete") return null;
+  if (kind !== "modify" && kind !== "add" && kind !== "delete" && kind !== "buy") return null;
   const allowedKeys = JSON_OP_KEYS[kind];
   if (Object.keys(item).some((key) => !allowedKeys.includes(key))) return null;
+
+  if (kind === "buy") {
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    const price = Number(item.price);
+    if (!name) return null;
+    if (!Number.isFinite(price) || price < 0) return null;
+    const count = Number(item.count);
+    return {
+      kind,
+      what: item.what === "manor" ? "manor" : "item",
+      name,
+      price: Math.round(price),
+      count: Number.isFinite(count) && count > 0 ? Math.min(99, Math.trunc(count)) : undefined,
+      type: typeof item.type === "string" ? item.type.trim() : undefined,
+      grade: typeof item.grade === "string" ? item.grade.trim() : undefined,
+      desc: typeof item.desc === "string" ? item.desc.trim() : undefined,
+      place: typeof item.place === "string" ? item.place.trim() : undefined,
+    };
+  }
 
   if (kind === "modify") {
     const path = typeof item.path === "string" ? item.path.trim() : "";
@@ -887,7 +908,64 @@ function resolveCollection(root: any, collection: string): any[] {
   return Array.isArray(cur) ? cur : [];
 }
 
-export function applyOpsToState(state: GameState, ops: DataOp[]): GameState {
+const BUY_ITEM_TYPES = ["材料", "丹药", "符箓", "法宝", "灵兽", "杂物"];
+const BUY_GRADES = ["凡品", "灵品", "玄品", "天品", "仙品"];
+
+/**
+ * 叙事里当场买成的一笔：先按四等灵石一比一百兑开，再付钱交货。
+ * 兑尽了仍不够便不作数，回一句「没能买下」，由叙事收尾。
+ */
+function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | null {
+  const name = String(op.name ?? "").trim().slice(0, 30);
+  if (!name) return null;
+  const count = Math.max(1, Math.min(99, Math.trunc(Number(op.count) || 1)));
+  const unit = Math.max(0, Math.round(Number(op.price) || 0));
+  const cost = unit * count;
+  const paid = spendLowStones(root?.spiritStones, cost);
+  if (!paid) {
+    return `（你摸了摸囊中，${cost} 枚下品灵石兑尽了也凑不出来，「${name}」终究没能买成。）`;
+  }
+  root.spiritStones = paid;
+
+  if (op.what === "manor") {
+    const place = String(op.place ?? "").trim() || name;
+    const plots = Array.isArray(root.manorPlots) ? root.manorPlots : [];
+    plots.push(emptyPlot({ place }));
+    root.manorPlots = plots;
+    root.log = [`你在${place}买下一处宅地，花 ${cost} 下品灵石。`, ...(Array.isArray(root.log) ? root.log : [])].slice(0, 30);
+    return null;
+  }
+
+  const type = BUY_ITEM_TYPES.includes(String(op.type ?? "")) ? String(op.type) : "杂物";
+  const grade = BUY_GRADES.includes(String(op.grade ?? "")) ? String(op.grade) : "凡品";
+  const inv: any[] = Array.isArray(root.inventory) ? root.inventory : [];
+  const stacked = inv.find((i) => i?.name === name && i?.type === type);
+  if (stacked) {
+    stacked.count = Math.max(0, Math.trunc(Number(stacked.count) || 0)) + count;
+  } else {
+    inv.push({
+      id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+      name,
+      type,
+      grade,
+      count,
+      icon: name.slice(0, 1),
+      desc: String(op.desc ?? "").trim().slice(0, 120) || `在${String(op.place ?? "").trim() || "市上"}买下的。`,
+    });
+  }
+  root.inventory = inv;
+  root.log = [
+    `你花 ${cost} 下品灵石买下「${name}」${count > 1 ? ` ${count} 件` : ""}。`,
+    ...(Array.isArray(root.log) ? root.log : []),
+  ].slice(0, 30);
+  return null;
+}
+
+export function applyOpsToState(
+  state: GameState,
+  ops: DataOp[],
+  hooks?: { onNote?: (text: string) => void },
+): GameState {
   if (ops.length === 0) return state;
   const MAX_OPS = 200;
   const limitedOps = ops.slice(0, MAX_OPS);
@@ -937,9 +1015,16 @@ export function applyOpsToState(state: GameState, ops: DataOp[]): GameState {
 
   const oldDateKey = state.currentTime ? gameDateKey(state.currentTime) : "";
 
-  let addCount = 0, modifyCount = 0, deleteCount = 0;
+  let addCount = 0, modifyCount = 0, deleteCount = 0, buyCount = 0;
   for (const op of limitedOps) {
     try {
+      // 当场买成的一笔走这一条：钱货同结，兑不出钱便回一句「没能买下」
+      if (op.kind === "buy") {
+        buyCount++;
+        const note = applyBuyOp(next, op);
+        if (note) hooks?.onNote?.(note);
+        continue;
+      }
       if (op.kind === "add") addCount++;
       else if (op.kind === "modify") modifyCount++;
       else if (op.kind === "delete") deleteCount++;
@@ -990,7 +1075,7 @@ export function applyOpsToState(state: GameState, ops: DataOp[]): GameState {
     }
   }
 
-  console.debug("[dataOps] Ops applied — ADD:", addCount, "MODIFY:", modifyCount, "DELETE:", deleteCount, "techniques.length:", next.techniques?.length);
+  console.debug("[dataOps] Ops applied — ADD:", addCount, "MODIFY:", modifyCount, "DELETE:", deleteCount, "BUY:", buyCount, "techniques.length:", next.techniques?.length);
   return next;
 }
 
@@ -2669,6 +2754,9 @@ export function summarizeOps(ops: DataOp[]): string[] {
     if (op.kind === "add") {
       return `新增 ${op.collection}`;
     }
+    if (op.kind === "buy") {
+      return `买下 ${op.name}（${op.price}）`;
+    }
     return `移除 ${op.collection} ${op.id}`;
   });
 }
@@ -2822,6 +2910,13 @@ export function describeOps(ops: DataOp[]): OpChange[] {
       const label = OP_COLLECTION_LABEL[op.collection] ?? op.collection;
       const id = readableEntryId(String(op.id ?? ""));
       changes.push({ text: `失去 ${label}${id ? `「${id}」` : ""}`, tone: "loss" });
+      continue;
+    }
+    if (op.kind === "buy") {
+      changes.push({
+        text: `买下 ${op.what === "manor" ? "宅地" : "物件"}「${op.name}」（${op.price}）`,
+        tone: "gain",
+      });
       continue;
     }
 

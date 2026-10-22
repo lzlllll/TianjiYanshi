@@ -6,7 +6,14 @@
  * 有了功能才谈得上加成。建筑可升级、拆除、改建，但地块不能挪。
  */
 
-import { MANOR_GRID, type ManorCell, type ManorFunction, type ManorPlot, type ManorShape } from "@/data/types";
+import {
+  MANOR_GRID,
+  type ItemGrade,
+  type ManorCell,
+  type ManorFunction,
+  type ManorPlot,
+  type ManorShape,
+} from "@/data/types";
 
 export { MANOR_GRID };
 
@@ -45,15 +52,30 @@ export function convertCost(from: ManorShape, to: ManorShape, level: number): nu
 export const FUNCTION_INFO: Record<ManorFunction, { note: string; perLevel: number }> = {
   聚灵: { note: "修炼效率", perLevel: 0.06 },
   丹房: { note: "炼丹成效", perLevel: 0.05 },
-  锻坊: { note: "炼器成效", perLevel: 0.05 },
+  锻坊: { note: "熔炼所得", perLevel: 0.05 },
   经阁: { note: "参悟熟练", perLevel: 0.05 },
   演武: { note: "练功进度", perLevel: 0.05 },
   仓廪: { note: "储物格数", perLevel: 1 },
   客舍: { note: "歇息回复", perLevel: 0.05 },
   园圃: { note: "灵田产出", perLevel: 0.05 },
+  茶室: { note: "会客所得", perLevel: 0.05 },
+  书房: { note: "研读所得", perLevel: 0.05 },
+  兽栏: { note: "驯兽成效", perLevel: 0.05 },
 };
 
-export const MANOR_FUNCTIONS: ManorFunction[] = ["聚灵", "丹房", "锻坊", "经阁", "演武", "仓廪", "客舍", "园圃"];
+export const MANOR_FUNCTIONS: ManorFunction[] = [
+  "聚灵",
+  "丹房",
+  "锻坊",
+  "经阁",
+  "演武",
+  "仓廪",
+  "客舍",
+  "园圃",
+  "茶室",
+  "书房",
+  "兽栏",
+];
 export const MANOR_SHAPES: ManorShape[] = ["亭", "正房", "厢房", "工坊", "水榭", "高阁", "花园", "水域"];
 
 /**
@@ -69,7 +91,24 @@ export const FUNCTION_SHAPES: Record<ManorFunction, ManorShape[]> = {
   仓廪: ["厢房", "正房"],
   客舍: ["厢房", "正房"],
   园圃: ["花园", "水域"],
+  茶室: ["亭", "水榭", "高阁"],
+  书房: ["高阁", "正房", "厢房"],
+  兽栏: ["花园", "厢房"],
 };
+
+/** 熔炼旧物的底价：按品阶折算，锻坊加成再抬一抬 */
+export const SALVAGE_VALUE: Record<ItemGrade, number> = {
+  凡品: 8,
+  灵品: 25,
+  玄品: 90,
+  天品: 320,
+  仙品: 1000,
+};
+
+export function salvageValue(grade: ItemGrade, bonus = 0): number {
+  const base = SALVAGE_VALUE[grade] ?? SALVAGE_VALUE.凡品;
+  return Math.max(1, Math.round(base * (1 + Math.max(0, bonus))));
+}
 
 /** 这一处形体上能不能配这个功能 */
 export function manorFunctionAllowed(shape: ManorShape, fn: ManorFunction): boolean {
@@ -103,7 +142,8 @@ export function manorBonusOf(plots: ManorPlot[] | undefined, fn: ManorFunction):
   let total = 0;
   for (const p of plots ?? []) {
     for (const c of p.cells ?? []) {
-      if (c?.fn === fn) total += FUNCTION_INFO[fn].perLevel * Math.max(1, c.level);
+      // 租出去的屋子归租客用，自家不计这项加成
+      if (c?.fn === fn && !c.rent) total += FUNCTION_INFO[fn].perLevel * Math.max(1, c.level);
     }
   }
   return Math.round(total * 100) / 100;
@@ -113,11 +153,25 @@ export function manorBonusOf(plots: ManorPlot[] | undefined, fn: ManorFunction):
 export function manorBonuses(cells: (ManorCell | null)[]): { fn: ManorFunction; total: number }[] {
   const acc = new Map<ManorFunction, number>();
   for (const c of cells) {
-    if (!c?.fn) continue;
+    if (!c?.fn || c.rent) continue;
     const per = FUNCTION_INFO[c.fn]?.perLevel ?? 0;
     acc.set(c.fn, (acc.get(c.fn) ?? 0) + per * Math.max(1, c.level));
   }
   return [...acc.entries()].map(([fn, total]) => ({ fn, total: Math.round(total * 100) / 100 }));
+}
+
+/** 这处宅邸里已租出去的屋子有几间 */
+export function rentedRooms(plot: ManorPlot): number {
+  return (plot.cells ?? []).filter((c) => !!c?.rent).length;
+}
+
+/** 一处宅邸一月能收的房租合计（整座租出去的按整座算） */
+export function manorRentIncome(plot: ManorPlot): number {
+  if (plot.rent) return Math.max(0, Math.round(Number(plot.rent.monthly) || 0));
+  return (plot.cells ?? []).reduce(
+    (sum, c) => sum + (c?.rent ? Math.max(0, Math.round(Number(c.rent.monthly) || 0)) : 0),
+    0,
+  );
 }
 
 /** 新建一处宅地：7×7 全空 */

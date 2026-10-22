@@ -32,6 +32,8 @@ import type {
   SectRelation,
   SectStance,
   Occupation,
+  ManorActArgs,
+  ManorActResult,
 } from "@/data/types";
 import { applyOpsToState, normalizeAppraisal, normalizeItemElements } from "@/lib/dataOps";
 import { WORLD_SCENE_ID, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerSectScenes, sectSceneId } from "@/data/map";
@@ -48,6 +50,7 @@ import {
   emptyPlot,
   manorBonusOf,
   quarterKey,
+  salvageValue,
   upgradeCost as manorUpgradeCost,
 } from "@/data/manors";
 import { migrateRelation } from "@/data/npcGen";
@@ -201,6 +204,12 @@ interface GameStore extends GameState {
   rentOutPlot: (plotId: string, rent: { tenant: string; monthly: number }) => void;
   /** 收回宅邸自住 */
   reclaimPlot: (plotId: string) => void;
+  /** 单独把宅邸里的某一间屋子租出去；租客与月租由叙事议定 */
+  rentOutRoom: (plotId: string, index: number, rent: { tenant: string; monthly: number }) => void;
+  /** 收回某一间出租的屋子 */
+  reclaimRoom: (plotId: string, index: number) => void;
+  /** 在宅邸里做一件实事：打坐、参悟、演练、研读、会客、驯兽、熔炼、存取 */
+  manorAct: (args: ManorActArgs) => ManorActResult;
   /** 把各处房产的完好度按日子结算到今日 */
   settleEstates: () => void;
   /** 坊市里自设的铺面 */
@@ -361,7 +370,7 @@ interface GameStore extends GameState {
   setTraveling: (relationId: string, traveling: boolean) => boolean;
   addLog: (msg: string) => void;
   resetGame: () => void;
-  applyOps: (ops: DataOp[]) => void;
+  applyOps: (ops: DataOp[]) => string[];
   getSnapshot: () => GameSnapshot;
   restoreSnapshot: (snap: GameSnapshot) => void;
   updateNews: (newItems: { category: string; title: string; content: string; source: string }[]) => void;
@@ -3840,7 +3849,9 @@ EFFECT: [效果描述]`,
       },
 
       applyOps: (ops) => {
-        if (ops.length === 0) return;
+        // 结算里没能做成的买卖，回一句给叙事收尾
+        const settleNotes: string[] = [];
+        if (ops.length === 0) return settleNotes;
         const placeBefore = get().currentPlaceId;
         const relationIdsBefore = new Set(get().relations.map((r) => r.id));
         const sectSitesBefore = get().sectSites;
@@ -3886,7 +3897,9 @@ EFFECT: [效果描述]`,
             sectSites: st.sectSites,
             adventures: st.adventures,
           };
-          const next = applyOpsToState(dataView, ops);
+          const next = applyOpsToState(dataView, ops, {
+            onNote: (text) => settleNotes.push(text),
+          });
           // 首次获得心法时自动生效，否则玩家不打开功法面板手动切换就一直是「未定心法」
           const nextPlayer = { ...next.player };
           // 叙事若把时辰推过去了，到点的状态同一笔账里就散去，别等到下一轮
@@ -4008,6 +4021,7 @@ EFFECT: [效果描述]`,
             .then(({ useAIStore }) => useAIStore.getState().maybeTriggerRandomEvent(12))
             .catch(() => {});
         }
+        return settleNotes;
       },
 
       meetNpc: (npc) =>
@@ -4304,7 +4318,7 @@ EFFECT: [效果描述]`,
       rentOutPlot: (plotId, rent) =>
         set((st) => ({
           manorPlots: (st.manorPlots ?? []).map((p) =>
-            p.id === plotId
+            p.id === plotId && !(p.cells ?? []).some((c) => !!c?.rent)
               ? {
                   ...p,
                   rent: {
@@ -4319,6 +4333,199 @@ EFFECT: [效果描述]`,
 
       reclaimPlot: (plotId) =>
         set((st) => ({ manorPlots: (st.manorPlots ?? []).map((p) => (p.id === plotId ? { ...p, rent: undefined } : p)) })),
+
+      rentOutRoom: (plotId, index, rent) =>
+        set((st) => ({
+          manorPlots: (st.manorPlots ?? []).map((p) => {
+            if (p.id !== plotId || p.rent) return p;
+            const cell = p.cells[index];
+            if (!cell || cell.rent) return p;
+            return {
+              ...p,
+              cells: p.cells.map((c, i) =>
+                i === index && c
+                  ? {
+                      ...c,
+                      rent: {
+                        tenant: rent.tenant.trim() || "租客",
+                        monthly: Math.max(0, Math.round(Number(rent.monthly) || 0)),
+                        lastPaidMonth: gameMonthKey(st.currentTime),
+                      },
+                    }
+                  : c,
+              ),
+            };
+          }),
+        })),
+
+      reclaimRoom: (plotId, index) =>
+        set((st) => ({
+          manorPlots: (st.manorPlots ?? []).map((p) =>
+            p.id === plotId
+              ? {
+                  ...p,
+                  cells: p.cells.map((c, i) => (i === index && c ? { ...c, rent: undefined } : c)),
+                }
+              : p,
+          ),
+        })),
+
+      manorAct: ({ plotId, index, action, hours, techniqueId, skillName, relationId, itemId, count = 1 }) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        const cell = plot?.cells[index] ?? null;
+        if (!plot || !cell) return { ok: false, text: "这一处还没有屋子。" };
+        if (plot.rent) return { ok: false, text: "整座宅邸已租出去了，自家人用不得。" };
+        if (cell.rent) return { ok: false, text: "这一间已租出去了，自家人用不得。" };
+
+        const need: Record<string, ManorFunction> = {
+          打坐: "聚灵",
+          参悟: "经阁",
+          演练: "演武",
+          研读: "书房",
+          会客: "茶室",
+          驯兽: "兽栏",
+          熔炼: "锻坊",
+          存物: "仓廪",
+          取物: "仓廪",
+        };
+        if (cell.fn !== need[action]) {
+          return { ok: false, text: `这一间是「${cell.fn ?? "未配功能"}」，做不得「${action}」。` };
+        }
+
+        // —— 打坐、参悟、演练：挑一门功法，按时辰长进度 ——
+        if (action === "打坐" || action === "参悟" || action === "演练") {
+          const h = Math.min(12, Math.max(1, Math.trunc(Number(hours) || 1)));
+          const bonus = manorBonusOf(st.manorPlots, need[action]);
+          const gain = cultivationGain(h, 1 + bonus);
+          const list = Array.isArray(st.techniques) ? st.techniques : [];
+          const target =
+            list.find((t) => t.id === techniqueId) ??
+            list.find((t) => t.id === st.player.activeHeartTechnique) ??
+            list[0];
+          const player = { ...st.player };
+          let techniques = list;
+          let real = gain;
+          let label = "修为";
+          if (target) {
+            const max = Math.max(1, Number(target.proficiencyMax) || 100);
+            const before = Number(target.proficiency) || 0;
+            const after = Math.min(max, before + gain);
+            real = after - before;
+            techniques = list.map((t) => (t.id === target.id ? { ...t, proficiency: after } : t));
+            label = `「${target.name}」`;
+          }
+          player.cultivation = (Number(player.cultivation) || 0) + real;
+          set({ techniques, player, log: [`你在「${cell.shape}」中${action} ${h} 个时辰，${label}长了 ${real} 点。`, ...st.log].slice(0, 30) });
+          get().advanceTime(h);
+          return {
+            ok: true,
+            gain: real,
+            text: `在「${cell.shape}」里${action}了 ${h} 个时辰，${label}长了 ${real} 点${bonus > 0 ? `（此处加成 +${Math.round(bonus * 100)}%）` : ""}。`,
+          };
+        }
+
+        // —— 研读：挑一门本事，按时辰长进 ——
+        if (action === "研读") {
+          const h = Math.min(12, Math.max(1, Math.trunc(Number(hours) || 1)));
+          const skill = findSkill(st.skills, String(skillName ?? "").trim());
+          if (!skill) return { ok: false, text: "先挑一门要读的本事。" };
+          const gain = Math.max(1, Math.round(h * (1 + manorBonusOf(st.manorPlots, "书房"))));
+          set({
+            skills: st.skills.map((s) => (s.id === skill.id ? trainSkill(s, gain) : s)),
+            log: [`你在书房里研读 ${h} 个时辰，「${skill.name}」长了 ${gain} 点。`, ...st.log].slice(0, 30),
+          });
+          get().advanceTime(h);
+          return { ok: true, gain, text: `在书房里研读 ${h} 个时辰，「${skill.name}」长了 ${gain} 点。` };
+        }
+
+        // —— 会客：请一位相熟的人来喝茶，叙一叙交情 ——
+        if (action === "会客") {
+          const rel = (st.relations ?? []).find((r) => r.id === relationId);
+          if (!rel) return { ok: false, text: "先挑一位要请的人。" };
+          const up = 1 + Math.floor(manorBonusOf(st.manorPlots, "茶室") * 10);
+          set({
+            relations: st.relations.map((r) =>
+              r.id === rel.id ? { ...r, relation: Math.max(-100, Math.min(100, (Number(r.relation) || 0) + up)) } : r,
+            ),
+            log: [`你请「${rel.name}」到茶室坐了一回，交情 +${up}。`, ...st.log].slice(0, 30),
+          });
+          get().advanceTime(1);
+          return { ok: true, gain: up, text: `你请「${rel.name}」到茶室坐了一回，一盏茶后交情 +${up}。` };
+        }
+
+        // —— 驯兽：陪着随身的灵兽，养一养亲疏 ——
+        if (action === "驯兽") {
+          if (!st.beast) return { ok: false, text: "身边没有带灵兽。" };
+          set({
+            beast: raiseBond(st.beast, 1),
+            log: [`你在兽栏边陪「${st.beast.name}」待了半日，亲疏近了一层。`, ...st.log].slice(0, 30),
+          });
+          get().advanceTime(3);
+          return { ok: true, gain: 1, text: `你在兽栏边陪「${st.beast.name}」待了半日，它与你又亲近了一层。` };
+        }
+
+        // —— 熔炼：把旧物投进炉里，按品阶折成灵石 ——
+        if (action === "熔炼") {
+          const item = (st.inventory ?? []).find((i) => i.id === itemId);
+          if (!item) return { ok: false, text: "行囊里没有这一件。" };
+          const take = Math.max(1, Math.min(Math.trunc(Number(count) || 1), item.count));
+          const unit = salvageValue(item.grade, manorBonusOf(st.manorPlots, "锻坊"));
+          const earned = unit * take;
+          set({
+            inventory:
+              item.count > take
+                ? st.inventory.map((i) => (i.id === item.id ? { ...i, count: i.count - take } : i))
+                : st.inventory.filter((i) => i.id !== item.id),
+            spiritStones: { ...st.spiritStones, low: (Number(st.spiritStones.low) || 0) + earned },
+            log: [`你把「${item.name}」${take > 1 ? ` ${take} 件` : ""}投进锻坊熔了，得 ${earned} 下品灵石。`, ...st.log].slice(0, 30),
+          });
+          get().advanceTime(1);
+          return { ok: true, gain: earned, text: `你把「${item.name}」${take > 1 ? ` ${take} 件` : ""}投进炉里熔了，得 ${earned} 下品灵石。` };
+        }
+
+        // —— 仓廪：把东西存进去，或取回来 ——
+        if (action === "存物" || action === "取物") {
+          const storage = Array.isArray(plot.storage) ? plot.storage : [];
+          if (action === "存物") {
+            const item = (st.inventory ?? []).find((i) => i.id === itemId);
+            if (!item) return { ok: false, text: "行囊里没有这一件。" };
+            const take = Math.max(1, Math.min(Math.trunc(Number(count) || 1), item.count));
+            const nextStorage = [...storage];
+            const at = nextStorage.findIndex((s) => s.name === item.name && s.type === item.type);
+            if (at >= 0) nextStorage[at] = { ...nextStorage[at], count: nextStorage[at].count + take };
+            else nextStorage.push({ ...item, count: take });
+            set({
+              inventory:
+                item.count > take
+                  ? st.inventory.map((i) => (i.id === item.id ? { ...i, count: i.count - take } : i))
+                  : st.inventory.filter((i) => i.id !== item.id),
+              manorPlots: (st.manorPlots ?? []).map((p) => (p.id === plotId ? { ...p, storage: nextStorage } : p)),
+              log: [`你把「${item.name}」${take > 1 ? ` ${take} 件` : ""}存进了仓廪。`, ...st.log].slice(0, 30),
+            });
+            return { ok: true, text: `「${item.name}」${take > 1 ? ` ${take} 件` : ""}已存进仓廪。` };
+          }
+          const stored = storage.find((s) => s.id === itemId) ?? storage.find((s) => s.name === itemId);
+          if (!stored) return { ok: false, text: "仓廪里没有这一件。" };
+          const take = Math.max(1, Math.min(Math.trunc(Number(count) || 1), stored.count));
+          const nextStorage =
+            stored.count > take
+              ? storage.map((s) => (s.id === stored.id ? { ...s, count: s.count - take } : s))
+              : storage.filter((s) => s.id !== stored.id);
+          const inv = [...(st.inventory ?? [])];
+          const at = inv.findIndex((i) => i.name === stored.name && i.type === stored.type);
+          if (at >= 0) inv[at] = { ...inv[at], count: inv[at].count + take };
+          else inv.push({ ...stored, count: take });
+          set({
+            inventory: inv,
+            manorPlots: (st.manorPlots ?? []).map((p) => (p.id === plotId ? { ...p, storage: nextStorage } : p)),
+            log: [`你从仓廪里取出「${stored.name}」${take > 1 ? ` ${take} 件` : ""}。`, ...st.log].slice(0, 30),
+          });
+          return { ok: true, text: `从仓廪里取出了「${stored.name}」${take > 1 ? ` ${take} 件` : ""}。` };
+        }
+
+        return { ok: false, text: "这一桩做不得。" };
+      },
 
       settleEstates: () => {
         const st = get();
@@ -4352,6 +4559,7 @@ EFFECT: [效果描述]`,
 
         let plotsChanged = false;
         const nextPlots = (st.manorPlots ?? []).map((p) => {
+          // 整座租出去的按整座收租，单间的不再另算
           const rent = p.rent;
           if (rent && Number(rent.monthly) > 0 && rent.lastPaidMonth !== monthKey) {
             earned += Math.round(Number(rent.monthly) || 0);
@@ -4359,7 +4567,24 @@ EFFECT: [效果描述]`,
             plotsChanged = true;
             return { ...p, rent: { ...rent, lastPaidMonth: monthKey } };
           }
-          return p;
+          if (rent) return p;
+          // 单间出租的，逐间收租
+          let roomsChanged = false;
+          const cells = (p.cells ?? []).map((c) => {
+            const roomRent = c?.rent;
+            if (!c || !roomRent || Number(roomRent.monthly) <= 0 || roomRent.lastPaidMonth === monthKey) {
+              return c;
+            }
+            earned += Math.round(Number(roomRent.monthly) || 0);
+            earnedLines.push(
+              `「${p.place}·${c.shape}」${roomRent.tenant}送来 ${Math.round(Number(roomRent.monthly) || 0)} 灵石`,
+            );
+            roomsChanged = true;
+            return { ...c, rent: { ...roomRent, lastPaidMonth: monthKey } };
+          });
+          if (!roomsChanged) return p;
+          plotsChanged = true;
+          return { ...p, cells };
         });
 
         if (!estatesChanged && !plotsChanged) return;
@@ -4540,7 +4765,7 @@ EFFECT: [效果描述]`,
       assignManorFunction: (plotId, index, fn) => {
         const st = get();
         const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
-        if (!plot?.cells[index]) return false;
+        if (!plot?.cells[index] || plot.cells[index]?.rent) return false;
         set((s) => ({
           manorPlots: (s.manorPlots ?? []).map((p) =>
             p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, fn } : c)) } : p,
@@ -4631,7 +4856,7 @@ EFFECT: [效果描述]`,
         const next = plots.map((p) => {
           const culture = p.cityId ? getMarker(p.cityId)?.culture : undefined;
           const cells = p.cells.map((c) => {
-            if (!c || c.fn !== "园圃" || !c.crop || c.lastHarvest === qk) return c;
+            if (!c || c.fn !== "园圃" || !c.crop || c.lastHarvest === qk || c.rent) return c;
             changed = true;
             // 中原、漠北、西域入冬便不收，但仍记下这一季已过
             if (!cropBlockedByWinter(culture, month)) harvested.push({ name: c.crop, count: yieldPer });
