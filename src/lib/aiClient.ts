@@ -29,8 +29,16 @@ const MAX_OUTPUT_TOKENS = 8192;
 /**
  * 推理档的输出上限。思维链与正文共用这一份额度，
  * 8192 常被思考过程整段吃掉、正文一个字都留不下，故另放宽一档。
+ * 但别放得太宽：有的网关不认思考档，额度给多大它就想多久，
+ * 故只放到够写正文的一万六千余，再长便由流式那一头的思考闸掐断。
  */
-const MAX_OUTPUT_TOKENS_REASONING = 32768;
+const MAX_OUTPUT_TOKENS_REASONING = 16384;
+
+/**
+ * 思维链的长度闸。带思考的模型先想后写，可有些网关不认思考档，
+ * 放任它想下去，几万字都落不了一个字；到这条线还没见正文，便掐断重来。
+ */
+const MAX_REASONING_CHARS = 6000;
 
 /**
  * 思考量压到最低时用的档位；OpenAI 一系与多数网关都认 reasoning_effort。
@@ -212,6 +220,12 @@ function thinkingVariants(
 const workingVariant = new Map<string, number>();
 
 /**
+ * 记下哪些模型怎么压都压不住思考、只能整档关掉。
+ * 见过一次便记住，往后同一档起手就关，不再先陪它想满一闸。
+ */
+const forceOffModels = new Set<string>();
+
+/**
  * 这一笔报错要不要换个思考参数写法再试。
  * 只认 400/422——这两档多半是参数不合；鉴权、限流、服务端故障照旧原样报出去。
  * 不细抠报错里的字眼：各家措辞不一，认漏了反倒让玩家白白碰上一次失败。
@@ -227,7 +241,7 @@ function warrantsThinkingFallback(status: number): boolean {
  * 若不认出来，便会照普通档只给 8192 的额度，被思考过程吃光、正文一个字都留不下。
  */
 const REASONING_NAME_PATTERN =
-  /reason|think|z1|qwq|r1\b|o[1-9]-|kimi-k3|glm-(?:5\.[3-9]|[6-9]|4\.7|4\.5v)/i;
+  /reason|think|z1|qwq|r1\b|o[1-9]-|kimi-k3|glm-(?:5\.[3-9]|[6-9]|4\.7|4\.5v)|minimax-m[12]|longcat|step-[3-9]|magistral|nemotron|gemini-(?:2\.[5-9]|3)|grok-[3-9]/i;
 
 /** 运行时见过的推理档模型名；见过一次便记住，往后自动按推理档办 */
 const reasonedModels = new Set<string>();
@@ -363,13 +377,21 @@ async function postChat(args: {
   signal: AbortSignal;
   /** 流式时写明 text/event-stream */
   accept?: string;
+  /** 这一次只按「关思考」发：思考过长掐断后，用它重来一遍 */
+  forceOff?: boolean;
 }): Promise<{ resp: Response; endpoint: string }> {
   const endpoint = buildEndpoint(args.settings);
   const style = resolveThinkingStyle(args.settings, args.model, endpoint);
-  const variants = thinkingVariants(style, args.reasoning, args.model);
+  const variants = args.forceOff
+    ? [
+        { label: "思考·强制关闭", extra: thinkingOffParams(style, args.model) },
+        // 有的网关不认关思考的字段：退到不带参数，至少先把这一笔发出去
+        { label: "不带思考参数", extra: {} },
+      ]
+    : thinkingVariants(style, args.reasoning, args.model);
   const memoKey = `${style}:${args.reasoning}:${args.model}`;
   // 先前试出过能用的那一种，直接从那一种起手
-  const start = Math.min(workingVariant.get(memoKey) ?? 0, variants.length - 1);
+  const start = args.forceOff ? 0 : Math.min(workingVariant.get(memoKey) ?? 0, variants.length - 1);
 
   let last: ApiError | null = null;
   for (let vi = start; vi < variants.length; vi++) {
@@ -399,10 +421,19 @@ async function postChat(args: {
     });
 
     if (resp.ok) {
-      if (vi !== start) {
-        console.info(`[aiClient] 思考参数改用「${variants[vi].label}」；往后这一家照此发。`);
+      if (args.forceOff) {
+        // 头一手「关思考」真发出去了，才记：退到不带参数的那一手不算关掉，
+        // GLM-5.3 一类强制思考的模型也关不掉，记下也没用
+        if (vi === 0 && !mustThink(args.model)) {
+          forceOffModels.add(args.model);
+          console.info(`[aiClient] 这一档思考压不住，往后起手便按「关思考」发，model=${args.model}。`);
+        }
+      } else {
+        if (vi !== start) {
+          console.info(`[aiClient] 思考参数改用「${variants[vi].label}」；往后这一家照此发。`);
+        }
+        workingVariant.set(memoKey, vi);
       }
-      workingVariant.set(memoKey, vi);
       return { resp, endpoint };
     }
 
@@ -568,6 +599,15 @@ function reasoningOnlyError(model: string, why: string): Error {
   return new Error(
     `接口只吐了思维链、没写正文（${why}）。模型「${model}」多半是带思维链的推理模型，` +
       `思考过程把输出额度占满，正文便没写出来——请在设置里把这一档的「思维链」设为无，或调整「思考参数」那一项。`,
+  );
+}
+
+/** 思考闸掐断后仍不落笔：这一档既不认思考档，也关不掉，只能换模型 */
+function reasoningOverflowError(model: string): Error {
+  return new Error(
+    `模型「${model}」思考过长：已逾 ${MAX_REASONING_CHARS} 字仍未落笔，本次推演已中止。` +
+      `这一档多半不认「思考参数」里的压思考写法，关也关不掉——请在设置里换一档模型，` +
+      `或把「思考参数」改成这一家真能压住的那一种。`,
   );
 }
 
@@ -941,48 +981,93 @@ export async function chatWithModelStream(
   const MAX_SEGMENTS = 3;
   try {
     const convo: ChatMessage[] = [...messages];
+
+    /**
+     * 开一笔流，只读一段。
+     * 思维链在正文之前就先长过闸门时，立刻掐断这一笔——
+     * 有的网关不认思考档，放任它想下去，几万字都落不了一个字。
+     */
+    const runAttempt = async (forceOff: boolean) => {
+      const attempt = new AbortController();
+      const relayAbort = () => attempt.abort();
+      if (controller.signal.aborted) attempt.abort();
+      controller.signal.addEventListener("abort", relayAbort, { once: true });
+      let overflow = false;
+      try {
+        const { resp } = await postChat({
+          settings,
+          model,
+          messages: convo,
+          stream: true,
+          temperature: opts.temperature ?? settings.temperature,
+          reasoning: isReasoningSlot(settings, slotOf(settings, model)),
+          signal: attempt.signal,
+          accept: "text/event-stream",
+          forceOff,
+        });
+
+        console.debug(`[aiClient][stream] Response status: ${resp.status}${forceOff ? "（关思考重试）" : ""}`);
+
+        // 这里不撤那个钟：撤了便只剩「建连」这一段受约束，正文能无限拖下去——
+        // 慢的推理模型一口气吐十几分钟思维链也不会有个头。让它架到整段读完为止。
+
+        if (!resp.body) {
+          throw new Error("接口未返回流式响应体，可能上游或后端不支持 stream 模式。");
+        }
+
+        const streamInfo = await parseSSEStream(
+          resp.body.getReader(),
+          (delta) => {
+            full += delta;
+            if (full.length > 200000) {
+              // 防止超长输出撑爆内存
+              controller.abort();
+              return;
+            }
+            opts.onDelta?.(delta, full);
+          },
+          attempt.signal,
+          (usage) => recordTokenUsage(model, usage, noteFromMessages(messages)),
+          (delta) => {
+            // 收到思维链即可断定这一档是推理模型，往后自动按推理档办
+            noteReasoningModel(model);
+            reasoningText += delta;
+            opts.onReasoning?.(delta, reasoningText);
+            // 正文还没落笔、思考却已长过闸门：掐断这一笔，不陪它想下去
+            if (!full && reasoningText.length > MAX_REASONING_CHARS) {
+              overflow = true;
+              attempt.abort();
+            }
+          },
+        );
+        return { streamInfo, overflow };
+      } catch (e) {
+        // 掐断不是报错，交给外头换一种写法重来
+        if (overflow) {
+          return { streamInfo: { finishReason: null, sawReasoning: true }, overflow: true };
+        }
+        throw e;
+      } finally {
+        controller.signal.removeEventListener("abort", relayAbort);
+      }
+    };
+
     for (let seg = 0; seg < MAX_SEGMENTS; seg++) {
       const beforeLen = full.length;
-      const { resp } = await postChat({
-        settings,
-        model,
-        messages: convo,
-        stream: true,
-        temperature: opts.temperature ?? settings.temperature,
-        reasoning: isReasoningSlot(settings, slotOf(settings, model)),
-        signal: controller.signal,
-        accept: "text/event-stream",
-      });
-
-      console.debug(`[aiClient][stream] Response status: ${resp.status}（第 ${seg + 1} 段）`);
-
-      // 这里不撤那个钟：撤了便只剩「建连」这一段受约束，正文能无限拖下去——
-      // 慢的推理模型一口气吐十几分钟思维链也不会有个头。让它架到整段读完为止。
-
-      if (!resp.body) {
-        throw new Error("接口未返回流式响应体，可能上游或后端不支持 stream 模式。");
+      let attemptResult = await runAttempt(forceOffModels.has(model));
+      if (attemptResult.overflow && !full) {
+        if (forceOffModels.has(model)) {
+          // 已经按关思考发过，还是想个没完：这一档确实压不住
+          throw reasoningOverflowError(model);
+        }
+        console.warn(
+          `[aiClient][stream] 思维链已逾 ${MAX_REASONING_CHARS} 字仍未落笔，掐断后改按「关思考」再试一次，model=${model}。`,
+        );
+        reasoningText = "";
+        attemptResult = await runAttempt(true);
+        if (attemptResult.overflow && !full) throw reasoningOverflowError(model);
       }
-
-      const streamInfo = await parseSSEStream(
-        resp.body.getReader(),
-        (delta) => {
-          full += delta;
-          if (full.length > 200000) {
-            // 防止超长输出撑爆内存
-            controller.abort();
-            return;
-          }
-          opts.onDelta?.(delta, full);
-        },
-        controller.signal,
-        (usage) => recordTokenUsage(model, usage, noteFromMessages(messages)),
-        (delta) => {
-          // 收到思维链即可断定这一档是推理模型，往后自动按推理档办
-          noteReasoningModel(model);
-          reasoningText += delta;
-          opts.onReasoning?.(delta, reasoningText);
-        },
-      );
+      const streamInfo = attemptResult.streamInfo;
       lastFinish = streamInfo.finishReason;
       sawReasoning = sawReasoning || streamInfo.sawReasoning;
 

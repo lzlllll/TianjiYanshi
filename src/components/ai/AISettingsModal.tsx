@@ -362,7 +362,7 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
               <option value="none">不发思考参数</option>
             </select>
             <p className="mt-1.5 font-serif text-[11px] leading-relaxed text-paper-400/55">
-              自动识别先看自定义接口的地址，再看模型名；认不出时先照 OpenAI 的写法发，不被认便自动退回通用写法，仍不行就不带思考参数。关掉思考的一档会明确发送关闭参数，免得带思考的模型把额度耗在思维链上。GLM-5.3 一类强制思考、关不掉，只会压到 low 这一档。
+              自动识别先看自定义接口的地址，再看模型名；认不出时先照 OpenAI 的写法发，不被认便自动退回通用写法，仍不行就不带思考参数。关掉思考的一档会明确发送关闭参数，免得带思考的模型把额度耗在思维链上。GLM-5.3 一类强制思考、关不掉，只会压到 low 这一档。思考若超过约六千字仍不落笔，会自动掐断并按「关思考」重发一次；仍压不住便提示换一档模型。
             </p>
           </section>
 
