@@ -36,7 +36,7 @@ import type {
   ManorActResult,
 } from "@/data/types";
 import { applyOpsToState, normalizeAppraisal, normalizeItemElements } from "@/lib/dataOps";
-import { WORLD_SCENE_ID, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerSectScenes, sectSceneId } from "@/data/map";
+import { WORLD_SCENE_ID, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerManorScenes, registerSectScenes, sectSceneId } from "@/data/map";
 import { presetKey } from "@/data/map/presets";
 import { makeVillageShop, rollVillageBuildings, rollVillageName, rollVillageNpcs, villageBuildingName } from "@/data/villages";
 import { ESTATE_DECAY_PER_DAY, REBUILD_CONDITION, REBUILD_DAYS, maintainCost, rebuildCost, rollEstateOffer, sellRefund } from "@/data/estates";
@@ -928,6 +928,7 @@ export const useGameStore = create<GameStore>()(
         // 人在山门里，便以那一处山门的名号为准
         const scene = getScene(st.mapSceneId);
         if (scene?.kind === "sect") return scene.name;
+        if (scene?.kind === "manor") return scene.name;
         if (st.currentSectId) {
           const site = (st.sectSites || []).find((x) => x.id === st.currentSectId);
           if (site?.name) return site.name;
@@ -4015,6 +4016,8 @@ EFFECT: [效果描述]`,
         get().tickMortality(0);
         // 叙事若把境界推上了某一桩修为类机缘所指的那一层，就地认下
         get().settleRealmQuests();
+        // 叙事里新置的宅地也要有一张能走进去的宅邸图
+        registerManorScenes(get().manorPlots);
         // 叙事里启程去了别处，这一路也算走过一段，路上同样可能生变
         if (placeBefore !== get().currentPlaceId) {
           void import("@/store/useAIStore")
@@ -4742,6 +4745,8 @@ EFFECT: [效果描述]`,
           manorPlots: [...(s.manorPlots ?? []), plot],
           log: [`你在${input.place}买下一块宅地，花 ${MANOR_PLOT_PRICE} 下品灵石。`, ...s.log].slice(0, 30),
         }));
+        // 新宅地要有一张能走进去的宅邸图
+        registerManorScenes(get().manorPlots);
         return plot;
       },
 
@@ -4759,6 +4764,7 @@ EFFECT: [效果描述]`,
           ),
           log: [`你在宅邸里盖起一座「${shape}」，花 ${cost} 下品灵石。`, ...s.log].slice(0, 30),
         }));
+        registerManorScenes(get().manorPlots);
         return true;
       },
 
@@ -4771,6 +4777,8 @@ EFFECT: [效果描述]`,
             p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, fn } : c)) } : p,
           ),
         }));
+        // 功能变了，贴图归类也跟着变
+        registerManorScenes(get().manorPlots);
         return true;
       },
 
@@ -4806,6 +4814,7 @@ EFFECT: [效果描述]`,
           ),
           log: [`你拆了宅邸里的「${cell.shape}」，收回 ${refund} 下品灵石。`, ...s.log].slice(0, 30),
         }));
+        registerManorScenes(get().manorPlots);
         return true;
       },
 
@@ -4823,6 +4832,7 @@ EFFECT: [效果描述]`,
             p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index && c ? { ...c, shape } : c)) } : p,
           ),
         }));
+        registerManorScenes(get().manorPlots);
         return true;
       },
 

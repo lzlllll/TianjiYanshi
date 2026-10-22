@@ -1,5 +1,6 @@
-import type { MapMarker, MapMarkerKind, MapScene, MapSceneKind, PresetPoint, SectMapTemplate, SectSite, TileMapEntry } from "@/data/types";
-import { BLOCK_TILE, TILE_GRID_SIZE, hasAnyTile, normalizeDistricts, normalizeTiles, reconcileDistricts } from "./tiles";
+import type { ManorCell, MapMarker, MapMarkerKind, MapScene, MapSceneKind, ManorPlot, PresetPoint, SectMapTemplate, SectSite, TileMapEntry } from "@/data/types";
+import { MANOR_GRID } from "@/data/types";
+import { BLOCK_TILE, EMPTY_TILE, ROAD_TILE, TILE_GRID_SIZE, hasAnyTile, normalizeDistricts, normalizeTiles, reconcileDistricts } from "./tiles";
 import type { District, DistrictNature } from "./tiles";
 import { SECT_GRID_SIZE, SECT_EMPTY_TILE, SECT_HALL_TILE, isSectBuildingTile } from "./sectTiles";
 import { SECT_LEVEL_MAX } from "@/data/sects";
@@ -794,5 +795,82 @@ export async function exportSectMapsToFile(templates: SectMapTemplate[]): Promis
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+// ---------------- 宅邸场景 ----------------
+
+/** 宅邸场景 id 前缀，后面接宅地编号 */
+export const MANOR_SCENE_PREFIX = "manor-";
+
+export function manorSceneId(plotId: string): string {
+  return `${MANOR_SCENE_PREFIX}${plotId}`;
+}
+
+/** 宅邸布局：7×7 的屋舍摆在 10×10 的院子中央，四周留一圈回廊 */
+const MANOR_OFFSET = 1;
+
+/** 一间屋子在城图贴图里归哪一类：作坊类走匠人区，其余按大户宅院 */
+function manorCellNature(cell: ManorCell): DistrictNature {
+  if (cell.fn === "丹房" || cell.fn === "锻坊" || cell.shape === "工坊") return "匠人区";
+  return "大户住宅";
+}
+
+function manorLayout(plot: ManorPlot): { tiles: number[]; districts: District[] } {
+  const total = TILE_GRID_SIZE * TILE_GRID_SIZE;
+  const tiles = new Array(total).fill(EMPTY_TILE);
+  // 院墙外一圈回廊
+  for (let i = 0; i < TILE_GRID_SIZE; i++) {
+    tiles[i] = ROAD_TILE;
+    tiles[(TILE_GRID_SIZE - 1) * TILE_GRID_SIZE + i] = ROAD_TILE;
+    tiles[i * TILE_GRID_SIZE] = ROAD_TILE;
+    tiles[i * TILE_GRID_SIZE + TILE_GRID_SIZE - 1] = ROAD_TILE;
+  }
+
+  const districts: District[] = [];
+  plot.cells.forEach((cell, index) => {
+    if (!cell) return;
+    const row = Math.floor(index / MANOR_GRID) + MANOR_OFFSET;
+    const col = (index % MANOR_GRID) + MANOR_OFFSET;
+    tiles[row * TILE_GRID_SIZE + col] = BLOCK_TILE;
+    districts.push({
+      id: districts.length + 1,
+      name: cell.shape,
+      nature: manorCellNature(cell),
+      slots: 1,
+    });
+  });
+  return { tiles, districts };
+}
+
+/**
+ * 把名下每一处宅地注册成一张可进入的宅邸图：与城图同一套瓦片，
+ * 屋舍落在院中，点开便进那一间的打理界面。
+ * 宅地随存档走，故在开局、买地、盖屋之后现注册一次。
+ */
+export function registerManorScenes(plots: ManorPlot[] | undefined): void {
+  for (const plot of Array.isArray(plots) ? plots : []) {
+    if (!plot?.id) continue;
+    const id = manorSceneId(plot.id);
+    const { tiles, districts } = manorLayout(plot);
+    const townId = plot.cityId ? `${TOWN_SCENE_PREFIX}${plot.cityId}` : "";
+    const parentId = townId && registry.sceneById.has(townId) ? townId : WORLD_SCENE_ID;
+    const scene: MapScene = {
+      id,
+      name: `${plot.place}·宅邸`,
+      kind: "manor",
+      image: "",
+      parentId,
+      width: TILE_GRID_SIZE,
+      height: TILE_GRID_SIZE,
+      tiles,
+      culture: plot.cityId ? getMarker(plot.cityId)?.culture : undefined,
+      districts,
+      manorPlotId: plot.id,
+    };
+    registry.sceneById.set(id, scene);
+    const at = registry.scenes.findIndex((s) => s.id === id);
+    if (at >= 0) registry.scenes[at] = scene;
+    else registry.scenes.push(scene);
   }
 }

@@ -9,8 +9,8 @@ import { HOURS_PER_DAY } from "@/data/rooms";
 import { cultivationGain } from "@/data/cultivation";
 import { estateEfficiency, RENT_TENANT_KINDS } from "@/data/estates";
 import { manorBonuses, restRatio } from "@/data/manors";
-import { ManorPlotModal } from "@/components/map/ManorPlotModal";
-import type { Estate, ManorPlot } from "@/data/types";
+import { manorSceneId } from "@/data/map";
+import type { Estate } from "@/data/types";
 import { Coins, Home, Loader2, Package, Sparkles, Swords } from "lucide-react";
 
 /** 完好度落到这些话上 */
@@ -26,8 +26,15 @@ function conditionWords(condition: number): string {
 export function EstatePanel() {
   const estates = useGameStore((s) => s.estates ?? []);
   const manorPlots = useGameStore((s) => s.manorPlots ?? []);
+  const enterScene = useGameStore((s) => s.enterScene);
+  const setPanel = useGameStore((s) => s.setPanel);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [openPlot, setOpenPlot] = useState<ManorPlot | null>(null);
+
+  /** 宅邸也是一张地图：收起抽屉，直接走进去 */
+  const enterManor = (plotId: string) => {
+    setPanel(null);
+    enterScene(manorSceneId(plotId));
+  };
 
   return (
     <div className="paper-texture">
@@ -72,7 +79,7 @@ export function EstatePanel() {
                       {p.rent ? ` · 已租与${p.rent.tenant}（月租 ${p.rent.monthly}）` : ""}
                     </div>
                   </div>
-                  <SealButton variant="ghost" onClick={() => setOpenPlot(p)} className="px-3 py-1.5 text-xs shrink-0">
+                  <SealButton variant="ghost" onClick={() => enterManor(p.id)} className="px-3 py-1.5 text-xs shrink-0">
                     进入
                   </SealButton>
                 </div>
@@ -81,8 +88,6 @@ export function EstatePanel() {
           </div>
         )}
       </ScrollCard>
-
-      {openPlot && <ManorPlotModal plot={openPlot} onClose={() => setOpenPlot(null)} />}
     </div>
   );
 }

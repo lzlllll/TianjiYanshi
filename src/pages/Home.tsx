@@ -29,6 +29,7 @@ import { NarrativeShopModal } from "@/components/map/NarrativeShopModal";
 import { AdventureModal } from "@/components/adventure/AdventureModal";
 import { CraftOrderModal } from "@/components/ai/CraftOrderModal";
 import { CraftingModal } from "@/components/crafting/CraftingModal";
+import { registerManorScenes } from "@/data/map";
 import { EndingScreen } from "@/components/ending/EndingScreen";
 import { GameIntroModal } from "@/components/start/GameIntroModal";
 import { OpeningWarningModal } from "@/components/start/OpeningWarningModal";
@@ -80,6 +81,8 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
 
   useEffect(() => {
     useGameStore.getState().ensureSectSites();
+    // 名下已有的宅地各注册一张宅邸图，读档后也进得去
+    registerManorScenes(useGameStore.getState().manorPlots);
     useGameStore.getState().ensureSectEndowment();
     useGameStore.getState().settleSectSites();
     useGameStore.getState().ensureVillages();

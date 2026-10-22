@@ -49,7 +49,16 @@ const HOUR_OPTIONS = [1, 2, 4, 8, 12];
  * 先在空地上盖「形体」，再进屋分配「功能」；每种功能都有亲手可做的事，
  * 也可把整座或单独一间租出去收租。
  */
-export function ManorPlotModal({ plot, onClose }: { plot: ManorPlot; onClose: () => void }) {
+export function ManorPlotModal({
+  plot,
+  onClose,
+  initialIndex,
+}: {
+  plot: ManorPlot;
+  onClose: () => void;
+  /** 从宅邸图点进来时，直接落在那一间上 */
+  initialIndex?: number;
+}) {
   const live = useGameStore((s) => s.manorPlots?.find((p) => p.id === plot.id)) ?? plot;
   const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const buildShape = useGameStore((s) => s.buildShape);
@@ -78,7 +87,7 @@ export function ManorPlotModal({ plot, onClose }: { plot: ManorPlot; onClose: ()
   const narrateRentOut = useAIStore((s) => s.narrateRentOut);
   const openCrafting = useAIStore((s) => s.openCrafting);
 
-  const [sel, setSel] = useState<number | null>(null);
+  const [sel, setSel] = useState<number | null>(initialIndex ?? null);
   const [note, setNote] = useState("");
   const [cropInput, setCropInput] = useState("");
   const [cropNote, setCropNote] = useState("");

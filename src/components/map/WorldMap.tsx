@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { factionColor } from "@/lib/territory";
 import { occupationTribute } from "@/data/occupations";
 import { SectMapView } from "./SectMapView";
+import { ManorMapView } from "./ManorMapView";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import {
@@ -299,6 +300,8 @@ export function WorldMap({
       ),
     [quests],
   );
+  // 宅邸图自绘等距院景，按平铺坐标算出来的地名戳在斜视角上会错位，这一层不再叠
+  const showDistrictLabels = scene.kind !== "manor";
   // 路网与水系：把相邻同类地块的中心连成线，描在格子之上；
   // 河遇上一格道路时直接穿过去，把那格当桥，免得水道被路截断
   const roadLinks = useMemo(() => buildTileLinks(tiles ?? [], ROAD_TILE), [tiles]);
@@ -754,12 +757,14 @@ export function WorldMap({
     >
       {/* 宗门山门图是另一套渲染：15×15、按地块立建筑，不走城图那套格与街区 */}
       {scene.kind === "sect" && <SectMapView scene={scene} />}
+      {/* 宅邸也是一张地图：10×10 的院子，屋舍落在院中 */}
+      {scene.kind === "manor" && <ManorMapView scene={scene} />}
       <div
         className="absolute inset-0 m-auto will-change-transform"
         style={{
           width: fit.w || undefined,
           height: fit.h || undefined,
-          display: scene.kind === "sect" ? "none" : undefined,
+          display: scene.kind === "sect" || scene.kind === "manor" ? "none" : undefined,
           transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
         }}
       >
@@ -865,7 +870,7 @@ export function WorldMap({
       <div className="map-labels pointer-events-none absolute inset-0">
         {/* 建筑街区：深底金字压在格子上，贴图再花也读得清；
             叙事起过名的街区只留名字，性质让位给这块地方的称呼 */}
-        {districtLabels.map((label) => (
+        {showDistrictLabels && districtLabels.map((label) => (
           <span
             key={`district-${label.index}`}
             className={cn(

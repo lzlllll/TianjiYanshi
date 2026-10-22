@@ -74,7 +74,7 @@ export interface Location {
 }
 
 /** 地图场景种类；城镇内部地图、宗门驻地、秘境洞府都走同一套渲染管线 */
-export type MapSceneKind = "world" | "town" | "sect" | "dungeon";
+export type MapSceneKind = "world" | "town" | "sect" | "manor" | "dungeon";
 
 /** 一张可渲染的地图。世界地图是根场景，其余场景通过 parentId 挂回上位地图 */
 export interface MapScene {
@@ -102,6 +102,8 @@ export interface MapScene {
   sectFeature?: string;
   /** 宗门场景专用：本门已毁的建筑名，注册山门时从点位抄来，排布时按名抹去 */
   sectDestroyed?: string[];
+  /** 宅邸场景专用：这一张图对应哪一处宅地 */
+  manorPlotId?: string;
 }
 
 /** 地图标点种类；新增种类时在此扩展，渲染侧按种类取样式 */
