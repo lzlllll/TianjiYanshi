@@ -4,7 +4,7 @@ import { getTileTexture } from "@/data/map";
 import { TILE_GRID_SIZE, mapDistrictsToCells, tileFill } from "@/data/map/tiles";
 import { MANOR_GRID } from "@/data/manors";
 import { manorSpriteLayout } from "@/data/map/manorSprites";
-import { ManorPlotModal } from "@/components/map/ManorPlotModal";
+import { ManorDock } from "@/components/map/ManorDock";
 import { SealButton } from "@/components/ui/SealButton";
 import type { MapScene } from "@/data/types";
 import { DoorOpen, Home } from "lucide-react";
@@ -129,8 +129,9 @@ export function ManorMapView({ scene }: { scene: MapScene }) {
         </SealButton>
       </div>
 
-      {/* 院子：等距斜视，整座院面抬起一线 */}
-      <div className="relative flex-1 min-h-0 overflow-hidden">
+      {/* 院子：等距斜视，整座院面抬起一线；右侧是打理栏，选中的一格在那里办 */}
+      <div className="flex flex-1 min-h-0">
+        <div className="relative flex-1 min-w-0 overflow-hidden">
         <div ref={courtRef} className="absolute inset-3 sm:inset-5">
           {plane > 0 && (
             <div className="absolute inset-0" style={{ transform: `translateY(${drop}px)` }}>
@@ -197,7 +198,7 @@ export function ManorMapView({ scene }: { scene: MapScene }) {
                       disabled={!clickable}
                       title={
                         cell
-                          ? `${cell.shape} Lv.${cell.level}${cell.fn ? ` · ${cell.fn}` : " · 未配功能"}${cell.rent ? " · 已出租" : ""}`
+                          ? `${cell.shape} Lv.${cell.level}${cell.fn ? ` · ${cell.fn}` : " · 未配功能"}${cell.facing === 1 ? " · 调转" : ""}${cell.rent ? " · 已出租" : ""}`
                           : inManor
                             ? "空地 · 点此起屋"
                             : ""
@@ -236,6 +237,9 @@ export function ManorMapView({ scene }: { scene: MapScene }) {
               <div className="pointer-events-none absolute inset-0">
                 {built.map(({ cell, index, row, col }) => {
                   const layout = manorSpriteLayout(cell.shape, scene.culture, cellWidth);
+                  // 调转朝向：立绘沿格心左右镜像，方台仍落在原处
+                  const mirrored = cell.facing === 1;
+                  const spriteLeft = mirrored ? (layout.align.cx - 1) * layout.width : layout.left;
                   const dx = (col + 0.5) * cellSide - plane / 2;
                   const dy = (row + 0.5) * cellSide - plane / 2;
                   const x = (dx - dy) * Math.SQRT1_2;
@@ -254,10 +258,11 @@ export function ManorMapView({ scene }: { scene: MapScene }) {
                         draggable={false}
                         className="absolute max-w-none"
                         style={{
-                          left: layout.left,
+                          left: spriteLeft,
                           top: layout.top,
                           width: layout.width,
                           height: layout.height,
+                          transform: mirrored ? "scaleX(-1)" : undefined,
                           filter: hot
                             ? "brightness(1.08) drop-shadow(0 0 6px rgba(240, 200, 120, 0.55))"
                             : "drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35))",
@@ -284,16 +289,14 @@ export function ManorMapView({ scene }: { scene: MapScene }) {
           )}
         </div>
       </div>
+        <ManorDock plot={plot} index={picked} />
+      </div>
 
       <div className="px-6 py-2 border-t border-gold-500/20 bg-ink-900/70">
         <p className="font-serif text-[11px] text-paper-400/55">
           屋舍共 {plot.cells.filter(Boolean).length} / {plot.cells.length} 格；点一格即可盖屋、分配功能或做点实事。
         </p>
       </div>
-
-      {picked !== null && (
-        <ManorPlotModal key={picked} plot={plot} initialIndex={picked} onClose={() => setPicked(null)} />
-      )}
     </div>
   );
 }

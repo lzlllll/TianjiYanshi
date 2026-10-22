@@ -36,7 +36,7 @@ import type {
   ManorActResult,
 } from "@/data/types";
 import { applyOpsToState, normalizeAppraisal, normalizeItemElements } from "@/lib/dataOps";
-import { WORLD_SCENE_ID, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerManorScenes, registerSectScenes, sectSceneId } from "@/data/map";
+import { WORLD_SCENE_ID, assignManorCell, getCityMarkers, getDefaultPlaceId, getDistricts, getMarker, getScene, getScenePresetPoints, registerManorScenes, registerSectScenes, sectSceneId } from "@/data/map";
 import { presetKey } from "@/data/map/presets";
 import { makeVillageShop, rollVillageBuildings, rollVillageName, rollVillageNpcs, villageBuildingName } from "@/data/villages";
 import { ESTATE_DECAY_PER_DAY, REBUILD_CONDITION, REBUILD_DAYS, maintainCost, rebuildCost, rollEstateOffer, sellRefund } from "@/data/estates";
@@ -252,8 +252,12 @@ interface GameStore extends GameState {
   manorPlots: ManorPlot[];
   /** 买下一处宅地（7×7 空地） */
   buyPlot: (input: { place: string; cityId?: string; districtId?: number }) => ManorPlot | null;
-  /** 在空地上盖一处建筑形体 */
-  buildShape: (plotId: string, index: number, shape: ManorShape) => boolean;
+  /** 名下宅地若还没落到城图上，挑一格空地落下 */
+  ensureManorCells: () => void;
+  /** 在空地上盖一处建筑形体，可指定摆放朝向 */
+  buildShape: (plotId: string, index: number, shape: ManorShape, facing?: 0 | 1) => boolean;
+  /** 把一处建筑调转朝向 */
+  flipManorCell: (plotId: string, index: number) => boolean;
   /** 给一处建筑分配功能 */
   assignManorFunction: (plotId: string, index: number, fn: ManorFunction | undefined) => boolean;
   /** 升级一处建筑 */
@@ -4016,8 +4020,8 @@ EFFECT: [效果描述]`,
         get().tickMortality(0);
         // 叙事若把境界推上了某一桩修为类机缘所指的那一层，就地认下
         get().settleRealmQuests();
-        // 叙事里新置的宅地也要有一张能走进去的宅邸图
-        registerManorScenes(get().manorPlots);
+        // 叙事里新置的宅地也要有一张能走进去的宅邸图，并在城图上落到一格空地
+        get().ensureManorCells();
         // 叙事里启程去了别处，这一路也算走过一段，路上同样可能生变
         if (placeBefore !== get().currentPlaceId) {
           void import("@/store/useAIStore")
@@ -4750,7 +4754,30 @@ EFFECT: [效果描述]`,
         return plot;
       },
 
-      buildShape: (plotId, index, shape) => {
+      ensureManorCells: () => {
+        const plots = get().manorPlots ?? [];
+        if (plots.length === 0) return;
+        // 已经落过格的先占住，后面几处不再抢同一格
+        const progress: ManorPlot[] = [];
+        let changed = false;
+        for (const p of plots) {
+          if (typeof p.districtId === "number") {
+            progress.push(p);
+            continue;
+          }
+          const cell = assignManorCell({ place: p.place, cityId: p.cityId }, progress);
+          if (typeof cell.districtId !== "number") {
+            progress.push(p);
+            continue;
+          }
+          changed = true;
+          progress.push({ ...p, cityId: cell.cityId ?? p.cityId, districtId: cell.districtId });
+        }
+        if (changed) set({ manorPlots: progress });
+        registerManorScenes(progress);
+      },
+
+      buildShape: (plotId, index, shape, facing) => {
         const st = get();
         const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
         if (!plot || plot.cells[index]) return false;
@@ -4760,11 +4787,32 @@ EFFECT: [效果描述]`,
         set((s) => ({
           spiritStones: paid,
           manorPlots: (s.manorPlots ?? []).map((p) =>
-            p.id === plotId ? { ...p, cells: p.cells.map((c, i) => (i === index ? { shape, level: 1 } : c)) } : p,
+            p.id === plotId
+              ? { ...p, cells: p.cells.map((c, i) => (i === index ? { shape, level: 1, facing: facing ?? 0 } : c)) }
+              : p,
           ),
           log: [`你在宅邸里盖起一座「${shape}」，花 ${cost} 下品灵石。`, ...s.log].slice(0, 30),
         }));
         registerManorScenes(get().manorPlots);
+        return true;
+      },
+
+      flipManorCell: (plotId, index) => {
+        const st = get();
+        const plot = (st.manorPlots ?? []).find((p) => p.id === plotId);
+        if (!plot?.cells[index]) return false;
+        set((s) => ({
+          manorPlots: (s.manorPlots ?? []).map((p) =>
+            p.id === plotId
+              ? {
+                  ...p,
+                  cells: p.cells.map((c, i) =>
+                    i === index && c ? { ...c, facing: c.facing === 1 ? 0 : 1 } : c,
+                  ),
+                }
+              : p,
+          ),
+        }));
         return true;
       },
 

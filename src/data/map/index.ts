@@ -781,6 +781,47 @@ export function registerSectScenes(sites: SectSite[] | undefined): void {
 }
 
 /**
+ * 一处宅地落在城图上的哪一格。
+ *
+ * 已经指定过、且那一格还空着，就照用；没指定便在城里的空地上随便挑一格，
+ * 让叙事里得来的宅邸也能在城图上现出一座院子。城里没有空地就不落格，
+ * 宅地仍留在「地产」页里。
+ */
+export function assignManorCell(
+  input: { place?: string; cityId?: string; districtId?: number },
+  plots: { cityId?: string; districtId?: number }[] = [],
+): { cityId?: string; districtId?: number } {
+  const marker =
+    (input.cityId ? getMarker(input.cityId) : undefined) ?? resolveMarker(input.place ?? "");
+  const cityId = marker?.kind === "city" ? marker.id : undefined;
+  const tiles = cityId ? getTownScene(cityId)?.tiles : undefined;
+  const given = Number(input.districtId);
+  if (!tiles) return { cityId, districtId: Number.isFinite(given) ? given : undefined };
+
+  const taken = new Set(
+    plots
+      .filter((p) => p?.cityId === cityId && Number.isFinite(Number(p?.districtId)))
+      .map((p) => Number(p.districtId)),
+  );
+  if (
+    Number.isInteger(given) &&
+    given >= 0 &&
+    given < tiles.length &&
+    tiles[given] === EMPTY_TILE &&
+    !taken.has(given)
+  ) {
+    return { cityId, districtId: given };
+  }
+
+  const free: number[] = [];
+  tiles.forEach((code, i) => {
+    if (code === EMPTY_TILE && !taken.has(i)) free.push(i);
+  });
+  if (free.length === 0) return { cityId, districtId: undefined };
+  return { cityId, districtId: free[Math.floor(Math.random() * free.length)] };
+}
+
+/**
  * 把整份宗门图模板写回 game_data/sectMaps.json，供日后随游戏发出去。
  * 只在本地服务下管用——本地服务把 POST /game/... 落到项目文件上；
  * 别的运行环境（如纯静态托管）会失败，返回 false，由调用方自行提示。

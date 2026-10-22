@@ -18,7 +18,7 @@ import type {
   Village,
 } from "@/data/types";
 import { REALM_NAMES } from "@/data/mockData";
-import { getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
+import { assignManorCell, getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
 import { sectBuildingRoster } from "@/data/map/sectBuildings";
 import { composeSectSite } from "@/data/sectSites";
 import { normalizeSectRelation } from "@/data/sectRelations";
@@ -930,7 +930,9 @@ function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | n
   if (op.what === "manor") {
     const place = String(op.place ?? "").trim() || name;
     const plots = Array.isArray(root.manorPlots) ? root.manorPlots : [];
-    plots.push(emptyPlot({ place }));
+    // 叙事里买下的宅子也落在城图的一格空地上，进城便看得见一座院子
+    const cell = assignManorCell({ place }, plots);
+    plots.push(emptyPlot({ place, cityId: cell.cityId, districtId: cell.districtId }));
     root.manorPlots = plots;
     root.log = [`你在${place}买下一处宅地，花 ${cost} 下品灵石。`, ...(Array.isArray(root.log) ? root.log : [])].slice(0, 30);
     return null;
@@ -2386,12 +2388,20 @@ function applyOne(root: any, op: DataOp): void {
         );
         if (spec) arr.push(spec);
       } else if (op.collection === "manorPlots") {
-        // 叙事里得的一处宅地：名号与所在照写，7×7 一律从空地起
+        // 叙事里得的一处宅地：名号与所在照写，7×7 一律从空地起；
+        // 没写落在哪一格，便在所在城池的空地里挑一格，城图上多出一座院子
+        const place = String((payload as any)?.place ?? "无名之地");
+        const input = {
+          place,
+          cityId: (payload as any)?.cityId,
+          districtId: (payload as any)?.districtId,
+        };
+        const cell = assignManorCell(input, arr as { cityId?: string; districtId?: number }[]);
         arr.push(
           emptyPlot({
-            place: String((payload as any)?.place ?? "无名之地"),
-            cityId: (payload as any)?.cityId,
-            districtId: (payload as any)?.districtId,
+            place,
+            cityId: cell.cityId ?? input.cityId,
+            districtId: cell.districtId ?? input.districtId,
           }),
         );
       } else if (op.collection === "news.items") {

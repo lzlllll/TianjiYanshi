@@ -19,6 +19,7 @@ import {
   getTileTexture,
   getTownScene,
   getWorldScene,
+  manorSceneId,
   removePresetPoint,
 } from "@/data/map";
 import {
@@ -47,7 +48,7 @@ import { VillagePanel } from "./VillagePanel";
 import { presetKey } from "@/data/map/presets";
 import { adventureEnterable, adventureWhere, dangerLabel, isPresetFree } from "@/data/adventures";
 import { MANOR_PLOT_PRICE } from "@/data/manors";
-import type { MapMarker, MapMarkerKind, PresetPoint } from "@/data/types";
+import type { ManorPlot, MapMarker, MapMarkerKind, PresetPoint } from "@/data/types";
 
 /** 最大放大到 200% */
 const MAX_SCALE = 2;
@@ -274,6 +275,16 @@ export function WorldMap({
     () => mapDistrictsToCells(tiles ?? [], scene.districts ?? []),
     [tiles, scene.districts],
   );
+  // 名下在这一城的宅邸占的格子：城图上画成一处院子，点开即入
+  const ownedManorCells = useMemo(() => {
+    const map = new Map<number, ManorPlot>();
+    if (!place) return map;
+    for (const p of manorPlots) {
+      if (p.cityId !== place.id || typeof p.districtId !== "number") continue;
+      map.set(p.districtId, p);
+    }
+    return map;
+  }, [manorPlots, place]);
   // 手上还没办完的差事办在哪一处街区：这几处在城图上挂星标
   const questDistricts = useMemo(() => {
     const ids = quests
@@ -539,6 +550,12 @@ export function WorldMap({
     const index =
       Math.floor((point.ny / base.h) * TILE_GRID_SIZE) * TILE_GRID_SIZE +
       Math.floor((point.nx / base.w) * TILE_GRID_SIZE);
+    // 名下的宅邸就落在这一格：点它直接进门，不必再绕「地产」页
+    const ownedPlot = ownedManorCells.get(index);
+    if (ownedPlot) {
+      enterScene(manorSceneId(ownedPlot.id));
+      return;
+    }
     // 城边的林地：点开便是一处探索的去处，走一趟或有所得、或遇上事
     if (tiles[index] === FOREST_TILE) {
       if (!onExploreForest) return;
@@ -792,18 +809,25 @@ export function WorldMap({
               {tiles.map((code, index) => {
                 // 建筑街区看街区性质，其余看地块类型；取不到贴图就退回地块颜色
                 const district = districtByCell.get(index);
+                // 名下宅邸占的那一格：按大户人家的院子来画，点开便进门
+                const owned = ownedManorCells.get(index);
                 // 大户人家连宅号一起报，悬停过去就知道这院子姓什么
                 const manor = place && district ? manors[`${place.id}:${district.id}`] : undefined;
+                // 名下的宅地另按一户宅院画，不理会原地块是不是空地
+                const shownCode = owned ? BLOCK_TILE : code;
                 // 河流与道路只按空地铺底，全靠上面描的线分辨
-                const ground = code === ROAD_TILE || code === RIVER_TILE ? EMPTY_TILE : code;
-                const texture = getTileTexture(ground, district?.nature, scene.culture, index);
+                const ground = shownCode === ROAD_TILE || shownCode === RIVER_TILE ? EMPTY_TILE : shownCode;
+                const texture = getTileTexture(ground, owned ? "大户住宅" : district?.nature, scene.culture, index);
                 return (
                   <div
                     key={index}
+                    className="relative"
                     title={
-                      district
-                        ? `${getTileKind(code).name} · ${manor ? manorHouseName(manor) : district.nature}`
-                        : getTileKind(code).name
+                      owned
+                        ? `${owned.place}·宅邸 · 点此入内`
+                        : district
+                          ? `${getTileKind(code).name} · ${manor ? manorHouseName(manor) : district.nature}`
+                          : getTileKind(code).name
                     }
                     style={{
                       backgroundColor: tileFill(ground),
@@ -811,9 +835,15 @@ export function WorldMap({
                       backgroundSize: "cover",
                       backgroundPosition: "center",
                       // 街区自带一道粗边，相邻两格的边叠起来，街区之间的分界就比别处重
-                      border: code === BLOCK_TILE ? `${BLOCK_BORDER}px solid rgba(38, 24, 14, 0.92)` : undefined,
+                      border: shownCode === BLOCK_TILE ? `${BLOCK_BORDER}px solid rgba(38, 24, 14, 0.92)` : undefined,
                     }}
-                  />
+                  >
+                    {owned && (
+                      <span className="absolute right-0.5 top-0.5 rounded-sm bg-cinnabar-500/90 px-1 font-serif text-[9px] leading-tight text-paper-50">
+                        宅
+                      </span>
+                    )}
+                  </div>
                 );
               })}
             </div>
