@@ -32,7 +32,7 @@ import { pinNarrativeQuest } from "@/data/broker";
 import { normalizeAdventure } from "@/data/adventures";
 import { CULTIVATION_PER_HOUR, localCultivationFrom } from "@/data/cultivation";
 import { spendLowStones } from "@/data/spiritStones";
-import { emptyPlot } from "@/data/manors";
+import { emptyPlot, readyBuiltPlot } from "@/data/manors";
 import { makeModifier } from "@/data/sectModifiers";
 import { buffFromTemplate, findBuffTemplate } from "@/data/buffs";
 import {
@@ -930,9 +930,9 @@ function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | n
   if (op.what === "manor") {
     const place = String(op.place ?? "").trim() || name;
     const plots = Array.isArray(root.manorPlots) ? root.manorPlots : [];
-    // 叙事里买下的宅子也落在城图的一格空地上，进城便看得见一座院子
+    // 叙事里买下的是现成的宅院：院中已有正房与两间厢房，不是荒地
     const cell = assignManorCell({ place }, plots);
-    plots.push(emptyPlot({ place, cityId: cell.cityId, districtId: cell.districtId }));
+    plots.push(readyBuiltPlot({ place, cityId: cell.cityId, districtId: cell.districtId }));
     root.manorPlots = plots;
     root.log = [`你在${place}买下一处宅地，花 ${cost} 下品灵石。`, ...(Array.isArray(root.log) ? root.log : [])].slice(0, 30);
     return null;
@@ -2113,14 +2113,14 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
     return null; // 已直接处理
   }
 
-  // 名声：四条各自落在 0 到 100，路径写 reputation.<哪一条>，值写改后的数目。
-  // 认不出是哪一条就丢弃，免得凭空多出一条没人认的名声。
+  // 名声：四条各自落在 -100 到 100，路径写 reputation.<哪一条>，值写改后的数目。
+  // 负数是坏名声，0 是无人识得；认不出是哪一条就丢弃，免得凭空多出一条没人认的名声。
   const repMatch = normalizedPath.match(/^reputation\.(.+)$/);
   if (repMatch) {
     const axis = reputationAxisByName(repMatch[1]);
     const next = Number(value);
     if (!axis || !Number.isFinite(next)) return null;
-    return { path: `reputation.${axis}`, value: String(Math.max(0, Math.min(100, Math.round(next)))) };
+    return { path: `reputation.${axis}`, value: String(Math.max(-100, Math.min(100, Math.round(next)))) };
   }
 
   for (const [alias, actual] of Object.entries(FIELD_ALIASES)) {

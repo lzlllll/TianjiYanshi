@@ -17,8 +17,8 @@ const AXIS_COLOR: Record<ReputationAxis, { text: string; bar: string }> = {
   official: { text: "text-gold-400", bar: "bg-gradient-to-r from-gold-600 to-gold-400" },
 };
 
-/** 20 / 40 / 60 / 80 上各有一道浅痕，看得出攒到哪一档了 */
-const BAND_MARKS = [20, 40, 60, 80];
+/** 20 与 60 上各有一道浅痕；0 那一线是正负的分界 */
+const BAND_MARKS = [-60, -20, 20, 60];
 
 export function ReputationPanel() {
   const reputation = useGameStore((s) => s.reputation);
@@ -27,14 +27,17 @@ export function ReputationPanel() {
     <div className="space-y-4">
       <ScrollCard className="!p-4">
         <p className="font-serif text-xs leading-relaxed text-paper-300/70">
-          名声是旁人嘴里的你，与你自认的人品未必相干。正道怎么看你、魔道怎么看你、街坊怎么看你、官面上怎么看你，四条各走各的，互不相抵——满手血腥的人，未必就没有百姓念他救过命。
+          名声是旁人嘴里的你，与你自认的人品未必相干。正道怎么看你、魔道怎么看你、街坊怎么看你、官面上怎么看你，四条各走各的，互不相抵——满手血腥的人，未必就没有百姓念他救过命。四条都落在 −100 到 100 之间：0 是没人认得你，正数是好名声，负数是坏名声。
         </p>
       </ScrollCard>
 
       <div className="grid grid-cols-1 gap-3">
         {REPUTATION_AXES.map((axis) => {
-          const value = reputation?.[axis] ?? 0;
+          const value = Math.max(-REPUTATION_MAX, Math.min(REPUTATION_MAX, reputation?.[axis] ?? 0));
           const c = AXIS_COLOR[axis];
+          const ratio = value / REPUTATION_MAX;
+          const barWidth = `${Math.abs(ratio) * 50}%`;
+          const barLeft = ratio >= 0 ? "50%" : `${50 - Math.abs(ratio) * 50}%`;
           return (
             <ScrollCard key={axis} className="!p-4">
               <div className="flex items-baseline justify-between mb-2">
@@ -42,21 +45,26 @@ export function ReputationPanel() {
                   {REPUTATION_LABELS[axis]}
                 </span>
                 <span className="font-number text-sm text-paper-200">
-                  {value}
-                  <span className="text-paper-400/50 text-xs"> / {REPUTATION_MAX}</span>
+                  {value > 0 ? `+${value}` : value}
+                  <span className="text-paper-400/50 text-xs"> / 100</span>
                 </span>
               </div>
 
               <div className="relative h-2.5 bg-ink-900/80 rounded-sm overflow-hidden border border-paper-400/10">
                 <div
-                  className={cn("h-full transition-all duration-500", c.bar)}
-                  style={{ width: `${(value / REPUTATION_MAX) * 100}%` }}
+                  className={cn(
+                    "absolute top-0 bottom-0 transition-all duration-500",
+                    value < 0 ? "bg-gradient-to-r from-cinnabar-700 to-cinnabar-400" : c.bar,
+                  )}
+                  style={{ left: barLeft, width: barWidth }}
                 />
+                {/* 零线：往左是坏名声，往右是好名声 */}
+                <div className="absolute top-0 bottom-0 left-1/2 w-px bg-paper-200/50" />
                 {BAND_MARKS.map((mark) => (
                   <div
                     key={mark}
                     className="absolute top-0 bottom-0 w-px bg-paper-400/15"
-                    style={{ left: `${(mark / REPUTATION_MAX) * 100}%` }}
+                    style={{ left: `${50 + (mark / REPUTATION_MAX) * 50}%` }}
                   />
                 ))}
               </div>

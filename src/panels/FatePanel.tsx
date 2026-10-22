@@ -5,7 +5,7 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { SealButton } from "@/components/ui/SealButton";
 import { aliveRumors, RUMOR_KEEP_DAYS } from "@/data/rumors";
-import { isRewardHeld, questHasPenalty, questRank, questRealmGoalLabel } from "@/data/quests";
+import { isRewardHeld, questHasPenalty, questItemGoalLabel, questRank, questRealmGoalLabel, questStoneGoalLabel } from "@/data/quests";
 import { pactDaysLeft, pactKindLabel, pactRank, pactReady } from "@/data/pacts";
 import { adventureWhere, dangerLabel } from "@/data/adventures";
 import { daySerial } from "@/lib/gameTime";
@@ -240,6 +240,18 @@ export function FatePanel() {
                       {questRealmGoalLabel(q) && (
                         <p className="font-serif text-[12px] text-jade-400/80 leading-relaxed mt-1">
                           目标：修到 {questRealmGoalLabel(q)}
+                        </p>
+                      )}
+
+                      {questItemGoalLabel(q) && (
+                        <p className="font-serif text-[12px] text-jade-400/80 leading-relaxed mt-1">
+                          目标：寻得 {questItemGoalLabel(q)}
+                        </p>
+                      )}
+
+                      {questStoneGoalLabel(q) && (
+                        <p className="font-serif text-[12px] text-jade-400/80 leading-relaxed mt-1">
+                          目标：凑足 {questStoneGoalLabel(q)}
                         </p>
                       )}
 

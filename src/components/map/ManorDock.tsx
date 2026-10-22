@@ -109,6 +109,7 @@ export function ManorDock({ plot, index }: { plot: ManorPlot; index: number | nu
 
   const rented = !!live.rent;
   const roomCount = rentedRooms(live);
+  const builtCount = live.cells.filter(Boolean).length;
   const monthlyRent = manorRentIncome(live);
   const cell = sel !== null ? live.cells[sel] : null;
   const bonuses = manorBonuses(live.cells);
@@ -138,6 +139,11 @@ export function ManorDock({ plot, index }: { plot: ManorPlot; index: number | nu
   /** 整座出租：租客与月租由叙事议定 */
   const rentOut = async () => {
     if (rentBusy || roomCount > 0) return;
+    // 空院子没什么可租的，先盖几间屋
+    if (builtCount === 0) {
+      setNote("院里还没有一间屋，租不出去；先盖几间屋，再谈租约。");
+      return;
+    }
     setRentBusy(true);
     setNote("");
     try {
@@ -273,6 +279,10 @@ export function ManorDock({ plot, index }: { plot: ManorPlot; index: number | nu
                 收回自住
               </SealButton>
             </div>
+          ) : builtCount === 0 ? (
+            <p className="font-serif text-[11px] text-ink-light">
+              院里还没有一间屋，租不出去；先在空地上盖几间屋，再谈租约。
+            </p>
           ) : roomCount > 0 ? (
             <p className="font-serif text-[11px] text-ink-light">
               已有 {roomCount} 间单独租出。要整座出租，先把各间的租约收回来。

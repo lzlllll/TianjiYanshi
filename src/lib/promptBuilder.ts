@@ -280,8 +280,15 @@ export function buildDataSchema(state: GameState): string {
             : `还剩${q.dueDay - today}日`;
     const reward = q.rewardKind && q.rewardAmount ? `${q.rewardKind}${q.rewardAmount}` : q.reward || "无";
     const penalty = q.penaltyKind && q.penaltyAmount ? `${q.penaltyKind}${q.penaltyAmount}` : q.penalty || "无";
-    // 修为类没有去处，改报目标境界
-    const where = q.realmGoal !== undefined ? `修到${REALM_NAMES[q.realmGoal] ?? "某境"}` : q.place || "去处未定";
+    // 修为、物品、灵石三类没有去处，分别改写目标
+    const where =
+      q.realmGoal !== undefined
+        ? `修到${REALM_NAMES[q.realmGoal] ?? "某境"}`
+        : q.itemGoal
+          ? `寻得${q.itemGoal.name}×${q.itemGoal.count}`
+          : q.stoneGoal
+            ? `凑足${q.stoneGoal}下品灵石`
+            : q.place || "去处未定";
     lines.push(
       `quests[${q.id}] = ${q.name}【${q.kind ?? "事件"}】（${q.status === "open" ? "在办" : q.status === "done" ? "已了" : "已误"}） ${where} ${left} 托自${q.giver || "无名"} 交差：${q.condition || "未写明"} 酬：${reward} 罚：${penalty}${q.outcome ? ` 结果：${q.outcome}` : ""}`,
     );
@@ -691,8 +698,15 @@ function describePath(state: GameState, path: string): string {
           const state = q.status === "open" ? "在办" : held ? "已办成·赏押牙行待领" : q.status === "done" ? "已了" : "已误";
           // 押在牙行的差事把领赏处一并交代，叙事里才好提一句「回牙行领」
           const where = q.broker ? `（赏押在${q.broker.shopName}）` : "";
-          // 修为类没有去处，改报目标境界
-          const goal = q.realmGoal !== undefined ? `（目标：${REALM_NAMES[q.realmGoal] ?? "某境"}）` : "";
+          // 修为、物品、灵石三类没有去处，改报目标
+          const goal =
+            q.realmGoal !== undefined
+              ? `（目标：${REALM_NAMES[q.realmGoal] ?? "某境"}）`
+              : q.itemGoal
+                ? `（目标：${q.itemGoal.name}×${q.itemGoal.count}）`
+                : q.stoneGoal
+                  ? `（目标：${q.stoneGoal}下品灵石）`
+                  : "";
           return `  [${q.id}] ${q.name}【${q.kind ?? "事件"}】（${state}）${where}${goal} ${goal ? "" : q.place || "去处未定"} ${left} 托自${q.giver || "无名"}\n    交差：${q.condition || "未写明"}\n    酬：${reward}；罚：${penalty}${q.outcome ? `\n    结果：${q.outcome}` : ""}`;
         })
         .join("\n")
@@ -1042,7 +1056,7 @@ ${buffCatalogBrief()}
 15. 货物行情：正文中若出现某样货物因时局一时涨跌（漕路不通、战事吃紧、丰年跌价、瘟疫抢药），用 modify price.<货名> 记下，value 写成「幅度 天数」，如 "+30% 3天"、"-两成 五日"。货名只能是这些：${ALL_GOOD_NAMES.join("、")}；天数 1 到 30，幅度在 -80% 到 +200% 之间。同一样货再写一次即覆盖上一次的行情。寻常的讨价还价、铺面标价不必写这一条。
 16. 判定（硬规矩）：正文中凡涉及考校玩家见识与本事之处——知识问答、辨识真伪、鉴定旧物、辨药材、看品相、认路、看天时、听口音、解典籍掌故、修器物之类——一律用 add checks 掷一次骰子，每条 {"skill":"技能名","dc":难度,"context":"为什么考这一门"}，不得跳过，也不得由你自己判定成败。skill 优先取摘要中 skills 里最贴近的那一门；确无对应的，就照实写一门最贴切的（系统按零级算，成不成全看玩家的本事）。dc 取 ${DC_HINT}：寻常事取易，需些眼力取中，险要或精微处取难、极难。骰子与成败由系统掷定，你不要写 roll 与 success，正文里也不得替它宣布成败、把结果写死（莫写「他一眼认出」「他没看出什么」这类定论），只把该铺的场面铺开，成败留待下回照判定结果续写。口才、说服、谈判、寒暄一类不掷骰子，用正文直接写。同一件事只掷一次，不要反复掷。
 17. 判定改口：若正文中玩家把先前没看准的事掰了回来（翻书查证、找来行家印证、反复端详终于看出门道），用 modify check.<技能名> 记下，value 写「成」；若他撂开手认了栽，value 写「败」。只改最近一次还悬着的那条判定，没悬着的不要写。
-18. 机缘：正文或交谈里若有人托付、立约、许下报酬要办一件事，用 add quests 立一桩，每条 {"id","name","kind","desc","place","dueDay","giver","condition","realmGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff"}。kind 必写，只取 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的一桩事，place 可省；地点是奔着某一处地方去的，place 须是本城或别城真有的去处，事就在那一处办、不必有固定的人；人物是奔着某个人去的，place 写那人的落脚处、也须是真有的去处，且定有那个人；修为是修到某一层境界便算办到的长期目标，place 可省、也不必有人，另写 realmGoal 为境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘 之一，再加 初期、中期、后期、圆满，如「炼气后期」），系统照境界表折成序号，玩家修到那一层便自行了结。name 不超过 10 字，说清是什么事；desc 写清来龙去脉；place 写去哪儿办，事件类与修为类不限定地点可省；地点类与人物类的去处须是眼下真有的地方，可以是城内某条街区（如「长安·西市」）、某座山门里的某座建筑（写作「山门名·建筑名」，如「青云宗·炼丹房」）、舆图上某处奇遇的名目、或某座村庄的名目，这四样皆可；确要另起一处舆图上没有的，也可照剧情写一处城外的具体地方（如「城西三十里的废寺」），系统会在附近现开一处；能对上真有的去处时，仍先照真有的写；dueDay 写第几日截止，今日为第 ${todaySerial} 日，「三日后」就写 ${todaySerial + 3}，不限时则省略；giver 是托付人的名字，须与 relations 中的人名一致；condition 写玩家做到什么才算办成，修为类可写「修到炼气后期」。
+18. 机缘：正文或交谈里若有人托付、立约、许下报酬要办一件事，用 add quests 立一桩，每条 {"id","name","kind","desc","place","dueDay","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff"}。kind 必写，只取 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的一桩事，place 可省；地点是奔着某一处地方去的，place 须是本城或别城真有的去处，事就在那一处办、不必有固定的人；人物是奔着某个人去的，place 写那人的落脚处、也须是真有的去处，且定有那个人；修为是修到某一层境界便算办到的长期目标，place 可省、也不必有人，另写 realmGoal 为境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘 之一，再加 初期、中期、后期、圆满，如「炼气后期」），系统照境界表折成序号，玩家修到那一层便自行了结；物品是寻某一样东西，place 可省，另写 itemGoal 为 {"name":"物名","count":件数}，玩家行囊里凑齐了这些件便自行了结；灵石是凑某数灵石，place 可省，另写 stoneGoal 为整数，四等灵石按一比一百折成下品来算，攒够了便自行了结。name 不超过 10 字，说清是什么事；desc 写清来龙去脉；place 写去哪儿办，事件类、修为类、物品类与灵石类不限定地点可省；地点类与人物类的去处须是眼下真有的地方，可以是城内某条街区（如「长安·西市」）、某座山门里的某座建筑（写作「山门名·建筑名」，如「青云宗·炼丹房」）、舆图上某处奇遇的名目、或某座村庄的名目，这四样皆可；确要另起一处舆图上没有的，也可照剧情写一处城外的具体地方（如「城西三十里的废寺」），系统会在附近现开一处；能对上真有的去处时，仍先照真有的写；dueDay 写第几日截止，今日为第 ${todaySerial} 日，「三日后」就写 ${todaySerial + 3}，不限时则省略；giver 是托付人的名字，须与 relations 中的人名一致；condition 写玩家做到什么才算办成，修为类可写「修到炼气后期」，物品类可写「寻到青玉佩三枚」，灵石类可写「凑足三百下品灵石」。
    - rewardKind 只取 灵石、修为、物品、人情、状态、正道名声、魔道名声、平民名声、官府名声 之一，penaltyKind 只取 灵石、修为、业力、状态、正道名声、魔道名声、平民名声、官府名声 之一；amount 为 1 到 5000 的整数，且必须与对应的 rewardKind／penaltyKind 同时给出，只写其中一个就当没写。名目不在表内的不要写，写了也作废，赏罚只认这几样。名声那几条数额宜小，三五点到十点上下，那是世人议论攒出来的，不是一夜之间的事。名目写「状态」的那一条不要给 amount。
    - 赏的是一条状态，就把说明写进 rewardBuff；罚的是一条状态，写进 penaltyBuff。先照上面那份状态名录挑，写 {"template":"名录里的 id 或名目","hours":顶几个时辰}；名录里确没有合用的，才自编一条，写 {"name":"名目不超过10字","icon":"一个汉字","isDebuff":true或false,"stat":"效力落在哪一项","value":数值,"hours":顶几个时辰,"desc":"一句说明"}。自编时效力只许从 ${BUFF_TARGET_STATS.join("、")} 里挑一项，正数助益、负数负累；顶的时辰取 1 到 720。挑不出也编不出的就别写，宁可按字面给句话。
    - reward 与 penalty 是写给人看的字面话，与名目/amount 不冲突时可一并写；赏罚是一条状态时，这两句话要与会落到身上的那条状态对得上。
@@ -1109,6 +1123,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - 身世背景：modify player.background，200 字以上的出身来历
 - 心性：modify player.personality，简短中文描述其性情
 - 外貌：modify player.description，简短的外貌特征
+- 名声：modify reputation.righteous、reputation.demonic、reputation.folk、reputation.official，四条各写 -100 到 100 的整数，0 是没人认得你。正数是好名声，负数是坏名声：正道、平民、官府三处的负，是被人当作对头、遭人唾骂；魔道那一处的负，是邪门外道看不上你、懒得理你。照其出身、行径与所处之地定一个起手的数目：初出茅庐、无人识得的写 -10 到 20；在乡里有些名头、或已招了些怨言的，可到三四十，坏名声可到 -30；名动一方、或恶名远扬的，可到六七十乃至 -60。正道与魔道未必同时高，官府名声不必与平民名声相同。四条都不许超出 -100 到 100
 - 心性评分：add player.stats.heartScores，3 至 5 条，每条 {"trait","score","modifiers"}；trait 为 2 至 4 字中文性格词，score 为 0-100 整数，modifiers 固定输出空数组 []
 - 修炼历程：add player.timeline，3 至 5 条，每条 {"year","title","detail"}；year 为时间描述（如 幼年、三年前），detail 不少于 20 字
 - 称号：以叙事或玩家自述里已写明的称号为准，照抄那一个；叙事里没提，且 player.title 为空或为「无名之辈」时，才由你拟一个贴切的 modify player.title
@@ -1204,11 +1219,11 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
   {
     id: "quest",
     label: "任务",
-    spec: `只产出开篇时已经落在玩家肩上的几桩事，逐桩 add quests，每桩 {"id","name","kind","desc","place","giver","condition","realmGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff","dueDay","status"}：
+    spec: `只产出开篇时已经落在玩家肩上的几桩事，逐桩 add quests，每桩 {"id","name","kind","desc","place","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff","dueDay","status"}：
 - name 不超过 20 字，写明这桩事的名目，如「替师父送一封信」「寻访失踪的同门」
-- kind 必写，只取 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的一桩事；地点是奔着某一处地方去的，place 必须写具体去处，事在那一处办、不必有固定的人；人物是奔着某个人去的，place 必须是那人的落脚处，且必有那个人；修为是修到某一层境界便算办到的长期目标，place 可省，另写 realmGoal 为境界全称（如「炼气后期」），玩家修到那一层便自行了结。事件类与修为类可以没有 place
+- kind 必写，只取 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的一桩事；地点是奔着某一处地方去的，place 必须写具体去处，事在那一处办、不必有固定的人；人物是奔着某个人去的，place 必须是那人的落脚处，且必有那个人；修为是修到某一层境界便算办到的长期目标，place 可省，另写 realmGoal 为境界全称（如「炼气后期」），玩家修到那一层便自行了结；物品是寻某一样东西，place 可省，另写 itemGoal 为 {"name":"物名","count":件数}，行囊里凑齐了这些件便自行了结；灵石是凑某数灵石，place 可省，另写 stoneGoal 为整数，四等灵石按一比一百折成下品算，攒够了便自行了结。事件类、修为类、物品类、灵石类可以没有 place
 - desc 不超过 200 字，交代来龙去脉：谁交办的、为什么落在你头上、眼下办到什么地步
-- place 写去处，须是玩家眼下这一带真有的地方：可以是城内某条街区（如「扬州·旧书巷」）、某座山门里的某座建筑（写作「山门名·建筑名」）、舆图上某处奇遇的名目、或某座村庄的名目；就在本城的事便写城内的去处；事件类与修为类不限地点可省
+- place 写去处，须是玩家眼下这一带真有的地方：可以是城内某条街区（如「扬州·旧书巷」）、某座山门里的某座建筑（写作「山门名·建筑名」）、舆图上某处奇遇的名目、或某座村庄的名目；就在本城的事便写城内的去处；事件类、修为类、物品类与灵石类不限地点可省
 - giver 写交办之人的姓名或身份；尘缘里已经有的人，优先用其中的人来交办
 - condition 不超过 120 字，写清怎样才算办成，须是玩家眼下真做得到的事
 - reward 写在字面上，如「下品灵石三十枚」；rewardKind 只取 灵石、修为、物品、人情、状态、正道名声、魔道名声、平民名声、官府名声；rewardAmount 为整数，物品、人情与状态那三类不必给数额
@@ -1275,7 +1290,8 @@ export function opBelongsToDomain(op: DataOp, domain: OpeningDomainId): boolean 
   switch (domain) {
     case "origin":
       if (op.kind === "modify") {
-        return op.path.startsWith("player.") || op.path.startsWith("currentTime.");
+        // 名声四条也在开局定下起手的数目
+        return op.path.startsWith("player.") || op.path.startsWith("currentTime.") || op.path.startsWith("reputation.");
       }
       // 模型偶尔把集合名写成短叫法（如 meridians、heartScores），认出来便归一，免得整条被当越界丢掉
       return op.kind === "add" && canonicalCollection("origin", op.collection) !== null;
@@ -1555,7 +1571,7 @@ export interface BuskBrief {
 }
 
 /** 一场街头卖艺的叙事；成败已由代码定下，这里只把经过写成文字 */
-export function buildBuskingPrompt(brief: BuskBrief): ChatMessage[] {
+export function buildBuskingPrompt(brief: BuskBrief, questHint = ""): ChatMessage[] {
   const lines = brief.rounds
     .map((r) => `第${r.index}场：${r.success ? `成了，得 ${r.reward} 下品灵石` : "失了手"}`)
     .join("\n");
@@ -1566,7 +1582,8 @@ export function buildBuskingPrompt(brief: BuskBrief): ChatMessage[] {
 - 以第三人称写「你」，120 至 200 字，写出围观的看客、场面的起落与收场的气氛
 - 五场考教的结果已经定下，不可更改；写成文字时要让每一场的成败都看得出来
 - 过了几场、得钱多少、名声折损，都要与下面所报相符，不可夸大
-- 只输出这段叙事文本，不要标题、不要解释、不要代码围栏`;
+- 只输出这段叙事文本，不要标题、不要解释、不要代码围栏
+${questHint ? `\n${questHint}` : ""}`;
 
   const user = `【所处】${brief.place}
 【所卖之艺】${brief.skill}
@@ -1595,7 +1612,7 @@ export interface EstateDealBrief {
 }
 
 /** 屋舍买卖的叙事；名号与价钱已由代码定下，这里只把经过写成文字 */
-export function buildEstateDealPrompt(brief: EstateDealBrief): ChatMessage[] {
+export function buildEstateDealPrompt(brief: EstateDealBrief, questHint = ""): ChatMessage[] {
   const system = `你是修仙文字游戏里的说书人。玩家正在城中或村中经手一处屋舍，请就着下面所报写一段短短的叙事。
 
 【写作要求】
@@ -1603,7 +1620,8 @@ export function buildEstateDealPrompt(brief: EstateDealBrief): ChatMessage[] {
 - 若是初次打听（offer）：写出街坊引路、屋舍的模样与经手人的做派，末尾点出开价
 - 若是成交（deal）：写出付钱的经过与得屋之后的心境，并说明这处院子可免费歇息、修炼、演武、储物
 - 所报的名号、所在、效率与价钱都要与下面相符，不可夸大
-- 只输出这段叙事文本，不要标题、不要解释、不要代码围栏`;
+- 只输出这段叙事文本，不要标题、不要解释、不要代码围栏
+${questHint ? `\n${questHint}` : ""}`;
 
   const user = `【情形】${brief.kind === "offer" ? "刚打听到一处待售屋舍" : "买下了一处屋舍"}
 【屋舍】${brief.name}
@@ -1771,7 +1789,7 @@ export interface ShopManageBrief {
  * 经营铺面：玩家说一句话，模型把货物、设施与月收支改一改，并写一段叙事。
  * 改动由代码夹在合理区间，这里只把账目与要求交代清楚。
  */
-export function buildShopManagePrompt(brief: ShopManageBrief): ChatMessage[] {
+export function buildShopManagePrompt(brief: ShopManageBrief, questHint = ""): ChatMessage[] {
   const system = `你是修仙文字游戏里替玩家打理铺面的掌柜。玩家自设的铺面「${brief.name}」在${brief.place}，营生是${brief.kind}${
     brief.culture ? `，地属${brief.culture}一带` : ""
   }。玩家吩咐了一件事，请照着把铺子改一改，再写一段短短的叙事。
@@ -1789,7 +1807,8 @@ export function buildShopManagePrompt(brief: ShopManageBrief): ChatMessage[] {
 - monthlyExpense 只算铺面自身的开销（房租、人工等）；各处设施的 upkeep 另计，不要重复算进去
 - monthlyIncome 与 monthlyExpense 要跟铺子卖什么、置了什么设施相称；寻常小铺月进项几十到几百，别动不动上千
 - text 以第三人称写「你」，60 至 120 字，写出依着吩咐张罗的经过，末尾落到账面上（进项与开支各是多少）
-- 不要输出解释、注释或代码围栏`;
+- 不要输出解释、注释或代码围栏
+${questHint ? `\n${questHint}\n了事标记只写在 text 字段里，不要让它成为 JSON 之外的东西。` : ""}`;
 
   const user = `【我的吩咐】${brief.instruction}
 

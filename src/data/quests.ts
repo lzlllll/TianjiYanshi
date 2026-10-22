@@ -22,10 +22,12 @@ import type {
   QuestRewardKind,
   QuestStatus,
   Reputation,
+  SpiritStones,
 } from "@/data/types";
 import { EMPTY_REPUTATION, REPUTATION_BY_KIND, REPUTATION_LABELS, shiftReputation } from "@/data/reputation";
 import { BUFF_TARGET_STATS, buffFromTemplate, findBuffTemplate } from "@/data/buffs";
 import { REALMS, REALM_NAMES } from "@/data/mockData";
+import { lowStonesWorth } from "@/data/spiritStones";
 import { shiftGameTime } from "@/lib/gameTime";
 
 /** 交差后能兑现的酬谢 */
@@ -61,8 +63,8 @@ const LEGACY_KIND_ALIAS: Record<string, QuestPenaltyKind> = { 声望: "平民名
 
 export const QUEST_STATUSES: QuestStatus[] = ["open", "done", "failed"];
 
-/** 机缘的四类；地点与人物这两类必有具体去处与接头的人，修为类只看境界 */
-export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物", "修为"];
+/** 机缘的六类；地点与人物这两类必有具体去处与接头的人，修为、物品、灵石三类只看手头攒到了什么 */
+export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物", "修为", "物品", "灵石"];
 
 /** 这一类是不是必有具体去处：事件类可以没有，地点类与人物类必有 */
 export const questKindNeedsPlace = (kind: QuestKind | undefined): boolean =>
@@ -112,6 +114,36 @@ function normalizeRealmGoal(raw: unknown): number | undefined {
   if (byName >= 0) return byName;
   const byPrefix = REALMS.findIndex((r) => text.startsWith(r.name));
   return byPrefix >= 0 ? byPrefix : undefined;
+}
+
+/**
+ * 物品类目标：认对象写法 {"name":"青玉佩","count":2}，也认「青玉佩×2」「青玉佩 2」这类字面。
+ * 缺了物名便当没这一笔。
+ */
+function normalizeItemGoal(raw: unknown): { name: string; count: number } | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === "object") {
+    const src = raw as Record<string, unknown>;
+    const name = clean(src.name ?? src.item, 20);
+    if (!name) return undefined;
+    const n = Math.round(Number(src.count ?? src.amount));
+    return { name, count: Number.isFinite(n) && n > 0 ? Math.min(999, n) : 1 };
+  }
+  const text = String(raw).trim();
+  if (!text) return undefined;
+  const matched = text.match(/^(.*?)[\s×xX*＊]*(\d+)?\s*(?:件|个|枚|份|把|张|颗|株)?$/);
+  const name = clean(matched?.[1], 20);
+  if (!name) return undefined;
+  const n = Math.round(Number(matched?.[2]));
+  return { name, count: Number.isFinite(n) && n > 0 ? Math.min(999, n) : 1 };
+}
+
+/** 灵石类目标：折合下品的数额，取正整数 */
+function normalizeStoneGoal(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const n = Math.round(Number(String(raw).replace(/[^\d.-]/g, "")));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(1_000_000, n);
 }
 
 /** 把差事的去处理出来；缺了名目就当没这一笔，地图上也就无从星标 */
@@ -268,6 +300,8 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     claimed: raw.claimed === true,
     target: normalizeTarget(raw.target),
     realmGoal: normalizeRealmGoal(raw.realmGoal ?? raw.realm ?? raw.targetRealm),
+    itemGoal: normalizeItemGoal(raw.itemGoal ?? raw.targetItem ?? raw.item),
+    stoneGoal: normalizeStoneGoal(raw.stoneGoal ?? raw.targetStones ?? raw.stone),
     carryItemId: clean(raw.carryItemId, 60) || undefined,
     sectTask: normalizeSectTask(raw.sectTask),
   };
@@ -319,6 +353,38 @@ export function questRealmGoalLabel(quest: Quest): string {
 /** 这一桩修到目标那一层了没有 */
 export function questRealmGoalMet(quest: Quest, realmIndex: number): boolean {
   return quest.status === "open" && quest.realmGoal !== undefined && realmIndex >= quest.realmGoal;
+}
+
+/** 物品类机缘的目标名目，如「青玉佩 × 2」；没写目标返回空串 */
+export function questItemGoalLabel(quest: Quest): string {
+  const goal = quest.itemGoal;
+  return goal ? `${goal.name} × ${goal.count}` : "";
+}
+
+/** 灵石类机缘的目标名目；没写目标返回空串 */
+export function questStoneGoalLabel(quest: Quest): string {
+  return quest.stoneGoal ? `${quest.stoneGoal} 下品灵石` : "";
+}
+
+/**
+ * 物品、灵石两类机缘的目标达成没有：
+ * 行囊里凑齐了那一样东西，或名下折合下品灵石够了数，便算办到。
+ */
+export function questAssetGoalMet(
+  quest: Quest,
+  holdings: { inventory?: InventoryItem[]; spiritStones?: SpiritStones },
+): boolean {
+  if (quest.status !== "open") return false;
+  if (quest.itemGoal) {
+    const have = (holdings.inventory ?? [])
+      .filter((i) => i?.name === quest.itemGoal!.name)
+      .reduce((sum, i) => sum + Math.max(0, Math.trunc(Number(i.count) || 0)), 0);
+    return have >= quest.itemGoal.count;
+  }
+  if (quest.stoneGoal) {
+    return lowStonesWorth(holdings.spiritStones) >= quest.stoneGoal;
+  }
+  return false;
 }
 
 /** 这桩事是不是已经误了期（还没了结的那种） */

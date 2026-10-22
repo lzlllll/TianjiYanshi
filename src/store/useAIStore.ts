@@ -45,7 +45,7 @@ import type {
 } from "@/data/types";
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
-import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome, questRealmGoalLabel } from "@/data/quests";
+import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome, questItemGoalLabel, questRealmGoalLabel, questStoneGoalLabel } from "@/data/quests";
 import { buffCatalogBrief } from "@/data/buffs";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
@@ -449,9 +449,11 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
       name: parts[0] || "",
       kind,
       desc: parts[3] || "",
-      // 修为类没有去处：那一栏填的是境界名，交给 realmGoal 认
-      place: kind === "修为" ? "" : parts[1] || "",
+      // 修为、物品、灵石三类没有去处：那一栏分别填境界名、物名件数、灵石数目
+      place: kind === "修为" || kind === "物品" || kind === "灵石" ? "" : parts[1] || "",
       realmGoal: kind === "修为" ? parts[1] || "" : undefined,
+      itemGoal: kind === "物品" ? parts[1] || "" : undefined,
+      stoneGoal: kind === "灵石" ? parts[1] || "" : undefined,
       dueDay: Number.isFinite(days) && days > 0 ? today + days : undefined,
       giver,
       condition: parts[3] || "",
@@ -653,6 +655,21 @@ function settleDoneMark(text: string): string {
     }
     return "";
   });
+}
+
+/**
+ * 在办的机缘清单，附一句了事标记的写法。
+ * 卖艺、酒楼、客栈、瓦舍、宝物阁、镖局、自家铺面这些叙事都带上一份，
+ * 玩家在哪儿把事办成了，都认得了。
+ */
+function questSettleHint(inJson = false): string {
+  const quests = (useGameStore.getState().quests ?? [])
+    .filter((q) => q?.status === "open")
+    .slice(0, 12);
+  if (quests.length === 0) return "";
+  const list = quests.map((q) => `「${q.name}」〔${q.id}〕`).join("、");
+  const where = inJson ? "text 字段之末另起一行" : "正文之末另起一行";
+  return `【在办的机缘】${list}\n若这一段叙事里确把其中某一桩办成了、或确已黄了，就在${where}只写 ${SETTLE_MARK} 名称或编号 | done（办成）或 failed（黄了）；没有就一个字也不写。`;
 }
 
 /**
@@ -2144,11 +2161,12 @@ export const useAIStore = create<AIStore>()(
         if (!aiReady(settings)) {
           throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
-        return chatWithModel(settings, settings.proModel, buildBuskingPrompt(brief), {
+        const text = await chatWithModel(settings, settings.proModel, buildBuskingPrompt(brief, questSettleHint()), {
           timeoutMs: 90000,
           retries: 1,
           temperature: 0.9,
         });
+        return settleDoneMark(text);
       },
 
       narrateEstateDeal: async (brief) => {
@@ -2156,11 +2174,17 @@ export const useAIStore = create<AIStore>()(
         if (!aiReady(settings)) {
           throw new Error("推演接口尚未接通：请确认后端服务已启动，且已在后端配好模型密钥。");
         }
-        return chatWithModel(settings, settings.proModel, buildEstateDealPrompt(brief), {
-          timeoutMs: 90000,
-          retries: 1,
-          temperature: 0.9,
-        });
+        const text = await chatWithModel(
+          settings,
+          settings.proModel,
+          buildEstateDealPrompt(brief, questSettleHint()),
+          {
+            timeoutMs: 90000,
+            retries: 1,
+            temperature: 0.9,
+          },
+        );
+        return settleDoneMark(text);
       },
 
       judgeCrop: async ({ crop, culture }) => {
@@ -2226,7 +2250,7 @@ export const useAIStore = create<AIStore>()(
           facilities: shop.facilities,
           instruction: instruction.trim(),
         };
-        const raw = await chatWithModel(settings, settings.flashModel, buildShopManagePrompt(brief), {
+        const raw = await chatWithModel(settings, settings.flashModel, buildShopManagePrompt(brief, questSettleHint(true)), {
           timeoutMs: 60000,
           jsonMode: true,
           retries: 1,
@@ -2240,7 +2264,7 @@ export const useAIStore = create<AIStore>()(
         }
         const finite = (v: unknown) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : undefined);
         return {
-          text: String(parsed?.text ?? "").trim(),
+          text: settleDoneMark(String(parsed?.text ?? "").trim()),
           goods: Array.isArray(parsed?.goods) ? (parsed.goods as ShopGood[]) : undefined,
           facilities: Array.isArray(parsed?.facilities) ? (parsed.facilities as ShopFacility[]) : undefined,
           monthlyIncome: finite(parsed?.monthlyIncome),
@@ -4105,8 +4129,16 @@ ${DIALOGUE_STYLE}`;
         const questBrief = listedQuests.length
           ? listedQuests
               .map((q) => {
-                const goal = questRealmGoalLabel(q);
-                const where = goal ? `修到${goal}` : q.target?.label || q.place || "去处未定";
+                const realm = questRealmGoalLabel(q);
+                const item = questItemGoalLabel(q);
+                const stone = questStoneGoalLabel(q);
+                const where = realm
+                  ? `修到${realm}`
+                  : item
+                    ? `寻得${item}`
+                    : stone
+                      ? `凑足${stone}`
+                      : q.target?.label || q.place || "去处未定";
                 const due =
                   q.dueDay === undefined
                     ? "不限时"
@@ -4152,7 +4184,7 @@ ${DIALOGUE_STYLE}
 4. 根据剧情上下文和对话历史，做出合理的回应
 5. 回复长度适中，不要太长也不要太短（50-200字）
 6. ${checkInstruction()}
-7. 若你话语间把一桩事托付给了玩家（请他替你跑一趟、捎个口信、寻一样东西，或与他约定期限修到某一层境界），就在回话的最后另起一行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额。类别只写 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写具体；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人。名称不超过 10 字；去处写去哪儿办，如「城南药铺」，事件类与修为类之外都要写；到期只写数字，如 3，表示三日之内，不限时可留空；赏的名目只取 灵石、修为、物品、人情、正道名声、魔道名声、平民名声、官府名声 之一，罚的名目只取 灵石、修为、业力、正道名声、魔道名声、平民名声、官府名声 之一，名目不在其内的就留空；不托付就不写这一行。${isBroker ? "你替柜上交代的差事，同样照这个格式写在末尾，去处与限期要写实在。" : ""}
+7. 若你话语间把一桩事托付给了玩家（请他替你跑一趟、捎个口信、寻一样东西，或与他约定期限修到某一层境界），就在回话的最后另起一行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额。类别只写 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写具体；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人；物品是寻某一样东西，去处一栏改填「物名×件数」（如「青玉佩×2」）；灵石是凑某数灵石，去处一栏改填数目（如「300」），四等灵石按一比一百折成下品算。物品与灵石两类都不必有去处与人。名称不超过 10 字；去处写去哪儿办，如「城南药铺」，事件类、修为类、物品类与灵石类之外都要写；到期只写数字，如 3，表示三日之内，不限时可留空；赏的名目只取 灵石、修为、物品、人情、正道名声、魔道名声、平民名声、官府名声 之一，罚的名目只取 灵石、修为、业力、正道名声、魔道名声、平民名声、官府名声 之一，名目不在其内的就留空；不托付就不写这一行。${isBroker ? "你替柜上交代的差事，同样照这个格式写在末尾，去处与限期要写实在。" : ""}
 8. 成与不成由你照剧情判，系统只照单落账。若玩家当真办成了你先前托付的那件事，就在回话的最后另起一行只写 ${SETTLE_MARK} 编号或名称 | done；若这桩事黄了、误了期，写 ${SETTLE_MARK} 编号或名称 | failed。编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出是哪一桩就不写。事没到那一步也不写。${isBroker ? "你柜上记下的差事也照此认下；认得之后就让他回柜上来领赏，赏钱此刻还在柜上押着。" : ""}
 9. 若你与玩家当面说定了一桩口头的约定（约他改日再来、替他留一样东西、应下替他办件事），就在回话的最后另起一行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明。名目不超过 10 字；地点写去哪儿了结，说不清可留空；几日后只写数字，如 3，表示三日之内。没跟他说定就不写这一行。${craft ? `\n10. 你若把这件定做的活计应下了、并把价钱与取货的日子也说定了，就在回话的最后另起一块，只输出下面这一块：
 ${CRAFT_MARK}
@@ -4555,8 +4587,16 @@ ${craft ? 12 : 11}. ${isDining
         const questBrief = listedQuests.length
           ? listedQuests
               .map((q) => {
-                const goal = questRealmGoalLabel(q);
-                const where = goal ? `修到${goal}` : q.target?.label || q.place || "去处未定";
+                const realm = questRealmGoalLabel(q);
+                const item = questItemGoalLabel(q);
+                const stone = questStoneGoalLabel(q);
+                const where = realm
+                  ? `修到${realm}`
+                  : item
+                    ? `寻得${item}`
+                    : stone
+                      ? `凑足${stone}`
+                      : q.target?.label || q.place || "去处未定";
                 const due =
                   q.dueDay === undefined
                     ? "不限时"
@@ -4609,7 +4649,7 @@ ${heard || "（刚坐下，还没人开口）"}
 2. 用古风白话，合乎你的性情与在场各人与你的干系；可以接旁人的话、驳他、帮腔，也可以只应一声
 3. 50 到 150 字，说话之外可以带一两笔神态动作
 4. ${checkInstruction()}
-5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物、修为 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人。成与不成由你照剧情判：若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 编号或名称 | done，黄了则写 ${SETTLE_MARK} 编号或名称 | failed；编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出就不写。两样都没有就不写。
+5. 若你把一桩事托付给了玩家，末行只写 ${QUEST_MARK} 类别 | 名称 | 去处 | 几日后到期 | 交差条件 | 赏 名目 数额 | 罚 名目 数额；类别只写 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的事，去处可留空；地点是奔着某一处去的、人物是奔着某个人去的，这两类去处须写明本城或别城真有的地方；修为是修到某一层境界便算办到的长期目标，去处一栏改填境界全称（如「炼气后期」），不必有去处与人；物品是寻某一样东西，去处一栏改填「物名×件数」（如「青玉佩×2」）；灵石是凑某数灵石，去处一栏改填数目（如「300」），四等灵石按一比一百折成下品算。物品与灵石两类都不必有去处与人。成与不成由你照剧情判：若玩家办成了你先前托付的那件事，末行只写 ${SETTLE_MARK} 编号或名称 | done，黄了则写 ${SETTLE_MARK} 编号或名称 | failed；编号或名称须照【玩家身上在办的事】里的一桩抄，有编号优先抄编号，认不出就不写。两样都没有就不写。
 6. 若你与玩家当面说定了一桩口头的约定，末行只写 ${PACT_MARK} 名目 | 地点 | 几日后 | 说明；没跟他说定就不写。${profile.scene?.craft ? `若他把定做的活计说定了、你也报过了价与取货的日子，末行之后另起一块只写：
 ${CRAFT_MARK}
 {"name":"做成的东西叫什么，不超过 20 字","type":"${profile.scene.craftHint || "材料/丹药/符箓/法宝/杂物 之一"}","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30},"price":200,"days":5}
@@ -4744,7 +4784,8 @@ ${roster}
 来客「${player.name}」在街坊间打听这户人家的底细，邻居们七嘴八舌，把知道的事零碎地说了出来。
 
 请写一段 200~350 字的叙事：由街坊零碎的话拼出这户人家的家世来历、家业营生、眼下境况，以及一两件坊间传闻或隐情。用第三人称古风白话，语气家常，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出叙事正文，不要标题。
-${checkInstruction()}`,
+${checkInstruction()}
+${questSettleHint()}`,
           },
         ];
 
@@ -4752,7 +4793,7 @@ ${checkInstruction()}`,
           timeoutMs: 90000,
           retries: 1,
         });
-        return settleCheckMark(raw.trim(), "街坊话里考较的一句");
+        return settleDoneMark(settleCheckMark(raw.trim(), "街坊话里考较的一句"));
       },
 
       probeShop: async ({ name, kind, market, culture }) => {
@@ -4780,7 +4821,8 @@ ${checkInstruction()}`,
 
 只守在门外：不要写跨进门去，也不要写店内的陈设、后堂的情景、与掌柜对面叙谈这类进门之后才看得见的场面。
 用第三人称古风白话，贴着这一路营生落笔，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题。
-${checkInstruction()}`,
+${checkInstruction()}
+${questSettleHint()}`,
           },
         ];
 
@@ -4788,7 +4830,7 @@ ${checkInstruction()}`,
           timeoutMs: 90000,
           retries: 1,
         });
-        return settleCheckMark(raw.trim(), "门外伙计考较的一句");
+        return settleDoneMark(settleCheckMark(raw.trim(), "门外伙计考较的一句"));
       },
 
       narrateFacility: async (args) => {
@@ -4927,6 +4969,7 @@ ${nature ? `【宗门性质】${nature}\n` : ""}${climate ? `【宗门风气】$
 【堂内的人】${seats}
 【食客的市井本事】${brief.skills}
 【最近的判定】${brief.checks}
+${questSettleHint()}
 
 「${player.name}」在${shop}拣了副座头坐下，叫了这一道，慢慢吃完。
 
@@ -4948,9 +4991,8 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
         });
 
         const parsed = parseJsonPayload(raw);
-        const narration = settleCheckMark(
-          String(parsed?.narration ?? "").trim() || raw.trim(),
-          "席间考较的一句",
+        const narration = settleDoneMark(
+          settleCheckMark(String(parsed?.narration ?? "").trim() || raw.trim(), "席间考较的一句"),
         );
         const rumorList = Array.isArray(parsed?.rumors) ? parsed.rumors : [];
         const rumors = rumorList
@@ -4988,7 +5030,9 @@ ${words ? `【睡前撂下的话】${words}\n` : ""}
 - 这几日里外头发生了些什么：谁家办事、市面上的东西涨了还是落了、路上多了什么人、客栈里换过几拨客人
 - 身子歇过来的那点松快：乏解了、气顺了，或是伤处仍不济事
 
-用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了几日」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题、不要任何标记。`,
+用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了几日」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题；除末尾的了事标记外，不要任何标记。
+
+${questSettleHint()}`,
           },
         ];
 
@@ -4996,7 +5040,7 @@ ${words ? `【睡前撂下的话】${words}\n` : ""}
           timeoutMs: 90000,
           retries: 1,
         });
-        return raw.trim();
+        return settleDoneMark(raw.trim());
       },
 
       listenToPlay: async ({ shop, market, culture, skill }) => {
@@ -5023,7 +5067,9 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
 - 再写台下的人——挤着的看客、卖零嘴的小贩、叫好的与打瞌睡的、身边人随口搭的话
 - 最后落在${skill ? `「${skill}」上：戏文里的一处细节竟与这门本事相通，他心里忽然透亮了一点` : "他身上那点不易察觉的长进"}，写得含蓄些，别点破这是「涨了进度」
 
-用第三人称古风白话，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题、不要任何标记。`,
+用第三人称古风白话，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。只输出正文，不要标题；除末尾的了事标记外，不要任何标记。
+
+${questSettleHint()}`,
           },
         ];
 
@@ -5031,7 +5077,7 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
           timeoutMs: 90000,
           retries: 1,
         });
-        return raw.trim();
+        return settleDoneMark(raw.trim());
       },
 
       appraiseItem: async ({ shop, market, culture, itemName, itemDesc, fee }) => {
@@ -5063,6 +5109,8 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
 
 用第三人称古风白话，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。
 
+${questSettleHint()}
+
 最后另起一块，以 JSON 写出看明白了的结果，不要有别的东西：
 <<<READING>>>
 {"name":"这东西究竟是什么，如「寒潭玄铁剑」","type":"材料/丹药/符箓/法宝/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句 20 到 40 字的说明","icon":"一个汉字","elements":{"金":60,"水":30}}
@@ -5077,7 +5125,7 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
         });
 
         const reading = parseAppraisalReading(raw);
-        return { narration: stripAppraisalReading(raw), reading };
+        return { narration: settleDoneMark(stripAppraisalReading(raw)), reading };
       },
 
       findEscort: async ({ shop, market, culture, realm, stones }) => {
@@ -5101,6 +5149,8 @@ ${skill ? `【这一场听下来的门道】${skill}\n` : ""}
 请写一段 150~300 字的叙事：把这位镖师的模样、口风、来历、肯走的时日与要的价钱一并带出来，
 用第三人称古风白话，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。
 
+${questSettleHint()}
+
 写完之后，另起一行只输出下面这一块，供程序取用：
 ${ESCORT_MARK}
 {"name":"姓名，2到3字","title":"称号，如 镖师/趟子手/老镖头","realm":"境界，取 引气/炼气/筑基/金丹/元婴/化神 之一加 初期/中期/后期/圆满 之一","gender":"男或女","age":35,"origin":"出身来历","personality":"性情","appearance":"形貌","affiliation":"所属镖局，散人写 无","note":"一两句底细，走过什么镖、什么名声","persona":"人设提示词，一段话，交代脾气口风来历，往后每回都照它演","stats":{"hp":120,"hpMax":120,"mp":40,"mpMax":40,"attack":22,"defense":16,"speed":18},"fee":150,"days":7}
@@ -5116,7 +5166,7 @@ ${ESCORT_MARK}
         });
 
         return {
-          narration: stripEscortOffer(raw),
+          narration: settleDoneMark(stripEscortOffer(raw)),
           escort: clampEscort(parseEscortOffer(raw), myRealm),
         };
       },
@@ -5181,6 +5231,8 @@ ${ESCORT_MARK}
 客人新说了一句，你要以掌柜的身份回话${openTalk ? "" : "，并给出这一轮之后谈成的价码与剩下的耐心"}。
 ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要有别的东西。
 
+${questSettleHint(true)}
+
 以 JSON 输出，不要有别的东西：
 {"reply":"掌柜的原话，40~120 字，古风白话，带着做买卖的精明与生意人的客气","factor":0,"patience":60}
 ${openTalk
@@ -5208,9 +5260,10 @@ ${mystery
         });
 
         const parsed = parseJsonPayload(raw);
-        const reply =
+        const reply = settleDoneMark(
           settleCheckMark(String(parsed?.reply ?? "").trim(), `${keeper.name}考较你的眼力`) ||
-          "掌柜捋了捋袖子，不接话。";
+            "掌柜捋了捋袖子，不接话。",
+        );
 
         const rawFactor = Number(parsed?.factor);
         const pct = Number.isFinite(rawFactor) ? Math.min(100, Math.max(-100, rawFactor)) : 0;

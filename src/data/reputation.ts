@@ -5,8 +5,11 @@
  * 街坊怎么看你、官面上怎么看你，四条各走各的，互不相抵——一个人满手血腥，
  * 未必就没有百姓念他救过命。只是寻常人家多半怕他，那是情谊上的事，不在这一处。
  *
- * 四条各自落在 0 到 100，从 0 起。牙行办的差事、叙事里做下的事，
- * 都在这上头加减；攒下来的数目，说话的人（模型）看得见，也照着它待你。
+ * 四条各自落在 -100 到 100，以 0 为「没人认得你」。正数是好名声，负数是坏名声：
+ * 正道、平民、官府三处负得多，便是被人当作对头、遭人唾骂；
+ * 魔道那一处的负，是邪门外道看不上你、懒得理你。
+ * 牙行办的差事、叙事里做下的事，都在这上头加减；攒下来的数目，
+ * 说话的人（模型）看得见，也照着它待你。
  */
 
 import type { Reputation, ReputationAxis } from "@/data/types";
@@ -44,7 +47,7 @@ export function reputationAxisByName(name: unknown): ReputationAxis | null {
 }
 
 /** 名声高低只有说法，没有点数上的好处：这是旁人怎么看你，不是你的本事 */
-export const REPUTATION_MIN = 0;
+export const REPUTATION_MIN = -100;
 export const REPUTATION_MAX = 100;
 
 const clamp = (value: number) => Math.max(REPUTATION_MIN, Math.min(REPUTATION_MAX, Math.round(value)));
@@ -72,47 +75,48 @@ export function shiftReputation(rep: Reputation, axis: ReputationAxis, delta: nu
 }
 
 /**
- * 名声落到嘴边的话：把 0 到 100 分成五档，各说各的。
+ * 名声落到嘴边的话：把 -100 到 100 分成五档，各说各的。
+ * 最低一档是坏名声，中间一档是无人识得，最高一档是名头响亮。
  * 四条各有一套说法——正道与魔道虽是同一件事的两面，说辞却不同。
  */
 const REPUTATION_WORDS: Record<ReputationAxis, [string, string, string, string, string]> = {
   righteous: [
+    "正道已把你当作对头，提你的名字便皱眉",
+    "正道里有人疑你、防你",
     "正道中人没听过你的名",
     "正道里有几处地方念你的好",
-    "正派门中已有人听过你的名字",
-    "正道诸家多愿与你来往",
     "你在正道里已是叫得响的一号",
   ],
   demonic: [
+    "邪门外道看你不上，甚至嫌你碍眼",
+    "魔道里有人对你不以为然",
     "魔道中人不知有你",
-    "邪门外道里有人听过你的名",
     "魔道开始留意你的行踪",
-    "魔道已把你当作一号人物",
     "你的名头之盛，正道也要忌你三分",
   ],
   folk: [
+    "街坊提起你便摇头，多是骂名",
+    "有几条街巷对你有怨言",
     "街坊不知道你是谁",
-    "有几条街巷认得你的面孔",
-    "寻常人家念你的好",
     "市井间多有人替你说话",
     "提起你的名字，百姓没有不称道的",
   ],
   official: [
+    "官府已把你记在案上，见了便要拿问",
+    "衙门里有人对你存着戒心",
     "官面上没你的名帖",
-    "衙门里有人记得你",
-    "官面上肯与你行个方便",
     "官府中人多愿与你有往来",
     "官面上的话，你比许多人说得响",
   ],
 };
 
-/** 落在第几档，0 到 4 */
+/** 落在第几档，0 到 4：0 最坏，2 是无名，4 最好 */
 export function reputationBand(value: number): number {
   const v = clamp(value);
-  if (v >= 80) return 4;
-  if (v >= 60) return 3;
-  if (v >= 40) return 2;
-  if (v >= 20) return 1;
+  if (v >= 60) return 4;
+  if (v >= 20) return 3;
+  if (v > -20) return 2;
+  if (v > -60) return 1;
   return 0;
 }
 
@@ -134,6 +138,7 @@ export function reputationBrief(rep: Reputation): string {
  */
 export function reputationFirstImpression(rep: Reputation): number {
   const good = (rep.righteous || 0) + (rep.folk || 0) + (rep.official || 0);
-  const bad = rep.demonic || 0;
+  // 负数的魔道名声只是「没人怕你」，并不替你说好话
+  const bad = Math.max(0, rep.demonic || 0);
   return Math.max(-10, Math.min(10, Math.round((good - bad) / 30)));
 }

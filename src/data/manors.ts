@@ -184,3 +184,17 @@ export function emptyPlot(input: { place: string; cityId?: string; districtId?: 
     cells: Array.from({ length: MANOR_GRID * MANOR_GRID }, () => null),
   };
 }
+
+/**
+ * 现成买下的宅院：院中已有一间正房居中，左右各一间厢房。
+ * 空地上起屋是另一回事——那种宅地买来时仍是荒地。
+ */
+export function readyBuiltPlot(input: { place: string; cityId?: string; districtId?: number }): ManorPlot {
+  const plot = emptyPlot(input);
+  const mid = Math.floor(MANOR_GRID / 2);
+  const center = mid * MANOR_GRID + mid;
+  plot.cells[center] = { shape: "正房", level: 1, facing: 0 };
+  plot.cells[center - 1] = { shape: "厢房", level: 1, facing: 0 };
+  plot.cells[center + 1] = { shape: "厢房", level: 1, facing: 0 };
+  return plot;
+}

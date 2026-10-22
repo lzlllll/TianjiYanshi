@@ -323,10 +323,42 @@ export function relationWhereabout(
   return spot ? `${city.name}·${spot}` : city.name;
 }
 
-/** 这人眼下是不是就在这一处：街区对得上，或只知道在这座城里 */
+/** 把字串折成 0 到 1 之间的一个定数：同一人、同一处，每回算出来都一样 */
+function hashUnit(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * 旧识常住的那一处住宅街区。
+ * 只知在城中、说不准哪一处的人，照其名号固定落在城里的一处住宅街区，
+ * 往后便以那一处为家；别处只是偶尔撞见。
+ */
+export function relationHomeDistrict(r: Relation, cityId: string): number | undefined {
+  const districts = getDistricts(cityId);
+  if (districts.length === 0) return undefined;
+  const homes = districts.filter((d) => d.nature === "平民住宅" || d.nature === "大户住宅");
+  const pool = homes.length > 0 ? homes : districts;
+  return pool[Math.floor(hashUnit(String(r.id || r.name)) * pool.length)]?.id;
+}
+
+/** 在别处偶然撞见的成算：小概率，不是没有 */
+const STRAY_CHANCE = 0.15;
+
+/**
+ * 这人眼下是不是就在这一处。
+ * 写明街区的只看那一处；只知在城中的，在自家那一处住宅街区必定露面，
+ * 别处则只偶尔撞见。
+ */
 export function isAroundHere(r: Relation, cityId: string, districtId: number): boolean {
   if (r.cityId !== cityId) return false;
-  return typeof r.districtId !== "number" || r.districtId === districtId;
+  if (typeof r.districtId === "number") return r.districtId === districtId;
+  if (relationHomeDistrict(r, cityId) === districtId) return true;
+  return hashUnit(`${r.id || r.name}:${cityId}:${districtId}`) < STRAY_CHANCE;
 }
 
 /**

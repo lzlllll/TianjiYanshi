@@ -62,6 +62,15 @@ export function ClosedPlaceModal({
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, busy]);
 
+  // Esc 也能退出：总得留一条走得出去的路
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   const submit = async () => {
     const ask = input.trim();
     if (!ask || busy) return;

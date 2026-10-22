@@ -113,7 +113,7 @@ import { applySectFeatureBias, sectBuildingRoster, sectBuildingSpec } from "@/da
 import { SHOP_KINDS, rollMarket, syncMarket } from "@/data/shops";
 import { aliveRumors } from "@/data/rumors";
 import { findSkill, rollSkillCheck, trainOnceADay, trainSkill } from "@/data/skills";
-import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest, questRealmGoalMet } from "@/data/quests";
+import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest, questAssetGoalMet, questRealmGoalMet } from "@/data/quests";
 import { EMPTY_REPUTATION, normalizeReputation, reputationFirstImpression, shiftReputation } from "@/data/reputation";
 import { spendLowStones } from "@/data/spiritStones";
 import type { BuskResult } from "@/data/types";
@@ -388,6 +388,8 @@ interface GameStore extends GameState {
   settleQuest: (args: { name: string; status: "done" | "failed" }) => boolean;
   /** 修到修为类机缘指的那一层，便自行办成 */
   settleRealmQuests: () => void;
+  /** 物品、灵石两类机缘攒够了目标，便自行办成 */
+  settleAssetQuests: () => void;
   /** 误了期的机缘，到日子一并罚了 */
   expireQuests: () => void;
   /** 立一处奇遇；只落在空闲的预设点位上 */
@@ -2926,6 +2928,17 @@ EFFECT: [效果描述]`,
         }
       },
 
+      settleAssetQuests: () => {
+        const st = get();
+        // 行囊里凑齐了那一样东西、或折合下品灵石够了数，这桩事便算办到
+        const reached = (Array.isArray(st.quests) ? st.quests : []).filter((q) =>
+          questAssetGoalMet(q, { inventory: st.inventory, spiritStones: st.spiritStones }),
+        );
+        for (const quest of reached) {
+          get().settleQuest({ name: quest.id, status: "done" });
+        }
+      },
+
       expireQuests: () => {
         const st = get();
         const today = daySerial(st.currentTime);
@@ -4020,6 +4033,8 @@ EFFECT: [效果描述]`,
         get().tickMortality(0);
         // 叙事若把境界推上了某一桩修为类机缘所指的那一层，就地认下
         get().settleRealmQuests();
+        // 叙事里凑齐了某样东西或攒够了灵石，物品、灵石两类机缘也就地认下
+        get().settleAssetQuests();
         // 叙事里新置的宅地也要有一张能走进去的宅邸图，并在城图上落到一格空地
         get().ensureManorCells();
         // 叙事里启程去了别处，这一路也算走过一段，路上同样可能生变
@@ -4325,7 +4340,8 @@ EFFECT: [效果描述]`,
       rentOutPlot: (plotId, rent) =>
         set((st) => ({
           manorPlots: (st.manorPlots ?? []).map((p) =>
-            p.id === plotId && !(p.cells ?? []).some((c) => !!c?.rent)
+            // 空院子租不出去：院里至少得有一间屋
+            p.id === plotId && (p.cells ?? []).some((c) => !!c) && !(p.cells ?? []).some((c) => !!c?.rent)
               ? {
                   ...p,
                   rent: {
@@ -5259,6 +5275,8 @@ EFFECT: [效果描述]`,
         });
         // 日子往前走了，误期的机缘该罚的罚，过了期的当票该作废，雇来的镖师也该告辞了
         get().expireQuests();
+        // 手上若已攒够某样东西或某数灵石，物品、灵石两类机缘就地了结
+        get().settleAssetQuests();
         get().expirePawns();
         get().expireEscorts();
         // 名下房产的完好度也随日子往下掉

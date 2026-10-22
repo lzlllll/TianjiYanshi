@@ -514,6 +514,9 @@ export function WorldMap({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return; // 只响应鼠标左键
+    // 叠在地图上的弹窗不参与拖图：一旦把指针交给地图，弹窗里的按钮就点不动了
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('[role="dialog"]')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = {
       pointerId: e.pointerId,
