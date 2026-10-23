@@ -39,6 +39,7 @@ import type {
   Technique,
   SectSite,
   SectWarBrief,
+  BattleFoeBrief,
   HaggleBrief,
   ShopBrief,
   NarrativeEntry,
@@ -2424,6 +2425,7 @@ export const useAIStore = create<AIStore>()(
 
         let narrative = "";
         let narrativeMode: string | null = null;
+        let narrativeFoes: BattleFoeBrief[] | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
@@ -2469,6 +2471,7 @@ export const useAIStore = create<AIStore>()(
           );
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
+          narrativeFoes = parsed.battleFoes;
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
@@ -2550,6 +2553,7 @@ export const useAIStore = create<AIStore>()(
           id: `turn-${Date.now()}`,
           playerInput: ctx.decision,
           mode: narrativeMode ?? undefined,
+          battleFoes: narrativeFoes ?? undefined,
           sectWar: narrativeSectWar ?? undefined,
           haggle: narrativeHaggle ?? undefined,
           shop: narrativeShop ?? undefined,
@@ -2752,6 +2756,7 @@ export const useAIStore = create<AIStore>()(
 
         let narrative = "";
         let narrativeMode: string | null = null;
+        let narrativeFoes: BattleFoeBrief[] | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
@@ -2795,6 +2800,7 @@ export const useAIStore = create<AIStore>()(
           );
           const parsed = parseModelOutput(proRaw);
           narrativeMode = parsed.mode;
+          narrativeFoes = parsed.battleFoes;
           narrativeSectWar = parsed.sectWar;
           narrativeHaggle = parsed.haggle;
           narrativeShop = parsed.shop;
@@ -2982,6 +2988,7 @@ export const useAIStore = create<AIStore>()(
           // 开篇只立人物、铺世界，不该一上来就逐回合交锋：即便模型写了战斗标记也不认，
           // 免得开局便浮起一座没有敌人的空战场
           mode: isFirstTurn ? undefined : narrativeMode ?? undefined,
+          battleFoes: isFirstTurn ? undefined : narrativeFoes ?? undefined,
           sectWar: isFirstTurn ? undefined : narrativeSectWar ?? undefined,
           haggle: isFirstTurn ? undefined : narrativeHaggle ?? undefined,
           shop: isFirstTurn ? undefined : narrativeShop ?? undefined,
@@ -3070,6 +3077,7 @@ export const useAIStore = create<AIStore>()(
         let rawNarrative = "";
         let streamBlocked = false;
         let narrativeMode: string | null = null;
+        let narrativeFoes: BattleFoeBrief[] | null = null;
         let narrativeSectWar: SectWarBrief | null = null;
         let narrativeHaggle: HaggleBrief | null = null;
         let narrativeShop: ShopBrief | null = null;
@@ -3116,6 +3124,7 @@ export const useAIStore = create<AIStore>()(
           if (signal.aborted) return;
           const parsedRetry = parseModelOutput(proRaw);
           narrativeMode = parsedRetry.mode;
+          narrativeFoes = parsedRetry.battleFoes;
           narrativeSectWar = parsedRetry.sectWar;
           narrativeHaggle = parsedRetry.haggle;
           narrativeShop = parsedRetry.shop;
@@ -3193,6 +3202,7 @@ export const useAIStore = create<AIStore>()(
             ...lastTurn,
             // 重演开篇那一轮同样不认战斗标记：开篇不该开打
             mode: conversation.turns.length === 1 ? undefined : narrativeMode ?? undefined,
+            battleFoes: conversation.turns.length === 1 ? undefined : narrativeFoes ?? undefined,
             sectWar: conversation.turns.length === 1 ? undefined : narrativeSectWar ?? undefined,
             haggle: conversation.turns.length === 1 ? undefined : narrativeHaggle ?? undefined,
             shop: conversation.turns.length === 1 ? undefined : narrativeShop ?? undefined,
@@ -3310,7 +3320,10 @@ export const useAIStore = create<AIStore>()(
             lastFlashDuration: 0,
             lastProDuration: 0,
             lastRawOutput: "",
-            quickDecisions: [],
+            // 推荐选项随存档一并带回：读档之后仍可照着上一回的提示往下走
+            quickDecisions: Array.isArray(conv.quickDecisions)
+              ? conv.quickDecisions.map((d) => String(d ?? "").trim()).filter(Boolean).slice(0, 8)
+              : [],
             pendingChatSummary: "",
             pendingCrafting: null,
             streamingNarrative: "",
@@ -6467,7 +6480,7 @@ MODIFY player.mp - 10
             ...conv,
             turns: conv.turns.map((t) => {
               if (!t.mode && !t.haggle && !t.shop) return t;
-              return { ...t, mode: t.mode === "battle" ? undefined : t.mode, haggle: undefined, shop: undefined };
+              return { ...t, mode: t.mode === "battle" ? undefined : t.mode, battleFoes: t.mode === "battle" ? undefined : t.battleFoes, haggle: undefined, shop: undefined };
             }),
           };
         }

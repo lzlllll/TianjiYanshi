@@ -19,6 +19,65 @@ import {
   X,
 } from "lucide-react";
 import { AI_BACKEND_READY } from "@/data/backend";
+import { REALM_NAMES } from "@/data/mockData";
+import type { BattleEntity, BattleFoeBrief } from "@/data/types";
+
+/** 同一模样的几名对手，按甲乙丙丁依次称 */
+const FOE_SUFFIX = ["甲", "乙", "丙", "丁"];
+
+/** 战场右侧给敌人留的几格，依次站开 */
+const FOE_SPOTS = [
+  { x: 7, y: 2 },
+  { x: 8, y: 2 },
+  { x: 7, y: 4 },
+  { x: 8, y: 4 },
+  { x: 7, y: 6 },
+  { x: 8, y: 6 },
+  { x: 7, y: 8 },
+  { x: 8, y: 8 },
+];
+
+/** 境界名归到境界序号：认全称，也认只报大境界的 */
+function realmIndexOf(raw: string | undefined, fallback: number): number {
+  const text = String(raw ?? "").trim();
+  if (!text) return fallback;
+  const exact = REALM_NAMES.indexOf(text);
+  if (exact >= 0) return exact;
+  const idx = REALM_NAMES.findIndex((name) => name.startsWith(text));
+  return idx >= 0 ? idx : fallback;
+}
+
+/**
+ * 叙事点名的对手 → 战场上的敌人。
+ * 人数与名号照叙事所写，气血与灵力照境界由代码算定，不由模型报数。
+ * 叙事没点出对手时，也立一名与玩家相仿的对手，不让战场空着。
+ */
+function buildBattleFoes(foes: BattleFoeBrief[] | undefined, playerRealm: number): BattleEntity[] {
+  const list = Array.isArray(foes) && foes.length > 0 ? foes : [{ name: "拦路的对手" }];
+  const entities: BattleEntity[] = [];
+  for (let group = 0; group < list.length; group++) {
+    const foe = list[group];
+    const count = Math.max(1, Math.min(4, Math.trunc(Number(foe.count) || 1)));
+    const realm = realmIndexOf(foe.realm, playerRealm);
+    const maxHp = Math.max(40, 70 + realm * 26);
+    const maxMp = Math.max(20, 30 + realm * 8);
+    for (let i = 0; i < count && entities.length < FOE_SPOTS.length; i++) {
+      const slot = FOE_SPOTS[entities.length];
+      entities.push({
+        id: `enemy-${group + 1}-${i + 1}`,
+        name: count > 1 ? `${foe.name}${FOE_SUFFIX[i] ?? i + 1}` : foe.name,
+        type: "enemy",
+        position: { ...slot },
+        hp: maxHp,
+        maxHp,
+        mp: maxMp,
+        maxMp,
+        icon: foe.name.slice(0, 1),
+      });
+    }
+  }
+  return entities;
+}
 
 interface StoryPanelProps {
   onOpenSettings: () => void;
@@ -137,6 +196,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     const companions = useGameStore.getState().relations.filter((r) => r.traveling);
     // 随身的灵兽也在阵中，贴着玩家站
     const beast = useGameStore.getState().beast;
+    // 对面是谁照叙事最后那一行所报：名号、人数与境界都在那儿，气血由代码照境界算
+    const foes = buildBattleFoes(lastTurn.battleFoes, player.realmIndex ?? 0);
     startBattle({
       width: 10,
       height: 10,
@@ -151,6 +212,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
           mp: player.mp,
           maxMp: player.mpMax,
         },
+        ...foes,
         ...(beast
           ? [
               {

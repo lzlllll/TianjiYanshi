@@ -595,11 +595,15 @@ export function WorldMap({
       return;
     }
 
-    // 有差事办在这一处的，先摊这一处的人：坊市、匠人区都照此办
+    // 有差事办在这一处的，先摊这一处的人：匠人区之类照此办。
+    // 坊市与大户住宅各有自己那一扇窗，且本就把此处的人一并摊出来：
+    // 坊市走铺面，大户人家走宅门与宅中人口。若在此先行截去开街区面板，
+    // 铺面、宅中人口与门房便都见不着了
     const hasErrand = (Array.isArray(quests) ? quests : []).some(
       (q) => q.status === "open" && q.target?.cityId === place.id && q.target.districtId === district.id,
     );
-    if (hasErrand) {
+    const hasOwnPanel = district.nature === "坊市" || district.nature === "大户住宅";
+    if (hasErrand && !hasOwnPanel) {
       if (!onOpenDistrict) return;
       const label = `${place.name}·${district.name || district.nature}`;
       onOpenDistrict({

@@ -2326,6 +2326,21 @@ export interface ShopBrief {
   shop: string;
 }
 
+/**
+ * 叙事挑起的一场正面交锋里的一名对手。
+ * 人数与境界由叙事交代，气血与灵力随后由代码照境界算定，不由模型报数。
+ */
+export interface BattleFoeBrief {
+  /** 名号或称谓，如「黑风寨三当家」；与尘缘里认得的某人交手时照那人姓名写 */
+  name: string;
+  /** 境界全称，如「炼气后期」；缺省按与玩家相仿算 */
+  realm?: string;
+  /** 同一模样的有几人，1 到 4 */
+  count?: number;
+  /** 一句长相或来路，可省 */
+  desc?: string;
+}
+
 /** 已落到实处的宗门战：对手点位编号、名号与所打的路数 */
 export interface BattleSectWar {
   opponentId: string;
@@ -2353,6 +2368,8 @@ export interface Turn {
   timestamp: number;
   error?: string;
   mode?: string;
+  /** 这一轮由叙事挑起的正面交锋：对手有谁、几人、各是什么境界 */
+  battleFoes?: BattleFoeBrief[];
   /** 这一轮由叙事挑起的宗门战：对手是谁、我方是攻是守 */
   sectWar?: SectWarBrief;
   /** 这一轮由叙事挑起的讲价：与谁、买还是卖、标的与价码 */

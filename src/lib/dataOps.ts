@@ -4,6 +4,7 @@ import type {
   GameState,
   GameTime,
   BattleEntity,
+  BattleFoeBrief,
   BuffDurationType,
   HaggleBrief,
   InventoryItem,
@@ -29,6 +30,7 @@ import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
 import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQuest, parseQuestOutcome, pickOpenQuest, type QuestLedgerTarget } from "@/data/quests";
 import { pinNarrativeQuest } from "@/data/broker";
+import { normalizePact } from "@/data/pacts";
 import { normalizeAdventure } from "@/data/adventures";
 import { CULTIVATION_PER_HOUR, localCultivationFrom } from "@/data/cultivation";
 import { spendLowStones } from "@/data/spiritStones";
@@ -81,6 +83,8 @@ export interface ParsedTurn {
   ops: DataOp[];
   opsRaw: string;
   mode: string | null;
+  /** 这一轮正面交锋的对手名录；旧写法只报一句 battle，便为空 */
+  battleFoes: BattleFoeBrief[] | null;
   battleEntities: BattleEntity[] | null;
   /** 战斗里这一柱香烧到的进度；没报就是 null */
   battleIncense: number | null;
@@ -104,16 +108,58 @@ export interface ConverseBrief {
 const MODE_START = "<<<MODE>>>";
 const MODE_END = "<<<END>>>";
 
+/**
+ * 战斗那一行里的对手名录。
+ * 新写法是一整份 JSON：{"mode":"battle","enemies":[{"name":"…","realm":"…","count":1}]}；
+ * 也认得只给名字的字串，认不出的条目一概丢开。
+ */
+function normalizeBattleFoes(raw: unknown): BattleFoeBrief[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const out: BattleFoeBrief[] = [];
+  for (const item of list) {
+    if (typeof item === "string") {
+      const name = item.trim().slice(0, 24);
+      if (name) out.push({ name });
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const src = item as Record<string, unknown>;
+    const name = String(src.name ?? src.title ?? "").trim().slice(0, 24);
+    if (!name) continue;
+    const count = Math.trunc(Number(src.count ?? src.amount));
+    const realm = String(src.realm ?? src.grade ?? "").trim().slice(0, 20);
+    const desc = String(src.desc ?? src.description ?? "").trim().slice(0, 60);
+    out.push({
+      name,
+      count: Number.isFinite(count) && count > 0 ? Math.min(4, count) : undefined,
+      realm: realm || undefined,
+      desc: desc || undefined,
+    });
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 export function parseModelOutput(raw: string): ParsedTurn {
   let text = raw.replace(/```[a-zA-Z]*\n?/g, "");
 
   let mode: string | null = null;
+  let battleFoes: BattleFoeBrief[] | null = null;
   const modeStartIdx = text.indexOf(MODE_START);
   if (modeStartIdx !== -1) {
     const afterModeStart = text.slice(modeStartIdx + MODE_START.length);
     const modeEndIdx = afterModeStart.indexOf(MODE_END);
     if (modeEndIdx !== -1) {
-      mode = afterModeStart.slice(0, modeEndIdx).trim();
+      const content = afterModeStart.slice(0, modeEndIdx).trim();
+      // 战斗那一行多写成一整份 JSON：除了认下 battle，还要把对手名录带出来
+      const payload = content.startsWith("{") ? parseJsonPayload(content) : null;
+      if (payload && typeof payload === "object") {
+        const foes = normalizeBattleFoes((payload as any).enemies ?? (payload as any).foes);
+        if (foes.length > 0) battleFoes = foes;
+        mode = String((payload as any).mode ?? "").trim() || "battle";
+      } else {
+        mode = content;
+      }
       text = text.slice(0, modeStartIdx) + afterModeStart.slice(modeEndIdx + MODE_END.length);
     }
   }
@@ -219,7 +265,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
   if (battleNarrative) narrative = battleNarrative;
   const ops = parseOpLines(opsRaw);
   _debugOps(ops);
-  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop, converse };
+  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleFoes, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop, converse };
 }
 
 /**
@@ -920,6 +966,7 @@ const WRITABLE_COLLECTIONS = new Set([
   "relations",
   "quests",
   "adventures",
+  "pacts",
   "manorPlots",
   "skills",
   "checks",
@@ -1073,6 +1120,8 @@ export function applyOpsToState(
     // 产业要另起一份：叙事里把某处租出去会往上报租客与月租
     estates: Array.isArray(state.estates) ? state.estates.map((e) => ({ ...e })) : [],
     manorPlots: Array.isArray(state.manorPlots) ? state.manorPlots.map((p) => ({ ...p })) : [],
+    // 约定要另起一份：叙事里说定的事往上添，不能改到上一回合那一份
+    pacts: Array.isArray(state.pacts) ? state.pacts.map((p) => ({ ...p })) : [],
   };
 
   // 先收拾一遍灵石：旧档里若留着字面，后面的加减与付账都会算错
@@ -2505,9 +2554,41 @@ function applyOne(root: any, op: DataOp): void {
           Number((payload as any)?.days),
         );
         if (spec) arr.push(spec);
+      } else if (op.collection === "pacts") {
+        // 叙事里与某人当面说定的一桩事：记进福缘的「约定」，到日子由玩家自己去践
+        const src =
+          payload && typeof payload === "object" && !Array.isArray(payload)
+            ? (payload as Record<string, unknown>)
+            : {};
+        const name = String(src.name ?? src.title ?? "").trim().slice(0, 20);
+        if (!name) return;
+        const giverName = String(src.giver ?? src.person ?? src.npc ?? "").trim().slice(0, 20) || "某人";
+        // 托付人若在尘缘里认得出，便照他的编号记下，误期时才好折那一份人情
+        const rel = (Array.isArray(root?.relations) ? root.relations : []).find(
+          (r: any) => String(r?.name ?? "").trim() === giverName,
+        );
+        // 同一桩事只立一次：名目与托付人都对得上的未了之约，不再添一条
+        if (arr.some((p: any) => p?.status === "open" && p?.name === name && p?.giver === giverName)) return;
+        const days = Math.trunc(Number(src.days));
+        const pact = normalizePact(
+          {
+            name,
+            place: src.place,
+            days: Number.isFinite(days) && days > 0 ? Math.min(720, days) : undefined,
+            desc: src.desc ?? src.description,
+          },
+          { id: String(rel?.id ?? src.giverId ?? ""), name: giverName },
+          {
+            cityId: String(root?.currentPlaceId ?? ""),
+            districtId: Number.isFinite(Number(src.districtId)) ? Number(src.districtId) : undefined,
+          },
+          daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME)),
+        );
+        if (pact) arr.push(pact);
       } else if (op.collection === "manorPlots") {
         // 叙事里得的一处宅地：名号与所在照写，7×7 一律从空地起；
-        // 没写落在哪一格，便在所在城池的空地里挑一格，城图上多出一座院子
+        // 没写落在哪一格，便在所在城池的空地里挑一格，城图上多出一座院子。
+        // 开局祖宅、师门分下的住处这类本就有屋的，payload 带 built，院里另起正房与两间厢房
         const place = String((payload as any)?.place ?? "无名之地");
         const input = {
           place,
@@ -2515,13 +2596,12 @@ function applyOne(root: any, op: DataOp): void {
           districtId: (payload as any)?.districtId,
         };
         const cell = assignManorCell(input, arr as { cityId?: string; districtId?: number }[]);
-        arr.push(
-          emptyPlot({
-            place,
-            cityId: cell.cityId ?? input.cityId,
-            districtId: cell.districtId ?? input.districtId,
-          }),
-        );
+        const spot = {
+          place,
+          cityId: cell.cityId ?? input.cityId,
+          districtId: cell.districtId ?? input.districtId,
+        };
+        arr.push((payload as any)?.built ? readyBuiltPlot(spot) : emptyPlot(spot));
       } else if (op.collection === "news.items") {
         const ct = normalizeGameTime(root.currentTime, OPENING_GAME_TIME);
         const todayKey = gameDateKey(ct);

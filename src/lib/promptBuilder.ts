@@ -295,6 +295,19 @@ export function buildDataSchema(state: GameState): string {
   });
   if (quests.length === 0) lines.push("quests = (无)");
 
+  // 约定：说定的事，了结的日子与去处都报给叙事，免得同一桩事又立一遍
+  const pacts = Array.isArray(state.pacts) ? state.pacts : [];
+  const openPacts = pacts.filter((p) => p?.status === "open");
+  openPacts.forEach((p) => {
+    const left = p.dueDay - today;
+    lines.push(
+      `pacts[${p.id}] = ${p.name}（${p.kind === "pickup" ? "定制取货" : "口头约定"}）与${p.giver}说定 在${p.place || "去处未定"} 第${p.dueDay}日期满${
+        left >= 0 ? ` 还剩${left}日` : ` 已过${-left}日`
+      }${p.desc ? ` ${p.desc}` : ""}`,
+    );
+  });
+  if (openPacts.length === 0) lines.push("pacts = (无)");
+
   // 奇遇：舆图预设点位里开出来的野外去处，人到了它所在的那一带才进得去
   const adventures = Array.isArray(state.adventures) ? state.adventures : [];
   const openAdvs = adventures.filter((a) => a?.status === "open");
@@ -884,7 +897,7 @@ export function buildProPrompt(params: {
 - 不要写标题、前言、总结或对玩家的点评，直接开始叙事
 - ${opening
     ? "开篇这一轮只立人物、铺世界，不得写成你来我往的逐回合交锋，也不得输出任何标记"
-    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>battle<<<END>>>。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名","itemType":"买的是哪一类"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；itemType 只在买时写，取 材料、丹药、符箓、法宝、灵兽、杂物 之一，买的是活的灵兽便写「灵兽」；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。若本轮叙事里有人（须是摘要中 relations 里认得的人）当面与玩家搭话、话头正等玩家来接，便在正文写完之后另起一行输出一行 <<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>——npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。战斗标记（battle／SECTWAR 二择其一）、讲价标记、铺面标记与对谈标记不可同时出现；除这几行之外不得出现任何标记`}
+    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>{"mode":"battle","enemies":[{"name":"对手名号","realm":"炼气中期","count":1,"desc":"一句长相或来路"}]}<<<END>>>——enemies 写清这一场都有谁：name 写名号或称谓（如「黑风寨三当家」「灰袍道人」），不要写「敌人」「对手」这类泛称；realm 写其境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘，再加初期、中期、后期、圆满），拿不准便照与玩家相仿写；count 是同一模样的人数，1 到 4；desc 一句长相或来路，可省。人数与强弱须与正文所写相合：正文写三五人围上来，enemies 便要有三五个；正文写对方是筑基修士，realm 便写筑基某期；若与尘缘里认得的人交手，name 须与其中的人名一字不差。玩家没有主动招惹（不曾挑衅、挑斗、闯入他人门户、行凶夺物）时，单个对手的境界不得高过玩家一个大境界——玩家炼气，对手至多筑基；enemies 的总人数也不得成倍压过玩家，寻常拦路寻衅的不过一两人，须留出能打、能退的余地，不可动辄摆出必败之局。玩家自己上门挑衅、以卵击石时，才可照剧情写出更强的对手。玩家有同行或灵兽在侧时，对手的人数与强弱照这一伙人的合力斟酌。整场交锋的强弱须与玩家的境界、功法与法宝相称，赏罚与战利品也照这个分寸给，不可为求惊险而失衡。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名","itemType":"买的是哪一类"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；itemType 只在买时写，取 材料、丹药、符箓、法宝、灵兽、杂物 之一，买的是活的灵兽便写「灵兽」；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。若本轮叙事里有人（须是摘要中 relations 里认得的人）当面与玩家搭话、话头正等玩家来接，便在正文写完之后另起一行输出一行 <<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>——npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。战斗标记（battle／SECTWAR 二择其一）、讲价标记、铺面标记与对谈标记不可同时出现；除这几行之外不得出现任何标记`}
 
 ${PROSE_STYLE}
 【笔法】不做大段的解释与直接的心理独白，心境借行为与环境暗示；对话高度生活化，用来推动剧情、显露人情；环境描写要有用处，能带出时间与变化。
@@ -1030,7 +1043,7 @@ export function buildOpsExtractionPrompt(params: {
 【ops 规则】
 - 只按上面这一种写法输出，别的写法一律不收：kind 只写 modify、add、delete、buy；modify 只带 kind、path、op、value 四个字段，add 只带 kind、collection、payload，delete 只带 kind、collection、id，buy 只带 kind、what、name、price、count、type、grade、desc、place。不许用 type、action、key、val、target、data 之类的别名，也不许在一条 op 里夹带说明字段。
 - modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
-- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、sectRelations、occupations、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
+- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、sectRelations、occupations、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、pacts、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
 - 宅地：叙事中若确有一处产业落到玩家名下（受赠、置办、承继），可用 add manorPlots 给他一处宅地，payload 只需写 {"place":"地名"}；地块一律由空地起，屋里盖什么由玩家自己张罗。寻常的落脚、借宿不要立宅地。
 - 铺面添货：叙事里若给某家铺子调来了货、补了存货（新到一批药材、庄上送来新酒、行商送来紧俏物事），用 add shop.goods，payload 写 {"shop":"铺子名","goods":[{"name":"货名","price":单价下品灵石,"stock":存货数,"desc":"一句说明"}]}；铺子名须与摘要中「本城铺面」那一行的名号一字不差，已有的货便添存量，没有的便新上一样。玩家自己去铺子挑货、出货那一类买卖不要写这一条，那由铺面界面结算。
 - delete：用 collection 与 id 两个字段，id 必须是摘要中已存在的条目 id。
@@ -1078,6 +1091,7 @@ ${buffCatalogBrief()}
 32. 驻城执事：正文里若某家宗门占了城、或派了人坐镇某城理事，可 add relations 添一位「执事」或「总督」，写全字段：name、title 写「执事」或「总督」、affiliation 写那家宗门的名号、cityId 写该城标点编号（见摘要中 currentPlaceId 可选值）、metAt 写「城名·官署」一类去处、persona 一段话交代其脾性与职守、fixedUntilDay 写一个较远的日序（如今日为第 ${todaySerial} 日，常驻写 ${todaySerial + 360}）。只在正文确实点到这么一个人时才添，不要凭空派官。
 33. 交付界面的事不由你记账：正文里若写到玩家动身去某家铺子买卖、与人交手、或开炉炼丹／画符，这几桩的经过与得失——钱财、货物、丹符的成色与数量、胜负与伤亡、气血与灵力——都由对应的界面或系统当场结算，你不要在 ops 里重复记这一笔（不要 modify spiritStones、inventory、player.hp、player.mp，也不要 add 产物）；只照常记时间推进与玩家去向。
 34. 当场买卖：叙事里当场买成了东西（路边摊、行商、拍卖，或铺子里当场付钱拿货），用一条 buy 记下：{"kind":"buy","what":"item","name":"货名","price":单价,"count":1,"type":"材料/丹药/符箓/法宝/灵兽/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句说明","place":"在哪儿买的"}；买下一处宅地写 {"kind":"buy","what":"manor","name":"宅地名目","price":地价,"place":"所在地"}。price 按下品灵石计，count 为件数，不给便是 1 件。buy 由系统当场兑钱交货，不要另写 modify spiritStones，也不要 add inventory／manorPlots。只写真买成了的：先照摘要里的灵石算，四等按一比一百兑尽了仍不够，就不要写 buy，正文里直接写他钱不够、终究没能买下。走铺面界面、讲价界面、屋舍界面的买卖仍由界面结算，不要写 buy。
+35. 约定：正文里若玩家与某人当面说定一桩日后要践的事（几日后在何处相见、替人捎话带物、应下去赴的约），用 add pacts 记下，payload 写 {"name":"约定名目","giver":"与谁说定","place":"在哪儿了结","days":几日后,"desc":"一句原委"}。name 不超过 20 字，须说清是什么事；giver 写对面那人的姓名，尘缘里认得便照抄那一字不差的名字；place 写城中真有的去处，说不准可省；days 取 1 到 720 的整数，不写便按三日算；desc 不超过 120 字，交代来龙去脉。同一桩事只立一次，福缘「约定」里已在办的不必再立。只是寒暄、客套、含糊应承的不要立；买卖当场银货两讫的也不要立。
 【宗门修正名录】
 ${sectModifierBrief()}`;
 
@@ -1157,11 +1171,12 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
   {
     id: "treasure",
     label: "财宝",
-    spec: `只产出随身物品与灵石：
+    spec: `只产出随身物品、灵石与地产：
 - 逐件 add inventory，每件 {"id","name","type","grade","count","icon","desc"}；type 只取 材料、丹药、符箓、法宝、灵兽、杂物；grade 只取 凡品、灵品、玄品、天品、仙品；icon 为一个汉字；count 为整数；desc 不少于 20 字，写明外观或用途。开局若带着一头活的灵兽（有名字、有来历的那种），type 写「灵兽」，name 写兽的名目，往后玩家可在灵兽栏把它收作随身
 - type 为 材料 或 丹药 的，必须额外给出 elements：由 金木水火土风雷冰暗 中的 1 至 3 种构成，形如 {"木":80,"土":20}，取值为 -100 到 100。这是炼丹火候与元素判定的依据，不可省略
 - 产出 5 至 8 件，其中至少一件是有来历的私人物件（如残玉、旧剑、母亲留下的香囊），并在 desc 中交代来历
-- 灵石：modify spiritStones.low、spiritStones.mid、spiritStones.high、spiritStones.supreme，均为整数；数量要与角色身份相称，底层弟子不应持有上品以上灵石`,
+- 灵石：modify spiritStones.low、spiritStones.mid、spiritStones.high、spiritStones.supreme，均为整数；数量要与角色身份相称，底层弟子不应持有上品以上灵石
+- 地产：他名下若原有一处产业（祖宅、家中留下的院子、师门分给他住的独院），用 add manorPlots 记下，payload 写 {"place":"城池名","built":true}——落成便有正房一间与左右厢房两间，走进去便住得；若只是一块尚无屋舍、待他自己起屋的宅地，则省去 built。place 写城池名，须与开篇落脚之处或他的出身相合。至多一处；寻常的落脚、借宿、客栈住店不要立地产，身无恒产的人也不必勉强给`,
   },
   {
     id: "sect",
@@ -1270,7 +1285,7 @@ const DOMAIN_COLLECTIONS: Partial<Record<OpeningDomainId, Record<string, string>
     修炼历程: "player.timeline",
   },
   technique: { techniques: "techniques", technique: "techniques", 功法: "techniques" },
-  treasure: { inventory: "inventory", items: "inventory", item: "inventory", treasures: "inventory", treasure: "inventory", 物品: "inventory", 道具: "inventory", 财宝: "inventory", 背包: "inventory", 行囊: "inventory", 储物袋: "inventory" },
+  treasure: { inventory: "inventory", items: "inventory", item: "inventory", treasures: "inventory", treasure: "inventory", 物品: "inventory", 道具: "inventory", 财宝: "inventory", 背包: "inventory", 行囊: "inventory", 储物袋: "inventory", manorPlots: "manorPlots", manorPlot: "manorPlots", manors: "manorPlots", manor: "manorPlots", 地产: "manorPlots", 宅地: "manorPlots", 产业: "manorPlots" },
   bond: { relations: "relations", relation: "relations", npcs: "relations", 尘缘: "relations" },
   skill: { skills: "skills", skill: "skills", 本事: "skills" },
   quest: { quests: "quests", quest: "quests", 任务: "quests" },

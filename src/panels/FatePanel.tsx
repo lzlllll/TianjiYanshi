@@ -458,7 +458,7 @@ export function FatePanel() {
               <Handshake size={32} className="mx-auto text-paper-500/30 mb-2" />
               <p className="font-serif text-sm text-paper-400/50">眼下没跟谁说过什么定话。</p>
               <p className="font-serif text-[11px] text-paper-400/35 mt-1">
-                去匠人区定做一件东西，或与人当面把话说明白，都会记到这儿。
+                去匠人区定做一件东西，或在交谈、问道里与人把话说明白，都会记到这儿。
               </p>
             </div>
           ) : (

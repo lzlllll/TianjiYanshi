@@ -40,6 +40,16 @@ export function ManorPanel({ cityId, cityName, districtId, manor, onClose, onEnt
   // 传进来的只是推门那一刻的样子；打听过、允准入内之后得看存档里最新的这一份
   const live = useGameStore((s) => s.manors[key]) ?? manor;
   const label = manorTitle(cityName, live);
+  const quests = useGameStore((s) => s.quests);
+
+  // 手上这一处还挂着的差事：抬头报一声，要寻的人若在宅中人口里便星标出来。
+  // 宅门这一扇原先漏了这一段，任务把大户人家设为目标时进来只见宅子、不见要找的人
+  const errands = (Array.isArray(quests) ? quests : []).filter(
+    (q) => q.status === "open" && q.target?.cityId === cityId && q.target.districtId === districtId,
+  );
+  const wanted = new Set(errands.map((q) => q.target?.person).filter((n): n is string => !!n));
+  // 要寻的人不在这户人家的人口里：多半是寄住、常来走动的，须进了门才见得着
+  const wantedOutside = [...wanted].filter((n) => !live.members.some((m) => m.name === n));
 
   const [probing, setProbing] = useState(false);
   const [error, setError] = useState("");
@@ -90,6 +100,11 @@ export function ManorPanel({ cityId, cityName, districtId, manor, onClose, onEnt
               <p className="font-serif text-xs text-paper-400/60 mt-0.5 truncate">
                 {live.standing} · 宅中 {live.members.length} 口
               </p>
+              {errands.length > 0 && (
+                <p className="font-serif text-xs text-cinnabar-300 mt-0.5 truncate">
+                  ★ 你有一桩差事要办在此处：{errands.map((q) => q.name).join("、")}
+                </p>
+              )}
             </div>
           </div>
           <button
@@ -111,10 +126,16 @@ export function ManorPanel({ cityId, cityName, districtId, manor, onClose, onEnt
                   key={m.id}
                   className="px-2.5 py-1 rounded border border-gold-500/20 bg-ink-800/50 font-serif text-xs text-paper-200"
                 >
+                  {wanted.has(m.name) && <span className="text-cinnabar-300 mr-0.5">★</span>}
                   {m.name}
                 </span>
               ))}
             </div>
+            {wantedOutside.length > 0 && (
+              <p className="font-serif text-[11px] text-cinnabar-300/80 mt-2 leading-relaxed">
+                要寻的人：{wantedOutside.join("、")}，正在此宅出没，须进门才见得着。
+              </p>
+            )}
           </section>
 
           <section>
