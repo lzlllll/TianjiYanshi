@@ -3985,9 +3985,9 @@ EFFECT: [效果描述]`,
             adventures: next.adventures ?? st.adventures,
             // 当票只在当铺与到期时动，叙事结算不会碰它
             pawns: st.pawns,
-            // 作坊里的工匠不受叙事影响；约定只在说定与了结时动
+            // 作坊里的工匠不受叙事影响；约定可由叙事说定，照这一笔一并收回
             workshops: st.workshops,
-            pacts: st.pacts,
+            pacts: next.pacts ?? st.pacts,
             // 叙事里动身去了某一村，便把这一村的「已前往」收回来，往后才能打听人事
             villages: next.villages ?? st.villages,
             // 叙事里新置的宅地、谈定的出租，也照这一笔落库
