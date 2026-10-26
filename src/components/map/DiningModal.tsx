@@ -9,6 +9,7 @@ import { dishBuff, dishesFor } from "@/data/dishes";
 import { HOURS_PER_DAY, MAX_LODGE_DAYS, ROOMS, lodgeCost, recoverAmount, roomById } from "@/data/rooms";
 import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
 import { formatGameTime, formatTimeShort, shiftGameTime } from "@/lib/gameTime";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import type { Dish } from "@/data/dishes";
 import type { DineResult, Relation, Seat, Shop } from "@/data/types";
 import { BedDouble, Coins, Loader2, MessageCircle, UserRound, UtensilsCrossed, X } from "lucide-react";
@@ -39,6 +40,8 @@ export function DiningModal({
   const live = useGameStore((s) => s.markets[key]?.shops.find((x) => x.id === shop.id)) ?? shop;
   const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const player = useGameStore((s) => s.player);
+  // 内伤一类状态压低了此刻的气血上限，界面上照实时的上限报
+  const maxHp = effectiveHpMax(player);
   const sect = useGameStore((s) => s.sect);
   const currentTime = useGameStore((s) => s.currentTime);
   const meetNpc = useGameStore((s) => s.meetNpc);
@@ -147,15 +150,16 @@ export function DiningModal({
 
     setBusy(true);
     setError("");
-    // 气血未过八成便是伤着，客栈里歇不出伤来，只能回灵力
-    const mayRestHp = player.hpMax > 0 && player.hp / player.hpMax >= HP_REST_THRESHOLD;
+    // 气血未过八成便是伤着，客栈里歇不出伤来，只能回灵力；
+    // 上限照临时状态压过的那一道算，内伤未愈便补不到满
+    const mayRestHp = maxHp > 0 && Math.min(player.hp, maxHp) / maxHp >= HP_REST_THRESHOLD;
     const gainMp = recoverAmount(player.mpMax, room, lodged.days);
-    const gainHp = mayRestHp ? recoverAmount(player.hpMax, room, lodged.days) : 0;
+    const gainHp = mayRestHp ? recoverAmount(maxHp, room, lodged.days) : 0;
 
     setPlayer({
       ...player,
       mp: Math.min(player.mpMax, player.mp + gainMp),
-      hp: Math.min(player.hpMax, player.hp + gainHp),
+      hp: Math.min(maxHp, player.hp + gainHp),
     });
     advanceTime(lodged.days * HOURS_PER_DAY);
     addLog(
@@ -335,8 +339,8 @@ export function DiningModal({
 
               <div className="mt-3">
                 <p className="font-serif text-[11px] text-paper-400/55 leading-relaxed">
-                  眼下气血 {player.hp}/{player.hpMax}、灵力 {player.mp}/{player.mpMax}。
-                  {player.hpMax > 0 && player.hp / player.hpMax >= HP_REST_THRESHOLD
+                  眼下气血 {Math.min(player.hp, maxHp)}/{maxHp}、灵力 {player.mp}/{player.mpMax}。
+                  {maxHp > 0 && Math.min(player.hp, maxHp) / maxHp >= HP_REST_THRESHOLD
                     ? "气血还足，歇息能把两样都补回来。"
                     : "气血已跌破八成，伤了根本，客栈里只能补回灵力——气血得另想办法。"}
                 </p>

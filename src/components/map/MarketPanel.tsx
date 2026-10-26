@@ -16,7 +16,7 @@ import { ShopSetupModal } from "@/components/map/ShopSetupModal";
 import { isAroundHere, isPinnedAt, manorKey, relationWhereabout, rollDistrictNpcs } from "@/data/npcGen";
 import { daySerial } from "@/lib/gameTime";
 import { shopLeaseCost } from "@/data/playerShops";
-import type { BuskResult, Market, Shop } from "@/data/types";
+import type { BuskResult, Market, Quest, Shop } from "@/data/types";
 import { Coins, Loader2, Music, Store, Users, X } from "lucide-react";
 
 /** 点开一处坊市时要看的东西 */
@@ -110,6 +110,32 @@ export function MarketPanel({
     return streetNpcs.filter((s) => !taken.has(s.name));
   }, [streetNpcs, known]);
 
+  /** 这一坊市里，差事点名要去的铺子 */
+  const questByShop = useMemo(() => {
+    const map = new Map<string, Quest>();
+    for (const q of quests) {
+      if (q.status !== "open" || q.target?.cityId !== cityId || q.target.districtId !== districtId) continue;
+      if (q.target.shop) map.set(q.target.shop, q);
+    }
+    return map;
+  }, [quests, cityId, districtId]);
+
+  /**
+   * 差事点名、街上却还没开的铺子：临时摆出一家来。
+   * 掌柜就是钉在这一处的那个关系人，事一了，这一家便不再露面。
+   */
+  const questShops = useMemo(() => {
+    const opened = new Set(live.shops.map((s) => s.name));
+    return [...questByShop.entries()]
+      .filter(([name]) => !opened.has(name))
+      .map(([name, quest]) => ({
+        name,
+        quest,
+        kind: quest.target?.shopKind ?? "铺子",
+        keeper: relations.find((r) => r?.name === quest.target?.person),
+      }));
+  }, [questByShop, live.shops, relations]);
+
   /** 街头卖艺：选一门本事考教五场，成败与钱财由代码定下，再写一段叙事 */
   const perform = async () => {
     const skill = skills.find((s) => s.id === buskSkill) ?? skills[0];
@@ -186,7 +212,9 @@ export function MarketPanel({
             <Store size={18} className="text-gold-400 shrink-0" />
             <div className="min-w-0">
               <h2 className="font-brush text-xl text-gold-400 tracking-widest truncate">{label}</h2>
-              <p className="font-serif text-xs text-paper-400 mt-0.5">沿街 {live.shops.length} 家铺面</p>
+              <p className="font-serif text-xs text-paper-400 mt-0.5">
+                沿街 {live.shops.length + questShops.length} 家铺面
+              </p>
             </div>
           </div>
           <button
@@ -199,13 +227,55 @@ export function MarketPanel({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {live.shops.length === 0 ? (
+          {live.shops.length + questShops.length === 0 ? (
             <p className="font-serif text-xs text-paper-400 py-8 text-center">
               这一片还没开市，铺面都空着。
             </p>
           ) : (
             // 一家一块牌子，铺开了看，不再一家一行
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+              {/* 差事点名、街上本没有的铺子：临时摆出来，事一了便不再露面 */}
+              {questShops.map((s) => (
+                <ScrollCard key={`quest-${s.name}`} className="!p-3 flex flex-col">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="shrink-0 px-2 py-0.5 rounded border border-cinnabar-500/40 bg-cinnabar-500/10 font-serif text-[11px] text-cinnabar-300">
+                      差事
+                    </span>
+                    <h4 className="flex-1 min-w-0 font-brush text-base text-paper-50 truncate">{s.name}</h4>
+                  </div>
+
+                  <p className="mt-2 font-serif text-xs text-paper-300/80 leading-relaxed">
+                    {s.kind}
+                    {s.keeper ? ` · 掌柜 ${s.keeper.name}` : ""}；为着「{s.quest.name}」才寻到这一家。
+                  </p>
+
+                  {s.quest.target?.shopDesc && (
+                    <p className="mt-1 font-serif text-xs text-paper-200/70 leading-relaxed">
+                      {s.quest.target.shopDesc}
+                    </p>
+                  )}
+
+                  <div className="mt-3 flex items-center gap-2">
+                    {s.keeper ? (
+                      <SealButton
+                        variant="ghost"
+                        onClick={() => {
+                          if (s.keeper) {
+                            meetNpc(s.keeper);
+                            openNPCChat(s.keeper.id);
+                          }
+                        }}
+                        className="px-3 py-1.5 text-xs"
+                      >
+                        寻掌柜
+                      </SealButton>
+                    ) : (
+                      <span className="font-serif text-[11px] text-paper-400/60">掌柜还未露面</span>
+                    )}
+                  </div>
+                </ScrollCard>
+              ))}
+
               {live.shops.map((shop) => (
                 <ScrollCard key={shop.id} className="!p-3 flex flex-col">
                   <div className="flex items-center gap-2 min-w-0">

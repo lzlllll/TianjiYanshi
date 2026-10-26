@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
-import { itemSalePrice } from "@/data/goods";
+import { itemSalePriceFor } from "@/data/goods";
 import { migrateRelation } from "@/data/npcGen";
 import type { Relation } from "@/data/types";
 import type { HaggleSubject } from "@/components/map/GeneralStoreModal";
@@ -66,6 +66,8 @@ export function HaggleModal({
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 刚成交的那一笔；卖出后留在此窗，接着卖别的 */
+  const [dealt, setDealt] = useState("");
 
   const busted = patience <= 0;
   // 柜底收来的旧物：掌柜自己也不认得，只能照实说不知道
@@ -77,19 +79,29 @@ export function HaggleModal({
   const favorable = buying ? factor < 0 : factor > 0;
   const angle = angleFor(factor);
 
-  /** 挑定一样要卖的东西，价钱从头谈起 */
+  /** 挑定一样要卖的东西，价钱从头谈起；先按一件起谈，数目可在窗里改 */
   const pickItem = (itemId: string) => {
     const item = inventory.find((i) => i.id === itemId);
     if (!item) return;
     setPicked({
       mode: "sell",
       name: item.name,
-      count: item.count,
-      basePrice: itemSalePrice(item),
+      count: 1,
+      basePrice: itemSalePriceFor(item, 1),
       itemId: item.id,
     });
     setFactor(0);
     setError("");
+    setDealt("");
+  };
+
+  /** 卖出时改件数：价钱照件数重算，议到的幅度仍留着 */
+  const setSellCount = (count: number) => {
+    if (!picked || buying) return;
+    const item = inventory.find((i) => i.id === picked.itemId);
+    if (!item) return;
+    const n = Math.max(1, Math.min(Math.trunc(Number(count)) || 1, item.count));
+    setPicked({ ...picked, count: n, basePrice: itemSalePriceFor(item, n) });
   };
 
   const send = async () => {
@@ -129,12 +141,31 @@ export function HaggleModal({
 
   const deal = () => {
     if (!picked) return;
-    const failed = onSettle(picked, price);
+    const subject = picked;
+    const paid = price;
+    const failed = onSettle(subject, paid);
     if (failed) {
       setError(failed);
       return;
     }
-    onClose();
+    // 买定一笔便收窗；卖出则留在此窗，好接着卖别的、或这一组余下的
+    if (buying) {
+      onClose();
+      return;
+    }
+    setDealt(`卖出「${subject.name}」${subject.count} 件，得 ${paid} 下品灵石。`);
+    setError("");
+    setWords("");
+    setLines([]);
+    setFactor(0);
+    // 存货还余着，便把这一组接着摆出来；卖光了才回到挑货
+    const item = useGameStore.getState().inventory.find((i) => i.id === subject.itemId);
+    if (item) {
+      const rest = Math.max(1, Math.min(subject.count, item.count));
+      setPicked({ ...subject, count: rest, basePrice: itemSalePriceFor(item, rest) });
+    } else {
+      setPicked(null);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -213,6 +244,40 @@ export function HaggleModal({
                   )}
                 </div>
               )}
+
+              {/* 卖出时挑定一件货，再定这一组卖几件；默认一件，也可一键全卖 */}
+              {!buying && picked && (() => {
+                const item = inventory.find((i) => i.id === picked.itemId);
+                if (!item) return null;
+                return (
+                  <div className="flex flex-wrap items-center gap-2 pb-2">
+                    <span className="font-serif text-[11px] text-paper-400/60 shrink-0">卖出件数</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={item.count}
+                      value={picked.count}
+                      onChange={(e) => setSellCount(Number(e.target.value))}
+                      className="w-16 rounded border border-gold-500/30 bg-ink-900/60 px-2 py-1 font-number text-xs text-paper-100 outline-none focus:border-gold-400"
+                    />
+                    <span className="font-serif text-[11px] text-paper-400/60">/ {item.count} 件</span>
+                    <button
+                      type="button"
+                      onClick={() => setSellCount(1)}
+                      className="rounded border border-gold-500/25 px-1.5 py-0.5 font-serif text-[10px] text-paper-300 transition hover:border-gold-400/60"
+                    >
+                      一件
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSellCount(item.count)}
+                      className="rounded border border-gold-500/25 px-1.5 py-0.5 font-serif text-[10px] text-paper-300 transition hover:border-gold-400/60"
+                    >
+                      全部
+                    </button>
+                  </div>
+                );
+              })()}
 
               {picked ? (
                 <>
@@ -346,6 +411,7 @@ export function HaggleModal({
                   {keeper.name}把脸一沉，不再听你磨价。要么就按这个价成交，要么走人。
                 </p>
               )}
+              {dealt && <p className="font-serif text-xs text-jade-400 leading-relaxed pt-1">{dealt}</p>}
               {error && <p className="font-serif text-xs text-cinnabar-400 leading-relaxed">{error}</p>}
             </div>
 

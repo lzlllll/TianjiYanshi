@@ -10,7 +10,8 @@ import { pactDaysLeft, pactKindLabel, pactRank, pactReady } from "@/data/pacts";
 import { adventureWhere, dangerLabel } from "@/data/adventures";
 import { daySerial } from "@/lib/gameTime";
 import { findBuffTemplate } from "@/data/buffs";
-import type { Quest, QuestBuffSpec } from "@/data/types";
+import { aiReady } from "@/data/backend";
+import type { Pact, Quest, QuestBuffSpec } from "@/data/types";
 import { cn } from "@/lib/utils";
 import {
   Ear,
@@ -60,8 +61,13 @@ export function FatePanel() {
   const currentAdventureId = useGameStore((s) => s.currentAdventureId);
   const currentTime = useGameStore((s) => s.currentTime);
   const settlePact = useGameStore((s) => s.settlePact);
+  const setPanel = useGameStore((s) => s.setPanel);
+  const settings = useAIStore((s) => s.settings);
+  const runTurn = useAIStore((s) => s.runTurn);
   const openAdventure = useAIStore((s) => s.openAdventure);
+  const readAdventure = useAIStore((s) => s.readAdventure);
   const travelToAdventure = useAIStore((s) => s.travelToAdventure);
+  const removeAdventure = useGameStore((s) => s.removeAdventure);
 
   const [tab, setTab] = useState<FateTab>("chances");
   const [note, setNote] = useState("");
@@ -81,17 +87,31 @@ export function FatePanel() {
   const showList = isTask ? tasks : chances;
   const openPacts = pacts.filter((p) => p.status === "open").length;
   const openAdvs = (Array.isArray(adventures) ? adventures : []).filter((a) => a.status === "open");
+  // 已了结却还留在舆图上的那些：只剩旧话可看，看完可以抹去
+  const doneAdvs = (Array.isArray(adventures) ? adventures : []).filter((a) => a.status === "done");
   const orderedPacts = [...pacts].sort(
     (a, b) => pactRank(a) - pactRank(b) || a.dueDay - b.dueDay || a.madeDay - b.madeDay,
   );
 
-  /** 主动去了结一桩约定：取货要等日子到，口头的随时可去 */
-  const settle = (pactId: string, name: string) => {
-    if (settlePact(pactId)) {
-      setNote(`「${name}」这一桩了了。`);
-    } else {
-      setNote("日子还没到，东西也还没做成，此时取不走。");
+  /** 主动去了结一桩约定：取货要等日子到，口头的随时可去；了结之后当场续一段叙事 */
+  const settle = (pact: Pact) => {
+    const what = pact.item?.name ?? pact.name;
+    // 没接上模型便不动账：先把话说明了，免得事了了却没人写这一段
+    if (!aiReady(settings)) {
+      setNote("推演接口尚未接通：先去设置里接上模型，再来践约。");
+      return;
     }
+    if (!settlePact(pact.id)) {
+      setNote("日子还没到，东西也还没做成，此时取不走。");
+      return;
+    }
+    // 收起抽屉，好让这一段叙事露出来
+    setPanel(null);
+    const decision =
+      pact.kind === "pickup"
+        ? `我到了「${pact.place || "约好的地方"}」，向「${pact.giver}」取回「${what}」。`
+        : `我去寻「${pact.giver}」，把先前说定的「${pact.name}」办了。`;
+    void runTurn(decision);
   };
 
   const tabs: { id: FateTab; label: string; icon: React.ReactNode; badge: string }[] = [
@@ -296,6 +316,7 @@ export function FatePanel() {
                           <span className="mr-1">★</span>
                           目标：{q.target.label}
                           {q.target.person ? ` · 寻 ${q.target.person}` : ""}
+                          {q.itemGoal ? ` · 带 ${q.itemGoal.name}×${q.itemGoal.count}` : ""}
                         </p>
                       )}
 
@@ -319,7 +340,7 @@ export function FatePanel() {
             <span className="font-serif text-[11px] text-paper-400/45 ml-auto">共 {openAdvs.length} 处在野</span>
           </div>
 
-          {openAdvs.length === 0 ? (
+          {openAdvs.length === 0 && doneAdvs.length === 0 ? (
             <div className="text-center py-8">
               <MapPin size={32} className="mx-auto text-paper-500/30 mb-2" />
               <p className="font-serif text-sm text-paper-400/50">舆图上暂无新开的去处。</p>
@@ -392,6 +413,57 @@ export function FatePanel() {
                 );
               })}
             </ul>
+          )}
+
+          {doneAdvs.length > 0 && (
+            <div className="mt-5 border-t border-paper-400/20 pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="font-serif text-xs text-paper-400/60">已了结的，共 {doneAdvs.length} 处</span>
+                <span className="font-serif text-[11px] text-paper-400/35 ml-auto">旧话可看，看完可抹去</span>
+              </div>
+              <ul className="space-y-2">
+                {doneAdvs.map((a) => (
+                  <li
+                    key={a.id}
+                    className="p-3 rounded border border-paper-400/35 bg-ink-800 flex items-start gap-3"
+                  >
+                    <div className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center border border-paper-400/40 font-brush text-sm text-paper-400/70">
+                      遇
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-brush text-base text-paper-200">{a.name}</span>
+                        <span className="font-serif text-[11px] text-paper-400/60">{a.kind} · 已了结</span>
+                        <span className="font-serif text-[11px] text-paper-400/50 ml-auto">
+                          在{adventureWhere(a)}
+                        </span>
+                      </div>
+
+                      {a.summary && (
+                        <p className="font-serif text-xs text-paper-300/70 leading-relaxed mt-1">{a.summary}</p>
+                      )}
+
+                      <div className="mt-2 flex items-center gap-2">
+                        <SealButton
+                          variant="outline"
+                          onClick={() => readAdventure(a.id)}
+                          className="px-3 py-1 text-[11px]"
+                        >
+                          回看旧话
+                        </SealButton>
+                        <button
+                          type="button"
+                          onClick={() => removeAdventure(a.id)}
+                          className="rounded border border-cinnabar-500/40 px-3 py-1 font-serif text-[11px] text-cinnabar-300 transition hover:bg-cinnabar-500/15 hover:text-cinnabar-200"
+                        >
+                          抹去
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </ScrollCard>
       )}
@@ -472,12 +544,12 @@ export function FatePanel() {
                   <li
                     key={p.id}
                     className={cn(
-                      "p-3 rounded border-2 flex items-start gap-3",
+                      "p-3 rounded border-2 flex items-start gap-3 bg-gold-100",
                       !open
-                        ? "border-paper-400 bg-ink-800 opacity-70"
+                        ? "border-paper-400 opacity-70"
                         : late
-                          ? "border-cinnabar-500 bg-cinnabar-500"
-                          : "border-pine-500 bg-pine-500",
+                          ? "border-cinnabar-500"
+                          : "border-gold-500",
                     )}
                   >
                     <div
@@ -487,7 +559,7 @@ export function FatePanel() {
                           ? "bg-ink-700 text-paper-400 border-paper-400"
                           : late
                             ? "bg-cinnabar-500 text-cinnabar-300 border-cinnabar-500"
-                            : "bg-pine-500 text-pine-400 border-pine-500",
+                            : "bg-gold-200 text-gold-600 border-gold-500",
                       )}
                     >
                       <Handshake size={14} />
@@ -496,7 +568,7 @@ export function FatePanel() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-brush text-base text-paper-100">{p.name}</span>
-                        <span className="font-serif text-[11px] px-1.5 py-0.5 rounded border-2 border-paper-400 bg-paper-400 text-paper-400">
+                        <span className="font-serif text-[11px] px-1.5 py-0.5 rounded border-2 border-gold-500/40 bg-gold-200/60 text-gold-600">
                           {pactKindLabel(p.kind)}
                         </span>
                         {p.status === "done" && (
@@ -539,7 +611,7 @@ export function FatePanel() {
                           <SealButton
                             variant={ready ? "seal" : "ghost"}
                             disabled={!ready}
-                            onClick={() => settle(p.id, p.item?.name ?? p.name)}
+                            onClick={() => settle(p)}
                             className="px-3 py-1 text-[11px]"
                           >
                             {p.kind === "pickup" ? (ready ? "取货" : "日子未到") : "去了结"}

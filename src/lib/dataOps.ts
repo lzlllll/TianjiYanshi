@@ -21,14 +21,15 @@ import type {
 import { REALM_NAMES } from "@/data/mockData";
 import { assignManorCell, getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
 import { sectBuildingRoster } from "@/data/map/sectBuildings";
-import { composeSectSite } from "@/data/sectSites";
+import { composeSectSite, sectNameCore } from "@/data/sectSites";
 import { normalizeSectRelation } from "@/data/sectRelations";
 import { normalizeOccupation } from "@/data/occupations";
 import { resolveLocation } from "@/data/locations";
 import { isKnownGood } from "@/data/goods";
 import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data/skills";
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
-import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQuest, parseQuestOutcome, pickOpenQuest, type QuestLedgerTarget } from "@/data/quests";
+import { isHardLockedPath } from "@/data/dataCatalog";
+import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQuest, parseQuestOutcome, pickOpenQuest, takeItemsByName, type QuestLedgerTarget } from "@/data/quests";
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizePact } from "@/data/pacts";
 import { normalizeAdventure } from "@/data/adventures";
@@ -1070,10 +1071,24 @@ function stoneAmount(v: unknown): number {
   return Math.max(0, Math.trunc(Number.isFinite(Number(n)) ? Number(n) : 0));
 }
 
+/**
+ * 路由圈定的路子里，有没有盖住这一条。
+ * 只作诊断用：圈不着也照落账，不借此拦人。
+ */
+function routeCovers(writable: string[], path: string): boolean {
+  const headOf = (p: string) => String(p ?? "").trim().split("[")[0].replace(/<[^>]*>/g, "");
+  const target = headOf(path);
+  if (!target) return true;
+  return writable.some((w) => {
+    const head = headOf(w);
+    return !!head && (target === head || target.startsWith(`${head}.`) || head.startsWith(`${target}.`));
+  });
+}
+
 export function applyOpsToState(
   state: GameState,
   ops: DataOp[],
-  hooks?: { onNote?: (text: string) => void },
+  hooks?: { onNote?: (text: string) => void; writable?: string[] },
 ): GameState {
   if (ops.length === 0) return state;
   const MAX_OPS = 200;
@@ -1135,6 +1150,8 @@ export function applyOpsToState(
   const oldDateKey = state.currentTime ? gameDateKey(state.currentTime) : "";
 
   let addCount = 0, modifyCount = 0, deleteCount = 0, buyCount = 0;
+  // 路由圈定的可写数据只用来留一笔诊断，圈不着的一概照落账
+  const routed = (hooks?.writable ?? []).map((w) => String(w ?? "").trim()).filter(Boolean);
   for (const op of limitedOps) {
     try {
       // 当场买成的一笔走这一条：钱货同结，兑不出钱便回一句「没能买下」
@@ -1147,6 +1164,9 @@ export function applyOpsToState(
       if (op.kind === "add") addCount++;
       else if (op.kind === "modify") modifyCount++;
       else if (op.kind === "delete") deleteCount++;
+      if (op.kind === "modify" && routed.length > 0 && !routeCovers(routed, op.path)) {
+        console.debug("[dataOps] 路由未圈定的改动，照常落账:", op.path);
+      }
       applyOne(next, op);
     } catch (e) {
       console.warn("[dataOps] 操作失败，已跳过:", op, e);
@@ -1844,6 +1864,19 @@ function settleQuest(root: any, name: string, status: "done" | "failed"): void {
   if (!target) return;
 
   const today = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
+
+  // 人物物品型：交差时行囊里真得有那件东西，取走才算交到人手上；
+  // 东西不在，这桩交付便不算数，机缘照旧开着
+  if (status === "done" && target.kind === "人物物品" && target.itemGoal) {
+    const left = takeItemsByName(
+      Array.isArray(root.inventory) ? root.inventory : [],
+      target.itemGoal.name,
+      target.itemGoal.count,
+    );
+    if (!left) return;
+    root.inventory = left;
+  }
+
   // 成与不成由 AI 判，本地只照单落账；日子过没过只是到期结算另算
   target.status = status;
   target.settledDay = today;
@@ -2221,7 +2254,18 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
       else rel[field] = raw.slice(0, 40);
       return null; // 已直接处理
     }
-    return null; // 表外的字段一概不认
+    // 名录之外的人物字段不再一概打回：正文里若给他添了别的名目——生辰、绰号、喜好，
+    // 写实了便照写，路由圈不圈都不作数，只守住「编号不容改写」这一条。
+    if (field === "id" || !raw) return null;
+    const prevValue = rel[field];
+    if (typeof prevValue === "number") {
+      const num = Number(raw);
+      rel[field] = Number.isFinite(num) ? num : raw.slice(0, 200);
+    } else {
+      rel[field] = raw.slice(0, 200);
+    }
+    console.debug("[dataOps] 人物字段不在名录内，照实落账:", field);
+    return null;
   }
 
   // 摧毁建筑：正文里本门某座建筑倾毁，路径写 demolish.<建筑名>，值随意。
@@ -2233,7 +2277,11 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
     const sites: SectSite[] = Array.isArray(root?.sectSites) ? root.sectSites : [];
     const at = sites.findIndex((s) => s?.mine);
     if (at < 0) return null;
-    if (/主殿|传法大殿/.test(name)) return null;
+    // 主殿与传法大殿是硬约束，与分类目录里写的是同一句话
+    if (isHardLockedPath(normalizedPath)) {
+      console.warn("[dataOps] 硬约束不容违逆：", normalizedPath);
+      return null;
+    }
     const mine = sites[at];
     // 自建的：先在 built 里找，找着便摘掉
     const built = { ...(mine.built ?? {}) };
@@ -2504,6 +2552,12 @@ function applyOne(root: any, op: DataOp): void {
         normalizedOp.value = String(cur);
       }
     }
+    // 性别是开局定下的，叙事回写把男女写反了也不许改：档案里这一项不随文气走。
+    // 这类硬锁一律照分类目录判定，锁的名单只有一份
+    if (isHardLockedPath(normalizedOp.path)) {
+      console.warn("[dataOps] 硬约束不容违逆：叙事欲改动", normalizedOp.path, "，已略过");
+      return;
+    }
     applyModify(parent, last, normalizedOp);
   } else if (op.kind === "add") {
     // 给某家铺子添货：铺面存在 markets 里，是对象不是数组，故不走下面的通用路子
@@ -2716,10 +2770,13 @@ function applyOne(root: any, op: DataOp): void {
         arr.push(adv);
         if (arr.length > 12) arr.splice(0, arr.length - 12);
       } else if (op.collection === "sectSites") {
-        // 本门不必另立：本门由舆图上就近的一处认领，另立一处便成了两处同名
+        // 本门不必另立：本门由舆图上就近的一处认领，另立一处便成了两处同名。
+        // 名号只差末尾一个字（白鹿涧与白鹿院）也算同一处，不必另立
         const siteName = String((payload as { name?: unknown })?.name ?? "").trim();
         const mineName = String(root?.sect?.name ?? root?.player?.sectName ?? "").trim();
-        if (siteName && mineName && siteName === mineName) return;
+        if (siteName && mineName && (siteName === mineName || sectNameCore(siteName) === sectNameCore(mineName))) {
+          return;
+        }
         // 叙事里点了名、舆图上却没有的宗门：照它自述的信息现立一处，
         // 并当场把那张山门图注册上，好点得进去
         const site = composeSectSite(

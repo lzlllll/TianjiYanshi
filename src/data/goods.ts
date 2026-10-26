@@ -177,13 +177,18 @@ const GRADE_VALUE: Record<ItemGrade, number> = {
 };
 
 /**
- * 掌柜对一样东西肯出的价钱，按品阶与件数折算。
+ * 掌柜对某一样东西、某一数量肯出的价钱，按品阶与件数折算。
  * 铺子总要赚一手，故只给七成，再由讲价往上抬。
  */
-export function itemSalePrice(item: InventoryItem): number {
+export function itemSalePriceFor(item: Pick<InventoryItem, "grade">, count: number): number {
   const unit = GRADE_VALUE[item.grade] ?? 8;
-  const count = Math.max(1, Math.trunc(item.count) || 1);
-  return Math.max(1, Math.round(unit * count * 0.7));
+  const n = Math.max(1, Math.trunc(Number(count)) || 1);
+  return Math.max(1, Math.round(unit * n * 0.7));
+}
+
+/** 一样东西整组肯出的价钱 */
+export function itemSalePrice(item: InventoryItem): number {
+  return itemSalePriceFor(item, item.count);
 }
 
 /** 随机一样货的名，供自检与测试用 */

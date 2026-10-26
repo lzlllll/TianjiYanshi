@@ -36,6 +36,8 @@ import type {
   NPCScene,
   QuestBroker,
   Adventure,
+  AdventureChoice,
+  AdventureLine,
   Technique,
   SectSite,
   SectWarBrief,
@@ -49,6 +51,7 @@ import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
 import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome, questItemGoalLabel, questRealmGoalLabel, questStoneGoalLabel } from "@/data/quests";
 import { buffCatalogBrief } from "@/data/buffs";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { ESCORT_DAYS_RANGE, ESCORT_FEE_RANGE, clampEscort } from "@/data/escort";
@@ -60,7 +63,8 @@ import { PLAYER_SHOP_KINDS, shopMonthlyExpense } from "@/data/playerShops";
 import type { CustomFacility, ShopFacility, ShopGood, ShopKind } from "@/data/types";
 import { clampCustomFacility } from "@/data/sectFacilities";
 import { pinNarrativeQuest } from "@/data/broker";
-import { OPENING_GAME_TIME, daySerial, formatGameTime } from "@/lib/gameTime";
+import { sectNameCore } from "@/data/sectSites";
+import { OPENING_GAME_TIME, daySerial, formatGameTime, gameDateKey, timeSerial } from "@/lib/gameTime";
 import { advanceIncense } from "@/lib/battleTime";
 import { chatWithModel, chatWithModelStream, isReasoningSlot } from "@/lib/aiClient";
 import type { DataOp, GameState } from "@/data/types";
@@ -68,6 +72,7 @@ import {
   buildDataSchema,
   buildFlashPrompt,
   buildOpsExtractionPrompt,
+  OPS_REPAIR_INSTRUCTION,
   buildOpeningDomainPrompt,
   buildOpeningPlacePrompt,
   buildProPrompt,
@@ -107,6 +112,7 @@ import {
   type SurrenderBrief,
 } from "@/lib/promptBuilder";
 import { parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
+import { buildCatalogText } from "@/data/dataCatalog";
 import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
 import { isNpcAround, isNpcLocationKnown, migrateRelation, relationTags } from "@/data/npcGen";
 import { REALMS, REALM_NAMES, canTalkTo } from "@/data/mockData";
@@ -115,6 +121,7 @@ import {
   EVENT_QUICK_MARK,
   ADVENTURE_DONE_MARK,
   ADVENTURE_KEEP_MARK,
+  ADVENTURE_CHOICE_MARK,
   FOREST_EVENT_MARK,
   buildRandomEventPrompt,
   buildRandomEventReplyPrompt,
@@ -133,6 +140,7 @@ import {
   nearestCityIdOf,
   normalizeAdventure,
   openAdventures,
+  pickAdventureSpot,
   pickAdventureSpotNear,
 } from "@/data/adventures";
 import {
@@ -277,6 +285,10 @@ export interface AdventureState {
   resolved: boolean;
   /** 了结之后是留是撤 */
   keepAfter: boolean;
+  /** 这一回模型备下的几个选择；没有便退回那三个老手段 */
+  choices: AdventureChoice[];
+  /** 只是翻看旧话，不作应对：从机缘面板点开已了结的那一处时用 */
+  reading: boolean;
   errorMsg: string;
 }
 
@@ -290,11 +302,43 @@ const INITIAL_ADVENTURE: AdventureState = {
   turns: [],
   resolved: false,
   keepAfter: false,
+  choices: [],
+  reading: false,
   errorMsg: "",
 };
 
 /** 一席最多请几位；人再多，话就散了 */
 export const MAX_PARTY_SIZE = 4;
+
+/**
+ * 照奇遇名下记着的那一卷，把这扇窗摆回先前的样子。
+ * reading 为真时只作翻看：不发新话、不列选择。
+ */
+function restoreAdventureState(adv: Adventure, reading: boolean): AdventureState {
+  const journal: AdventureLine[] = Array.isArray(adv.journal) ? adv.journal : [];
+  const head = journal[0]?.role === "event" ? journal[0] : undefined;
+  const rest = head ? journal.slice(1) : journal;
+  return {
+    ...INITIAL_ADVENTURE,
+    active: true,
+    id: adv.id,
+    title: adv.name,
+    opening: head?.content || "",
+    openingOps: head?.ops || [],
+    turns: rest.map((line, i) => ({
+      id: `adv-${adv.id}-${i}`,
+      role: line.role,
+      content: line.content,
+      ops: line.ops,
+    })),
+    // 了结之后仍留在舆图上的那一处，日后还能再进；只有已经撤去的心思才不再续写
+    resolved: adv.status === "done" && !adv.persistent,
+    keepAfter: !!adv.persistent,
+    choices: reading ? [] : Array.isArray(adv.choices) ? adv.choices : [],
+    reading,
+    errorMsg: "",
+  };
+}
 
 /**
  * 变故提示词里的「玩家简要状况」。
@@ -311,6 +355,9 @@ function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
     .filter((r) => r?.traveling)
     .map((r) => r.name);
 
+  // 内伤一类状态压低了此刻的气血上限，照实时报出去
+  const hpMax = effectiveHpMax(p);
+
   return {
     name: p.name || "无名",
     title: p.title || "",
@@ -318,7 +365,7 @@ function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
     position: p.position || "",
     sect: gs.sect?.name || p.sectName || "",
     condition: [
-      `气血 ${p.hp}/${p.hpMax}`,
+      `气血 ${Math.min(p.hp, hpMax)}/${hpMax}`,
       `灵力 ${p.mp}/${p.mpMax}`,
       `身上约 ${stones} 枚灵石`,
       gs.beast ? `随身灵兽「${gs.beast.name}」` : "",
@@ -914,7 +961,11 @@ function findSectByName(sites: SectSite[], name: string): SectSite | undefined {
   if (exact) return exact;
   const loose = String(name ?? "").trim();
   if (!loose) return undefined;
-  return list.find((s) => !s.mine && (s.name.includes(loose) || loose.includes(s.name)));
+  const byPart = list.find((s) => !s.mine && (s.name.includes(loose) || loose.includes(s.name)));
+  if (byPart) return byPart;
+  // 名号只差末尾一个字（白鹿涧与白鹿院）的，也认作同一处山门
+  const core = sectNameCore(loose);
+  return list.find((s) => !s.mine && !!s.name && sectNameCore(s.name) === core);
 }
 
 /** 城的守方：守城大阵一座，另有守将与守卒 */
@@ -1121,19 +1172,30 @@ interface AIStore {
   adventure: AdventureState;
   /** 时间往前走过一段，掷一掷有没有新开一处奇遇 */
   maybeSpawnAdventure: (hours: number) => void;
+  /**
+   * 每月至少开一处非任务奇遇。
+   * 当月已有一处（没有 questId 的）便不再添；未配接口时不生，免得空转。
+   */
+  ensureMonthlyAdventure: () => void;
   /** 现掷一处奇遇；给了 spot 便落在指定点位（开发者现点），否则落在玩家所在的那一带 */
   spawnAdventure: (
     reason?: string,
     spot?: { sceneId: string; x: number; y: number },
+    /** force：按月保底的那一处，不受开着的数目所限，近处没有空位便另择一处 */
+    opts?: { force?: boolean },
   ) => Promise<void>;
   /** 踏进一处奇遇 */
   openAdventure: (id: string) => Promise<void>;
+  /** 只翻看某一处留下的旧话：不必亲至，也不往下写 */
+  readAdventure: (id: string) => void;
   /** 前往舆图上某处奇遇的点位；行路一事交给问道推演 */
   travelToAdventure: (id: string) => Promise<void>;
   /** 在奇遇里回一句话 */
   replyAdventure: (text: string) => Promise<void>;
   /** 在奇遇里使一个手段：探索、交涉、出手、抽身 */
   actAdventure: (action: "explore" | "parley" | "fight" | "leave") => Promise<void>;
+  /** 照模型现拟的那一条选择行事 */
+  chooseAdventure: (choice: AdventureChoice) => Promise<void>;
   /** 收起奇遇那扇窗；那一处仍留在舆图上 */
   closeAdventure: () => void;
 
@@ -1327,6 +1389,35 @@ function withoutDuplicateVitals(
 }
 
 /**
+ * 一合交手说完，把这段话里的实事照账落下：拾来的东西、结下的仇、损了的法器、
+ * 提到的人与去处，凡经路由认得的都写进去。
+ * 气血与灵力另有本地的判定和战阵上的数值管着，这里一概不碰，免得一笔账记两回。
+ */
+async function settleBattleNarrative(
+  settings: AISettings,
+  narrative: string,
+  settled: { mpSpent: number; mpRestored: number; hpSpent: number },
+): Promise<void> {
+  if (!narrative.trim()) return;
+  try {
+    const state = useGameStore.getState().getSnapshot() as unknown as GameState;
+    const extraction = await runOpsExtraction(settings, state, narrative, new AbortController().signal, {
+      source: "battle",
+    });
+    const ops = withoutDuplicateVitals(extraction.ops, settled).filter((op) => {
+      if (op.kind !== "modify") return true;
+      const path = String(op.path || "").replace(/\s+/g, "");
+      return path !== "player.hp" && path !== "player.mp" && path !== "hp" && path !== "mp";
+    });
+    if (ops.length === 0) return;
+    useGameStore.getState().applyOps(ops);
+    console.debug("[battle] 这一合落账", ops.length, "条");
+  } catch (e) {
+    console.warn("[battle] 这一合的数据结算未成:", e);
+  }
+}
+
+/**
  * 开了「保留全程叙事」才把这一回的正文另存一份。
  * 推演那边照旧只带压缩摘要与近几轮，这份全文不参与任何提示词。
  */
@@ -1406,32 +1497,73 @@ async function runOpsExtraction(
   signal: AbortSignal,
   opts: {
     crafting?: { type: "alchemy" | "talisman"; summary: string };
+    /** 本回合路由圈定的可写数据，只作引导 */
+    writable?: string[];
+    /** 这一段叙事从哪儿来，便于模型判断该记什么 */
+    source?: "turn" | "npc" | "event" | "battle" | "crafting" | "opening";
   } = {},
 ): Promise<{ ops: DataOp[]; opsRaw: string; quickDecisions: string[]; salvaged: boolean }> {
   if (!narrative.trim()) return emptyExtraction();
 
+  const messages = buildOpsExtractionPrompt({
+    // 与回合里存下的正文同一上限：截得比正文短，正文后半段写到的随身之物等就会被漏掉
+    narrative: narrative.slice(0, 20000),
+    state,
+    craftingType: opts.crafting?.type,
+    craftingSummary: opts.crafting?.summary,
+    writable: opts.writable,
+    source: opts.source,
+  });
+
+  // 上一次原始输出，留给补跳时原样贴回去
+  let firstRaw = "";
   try {
-    const raw = await chatWithModel(
+    firstRaw = await chatWithModel(settings, settings.flashModel, messages, {
+      timeoutMs: 60000,
+      signal,
+      jsonMode: true,
+      retries: 1,
+    });
+    const parsed = parseJsonOps(firstRaw);
+    // opsRaw 为空是「整段读不成 JSON」的记号；本轮确实没有变动时它会是 "[]"，两回事
+    if (parsed.opsRaw || parsed.quickDecisions.length > 0) {
+      console.debug("[opsExtraction] 识别到", parsed.ops.length, "条数据操作");
+      return parsed;
+    }
+    if (!signal.aborted) console.warn("[opsExtraction] 首次结算没能读成 JSON，原样回问一次");
+  } catch (e) {
+    if (signal.aborted) return emptyExtraction();
+    console.warn("[opsExtraction] 首次结算请求失败，原样回问一次:", e);
+  }
+
+  if (signal.aborted) return emptyExtraction();
+
+  // 补一跳：把上一次的输出原样贴回去，只求一个合法 JSON，不重写对叙事的理解。
+  // 少了这一跳，整轮的账便静默丢掉——挨的伤、得的物、结下的仇，全都当没发生
+  try {
+    const second = await chatWithModel(
       settings,
       settings.flashModel,
-      buildOpsExtractionPrompt({
-        // 与回合里存下的正文同一上限：截得比正文短，正文后半段写到的随身之物等就会被漏掉
-        narrative: narrative.slice(0, 20000),
-        state,
-        craftingType: opts.crafting?.type,
-        craftingSummary: opts.crafting?.summary,
-      }),
+      firstRaw.trim()
+        ? [
+            ...messages,
+            { role: "assistant" as const, content: firstRaw.slice(0, 12000) },
+            { role: "user" as const, content: OPS_REPAIR_INSTRUCTION },
+          ]
+        : messages,
       { timeoutMs: 60000, signal, jsonMode: true, retries: 1 },
     );
-    const parsed = parseJsonOps(raw);
-    console.debug("[opsExtraction] 识别到", parsed.ops.length, "条数据操作");
-    return parsed;
-  } catch (e) {
-    if (!signal.aborted) {
-      console.warn("[opsExtraction] 数据识别失败，本轮不产生数据变动:", e);
+    const parsed = parseJsonOps(second);
+    if (parsed.opsRaw || parsed.quickDecisions.length > 0) {
+      console.info("[opsExtraction] 补一跳读回，识别到", parsed.ops.length, "条数据操作");
+      return parsed;
     }
-    return emptyExtraction();
+  } catch (e) {
+    if (!signal.aborted) console.warn("[opsExtraction] 补一跳也失败了:", e);
   }
+
+  if (!signal.aborted) console.warn("[opsExtraction] 两次都没读成 JSON，本轮不产生数据变动");
+  return emptyExtraction();
 }
 
 /**
@@ -1443,7 +1575,7 @@ async function extractEventOps(settings: AISettings, narrative: string, signal: 
   if (!narrative.trim()) return [];
   try {
     const state = useGameStore.getState().getSnapshot() as unknown as GameState;
-    const extraction = await runOpsExtraction(settings, state, narrative, signal);
+    const extraction = await runOpsExtraction(settings, state, narrative, signal, { source: "event" });
     if (signal.aborted || extraction.ops.length === 0) return [];
     useGameStore.getState().applyOps(extraction.ops);
     console.debug("[randomEvent] 这一段落账", extraction.ops.length, "条");
@@ -1529,6 +1661,57 @@ function parseAdventureEnd(raw: string): { passage: string; resolved: boolean; k
   return { passage, resolved, keep };
 }
 
+const ADVENTURE_ACTS: Record<string, AdventureChoice["act"]> = {
+  探查: "explore",
+  查探: "explore",
+  搜寻: "explore",
+  交涉: "parley",
+  交谈: "parley",
+  问话: "parley",
+  出手: "fight",
+  动手: "fight",
+  拔剑: "fight",
+  离去: "leave",
+  抽身: "leave",
+  离开: "leave",
+};
+
+/**
+ * 摘下正文之后那一段选择：一行一条，照「动作|一句话」。
+ * 摘下之后正文只剩余下的情景；没有这一块，便退回原先那三个老手段。
+ */
+function parseAdventureChoices(raw: string): { body: string; choices: AdventureChoice[] } {
+  const idx = raw.indexOf(ADVENTURE_CHOICE_MARK);
+  if (idx === -1) return { body: raw.trim(), choices: [] };
+  const body = raw.slice(0, idx).trim();
+  const block = raw.slice(idx + ADVENTURE_CHOICE_MARK.length);
+  const choices: AdventureChoice[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    const t = line.replace(/^[\s\-*·•\d.、）)]+/, "").trim();
+    if (!t || t.includes("<<<")) continue;
+    const cut = t.split(/[|｜]/);
+    if (cut.length < 2) continue;
+    const text = cut.slice(1).join("|").trim().replace(/^["「『]|["」』]$/g, "");
+    if (!text) continue;
+    if (choices.some((c) => c.text === text)) continue;
+    choices.push({ act: ADVENTURE_ACTS[cut[0].trim()] ?? "other", text });
+    if (choices.length >= 3) break;
+  }
+  return { body, choices };
+}
+
+/** 把这一窗里说过的那些话收拢成一卷，记到奇遇名下：收起窗后仍留着，下回接着看 */
+function adventureJournalOf(s: {
+  opening: string;
+  openingOps: DataOp[];
+  turns: RandomEventTurn[];
+}): AdventureLine[] {
+  const lines: AdventureLine[] = [];
+  if (s.opening) lines.push({ role: "event", content: s.opening, ops: s.openingOps });
+  for (const t of s.turns) lines.push({ role: t.role, content: t.content, ops: t.ops });
+  return lines;
+}
+
 /** 一处奇遇里现掷的对手：凶险越高，身手越硬 */
 function adventureFoe(danger: number, realmIndex: number) {
   const d = Math.max(1, Math.min(5, Math.trunc(Number(danger)) || 1));
@@ -1558,6 +1741,8 @@ function adventureFoe(danger: number, realmIndex: number) {
 
 /** 上次现掷奇遇是哪一日；免得一日之内接连生事 */
 let lastAdventureSpawnDay = 0;
+/** 按月保底那处奇遇，这一日试过了没有；试过便不再一个时辰接一个时辰地空转 */
+let lastMonthlyAdventureTry = "";
 
 /**
  * 开局建档：把同一份开篇叙事并发交给多个领域助手，各自只写自己那一块。
@@ -2533,6 +2718,7 @@ export const useAIStore = create<AIStore>()(
         // 后处理 Flash：从正文中识别数据变动
         extraction = await runOpsExtraction(settings, gameState, narrative, signal, {
           crafting: { type: ctx.craftingType, summary: result.summary },
+          source: "crafting",
         });
         if (signal.aborted) return;
 
@@ -2594,6 +2780,8 @@ export const useAIStore = create<AIStore>()(
         openChatFromNarrative(narrativeConverse);
 
         await get().compressNow();
+        // 这个月还空着，便照月例补一处非任务奇遇
+        get().ensureMonthlyAdventure();
       },
 
       runTurn: async (decision, opts) => {
@@ -2665,6 +2853,7 @@ export const useAIStore = create<AIStore>()(
         // 这一趟 flash 判断省去，直接进正文，少一个来回。
         const isFirstTurn = conv.turns.length === 0;
         let flashPaths: string[] = [];
+        let flashWritable: string[] = [];
         let flashRaw = "";
         if (!isFirstTurn) {
           set((st) => ({
@@ -2676,12 +2865,14 @@ export const useAIStore = create<AIStore>()(
             flashRaw = await chatWithModel(
               settings,
               settings.flashModel,
-              buildFlashPrompt(trimmed, schema),
+              buildFlashPrompt(trimmed, schema, buildCatalogText()),
               { timeoutMs: 30000, signal, retries: 1, jsonMode: true },
             );
             const flashDecision = parseFlashDecision(flashRaw);
             flashPaths = flashDecision.paths;
+            flashWritable = flashDecision.writable;
             const craftingType = flashDecision.crafting;
+            console.debug("[route] 读", flashPaths.length, "条 / 可写", flashWritable.length, "条:", flashWritable.join("、"));
 
             set((st) => ({
               conversation: {
@@ -2888,7 +3079,10 @@ export const useAIStore = create<AIStore>()(
                     },
                   })),
               )
-            : await runOpsExtraction(settings, gameState, narrative, signal);
+            : await runOpsExtraction(settings, gameState, narrative, signal, {
+                writable: flashWritable,
+                source: "turn",
+              });
         if (signal.aborted) return;
 
         // 开局八门若有没写全的，记一句，进主界面时提示；
@@ -2916,10 +3110,24 @@ export const useAIStore = create<AIStore>()(
 
         // 回合推进时结算按回合计的增益与减益
         useGameStore.getState().updateBuffDuration();
+        // 落账之前先记下时辰：结算有时会照叙事挪动时间，挪过的便不再补
+        const timeBefore = useGameStore.getState().currentTime || OPENING_GAME_TIME;
         // 结算里没能做成的买卖，回一句缀在正文末尾，让玩家看见「钱不够，没买成」
-        const settleNotes = useGameStore.getState().applyOps(ops);
+        // 路由圈定的可写数据一并递下去，只作诊断，圈不着也照落账
+        const settleNotes = useGameStore.getState().applyOps(ops, { writable: flashWritable });
         if (settleNotes.length > 0) {
           narrative = `${narrative}\n\n${settleNotes.join("\n")}`;
+        }
+
+        // 时间兜底：每过一轮，剧情至少走一个时辰。
+        // 叙事模型未必肯照规矩回写 currentTime，若任它漏写，钟表便一直停在开篇那一刻，
+        // 机缘误期、铺面月结、灵田收成全都无从谈起——故这里补上这一笔。
+        // 开篇建档那一轮不算，那时故事还没开始走。
+        if (conv.turns.length > 0) {
+          const timeAfter = useGameStore.getState().currentTime || OPENING_GAME_TIME;
+          if (timeSerial(timeAfter) === timeSerial(timeBefore)) {
+            useGameStore.getState().advanceTime(1);
+          }
         }
 
         // 前往奇遇的那一轮，结算之后由代码把位置钉到该点位，叙事只负责行路的经过
@@ -3030,6 +3238,8 @@ export const useAIStore = create<AIStore>()(
         openChatFromNarrative(narrativeConverse);
 
         await get().compressNow();
+        // 这个月还空着，便照月例补一处非任务奇遇
+        get().ensureMonthlyAdventure();
       },
 
       regenerate: async () => {
@@ -3174,7 +3384,7 @@ export const useAIStore = create<AIStore>()(
                     },
                   })),
               )
-            : await runOpsExtraction(settings, retryState, narrative, signal);
+            : await runOpsExtraction(settings, retryState, narrative, signal, { source: "opening" });
         if (signal.aborted) return;
 
         // 重演开篇也照同一把尺：哪一门没写全，进主界面时提示
@@ -3549,7 +3759,31 @@ export const useAIStore = create<AIStore>()(
         void get().spawnAdventure(`往前走了约 ${h} 个时辰`);
       },
 
-      spawnAdventure: async (reason, spotInput) => {
+      ensureMonthlyAdventure: () => {
+        const st = get();
+        const gs = useGameStore.getState();
+        const now = gs.currentTime;
+        const today = daySerial(now);
+        // 本月头一日到眼下：已开出一处非任务奇遇便算数了
+        const monthStart = daySerial({ ...now, day: 1 });
+        const hasThisMonth = (Array.isArray(gs.adventures) ? gs.adventures : []).some(
+          (a) => !a?.questId && Number(a?.day) >= monthStart && Number(a?.day) <= today,
+        );
+        if (hasThisMonth) return;
+        // 没有通灵接口便编不出奇遇；等配好接口，下一天再试
+        if (!aiReady(st.settings)) return;
+        if (st.adventure.active || st.adventure.busy) return;
+        if (st.conversation.stage === "flash" || st.conversation.stage === "pro") return;
+        // 开局那一轮还没落定，先不动，免得与开局那一处撞在一起
+        if (st.conversation.turns.length === 0) return;
+        // 一日至多试一回，免得一个时辰接一个时辰地白等
+        const dayKey = gameDateKey(now);
+        if (lastMonthlyAdventureTry === dayKey) return;
+        lastMonthlyAdventureTry = dayKey;
+        void get().spawnAdventure("按月例行的一处奇遇", undefined, { force: true });
+      },
+
+      spawnAdventure: async (reason, spotInput, opts) => {
         const { settings } = get();
         const gs = useGameStore.getState();
         const today = daySerial(gs.currentTime);
@@ -3561,10 +3795,14 @@ export const useAIStore = create<AIStore>()(
         }
 
         const explicit = !!spotInput;
-        // 现点的那一处不再受数目上限约束；随手掷的仍守着上限
-        if (!explicit && openAdventures(gs).length >= ADVENTURE_OPEN_MAX) return;
+        // 现点的那一处不再受数目上限约束；按月保底的那一处也不受此限，随手掷的仍守着上限
+        if (!explicit && !opts?.force && openAdventures(gs).length >= ADVENTURE_OPEN_MAX) return;
 
-        const spot = spotInput ?? pickAdventureSpotNear(gs, gs.currentPlaceId);
+        // 近处没有空位时，保底的那一处退而任取舆图上一处空位，不叫这一月空着
+        const spot =
+          spotInput ??
+          pickAdventureSpotNear(gs, gs.currentPlaceId) ??
+          (opts?.force ? pickAdventureSpot(gs) : undefined);
         if (!spot) {
           if (explicit) useGameStore.getState().addLog("这一处点位不在舆图上。");
           return;
@@ -3638,6 +3876,13 @@ export const useAIStore = create<AIStore>()(
           return;
         }
 
+        // 这一处先前进过：把说过的话原样摆回来，不再重写一遍
+        const journal: AdventureLine[] = Array.isArray(adv.journal) ? adv.journal : [];
+        if (journal.length > 0) {
+          set({ adventure: restoreAdventureState(adv, false) });
+          return;
+        }
+
         set(() => ({
           adventure: {
             ...INITIAL_ADVENTURE,
@@ -3663,6 +3908,10 @@ export const useAIStore = create<AIStore>()(
         const signal = abortController.signal;
         const brief = buildEventBrief(gs as unknown as GameState, gs.hereLabel());
 
+        const persist = (lines: AdventureLine[], choices: AdventureChoice[]) => {
+          useGameStore.getState().patchAdventure(adv.id, { journal: lines, choices });
+        };
+
         try {
           const raw = await chatWithModel(
             settings,
@@ -3671,18 +3920,39 @@ export const useAIStore = create<AIStore>()(
             { timeoutMs: 120000, signal, retries: 1 },
           );
           if (signal.aborted) return;
-          const opening = raw.trim();
+          const split = parseAdventureChoices(raw);
+          const opening = split.body;
           if (!opening) throw new Error("这一段没写出来。");
-          set((s) => ({ adventure: { ...s.adventure, busy: false, opening, errorMsg: "" } }));
+          set((s) => ({ adventure: { ...s.adventure, busy: false, opening, choices: split.choices, errorMsg: "" } }));
+          // 先落一版：万一下头取账被截断，收起窗后这一写仍在
+          persist([{ role: "event", content: opening }], split.choices);
           // 这一处生出的数据变动照旧落账，落完把变化挂到开头那一段上
           const ops = await extractEventOps(settings, opening, signal);
-          if (ops.length > 0) set((s) => ({ adventure: { ...s.adventure, openingOps: ops } }));
+          if (signal.aborted) return;
+          if (ops.length > 0) {
+            set((s) => ({ adventure: { ...s.adventure, openingOps: ops } }));
+            persist([{ role: "event", content: opening, ops }], split.choices);
+          }
         } catch (e) {
           if (signal.aborted) return;
           set((s) => ({
             adventure: { ...s.adventure, busy: false, errorMsg: (e as Error)?.message || "这一段没写出来。" },
           }));
         }
+      },
+
+      readAdventure: (id) => {
+        const gs = useGameStore.getState();
+        const adv = (gs.adventures || []).find((a) => a.id === id);
+        if (!adv) return;
+        const journal: AdventureLine[] = Array.isArray(adv.journal) ? adv.journal : [];
+        if (journal.length === 0) {
+          gs.addLog(`「${adv.name}」那处没留下什么话，无可回看。`);
+          return;
+        }
+        abortController?.abort();
+        abortController = null;
+        set({ adventure: restoreAdventureState(adv, true) });
       },
 
       replyAdventure: async (text) => {
@@ -3728,10 +3998,14 @@ export const useAIStore = create<AIStore>()(
           );
           if (signal.aborted) return;
 
-          const { passage, resolved, keep } = parseAdventureEnd(raw);
+          // 先摘下正文之后那一段选择，再摘收场记号
+          const split = parseAdventureChoices(raw);
+          const { passage, resolved, keep } = parseAdventureEnd(split.body);
           if (!passage) throw new Error("这一段没写出来。");
 
           const theirs: RandomEventTurn = { id: `adv-${Date.now()}-a`, role: "event", content: passage };
+          // 已了结的那一处不再列选择
+          const nextChoices = resolved ? [] : split.choices;
           set((s) => ({
             adventure: {
               ...s.adventure,
@@ -3740,18 +4014,30 @@ export const useAIStore = create<AIStore>()(
               resolved: s.adventure.resolved || resolved,
               keepAfter: keep || s.adventure.keepAfter,
               turns: [...s.adventure.turns, theirs],
+              choices: nextChoices,
             },
           }));
           if (resolved) useGameStore.getState().settleAdventure(adventure.id, keep);
+          // 把这一窗里说过的话收拢成一卷记到奇遇名下：收起窗后仍留着
+          const persist = () => {
+            const cur = get().adventure;
+            if (cur.id !== adventure.id) return;
+            useGameStore.getState().patchAdventure(adventure.id, {
+              journal: adventureJournalOf(cur),
+              choices: cur.choices,
+            });
+          };
+          persist();
           // 这一段落完账，把变化挂回这一段，末尾好列一笔
           const ops = await extractEventOps(settings, passage, signal);
-          if (ops.length > 0) {
+          if (ops.length > 0 && !signal.aborted) {
             set((s) => ({
               adventure: {
                 ...s.adventure,
                 turns: s.adventure.turns.map((t) => (t.id === theirs.id ? { ...t, ops } : t)),
               },
             }));
+            persist();
           }
         } catch (e) {
           if (signal.aborted) return;
@@ -3778,6 +4064,8 @@ export const useAIStore = create<AIStore>()(
           const adv = (gs.adventures || []).find((a) => a.id === adventure.id);
           const foe = adventureFoe(adv?.danger ?? 2, gs.player?.realmIndex ?? 0);
           const companions = (Array.isArray(gs.relations) ? gs.relations : []).filter((r) => r.traveling);
+          // 带伤上阵时，内伤一类状态压低了这一刻的气血上限
+          const playerMaxHp = effectiveHpMax(gs.player);
           // 收起这一窗，好让战场浮上来；这一处仍留在舆图上，打完可再来
           abortController?.abort();
           abortController = null;
@@ -3791,8 +4079,8 @@ export const useAIStore = create<AIStore>()(
                 name: gs.player?.name || "玩家",
                 type: "player",
                 position: { x: 5, y: 5 },
-                hp: gs.player?.hp,
-                maxHp: gs.player?.hpMax,
+                hp: Math.min(Number(gs.player?.hp) || 0, playerMaxHp),
+                maxHp: playerMaxHp,
                 mp: gs.player?.mp,
                 maxMp: gs.player?.mpMax,
               },
@@ -3821,11 +4109,25 @@ export const useAIStore = create<AIStore>()(
           return;
         }
 
+        const picked = adventure.choices.find((c) => c.act === action);
         const canned =
-          action === "explore"
+          picked?.text ||
+          (action === "explore"
             ? "我谨慎地四下查探，辨一辨这一处有什么门道、有什么凶险。"
-            : "我试着与这一处的人或物交涉，先问明根由，再作计较。";
+            : "我试着与这一处的人或物交涉，先问明根由，再作计较。");
         await get().replyAdventure(canned);
+      },
+
+      chooseAdventure: async (choice) => {
+        const { adventure } = get();
+        if (!adventure.active || adventure.busy || adventure.reading) return;
+        const act = choice?.act ?? "other";
+        // 抽身与出手仍走原来的路子：一个收窗、一个摆开战场
+        if (act === "leave") return get().actAdventure("leave");
+        if (act === "fight") return get().actAdventure("fight");
+        const text = String(choice?.text || "").trim();
+        if (!text) return;
+        await get().replyAdventure(text);
       },
 
       closeAdventure: () => {
@@ -4244,7 +4546,7 @@ ${CRAFT_MARK}
 ${craft ? 11 : 10}. 若话说到这里，接下来已不是席上几句能了结的——他要随你起身出门、上船启程、同去某处，或当场动起手来——就在回话的最后另起一行只写 ${STORY_MARK} 一句话写明玩家接下来做什么、往哪里去，如「随他起身往城南码头，登船离岸」。只是随口提及去处、人还没动身，就不要写这一行。
 ${craft ? 12 : 11}. ${isDining
                 ? `你若要替他叫一道菜做东，就在回话的最后另起一行只写 ${TREAT_MARK}。`
-                : ""}除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${craft ? `、${CRAFT_MARK}` : ""}${isDining ? `、${TREAT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记或系统提示，只输出对话内容`,
+                : ""}上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${craft ? `、${CRAFT_MARK}` : ""}${isDining ? `、${TREAT_MARK}` : ""} 这几行，格式须照要求写，别写岔了，也别另起别的记号。除此之外，这一席话里当真谈定了什么、给了他什么、受了伤、许下多少钱财货物、传了什么功法消息，只管照实说出口去，不必因为不在上面那几行之内就绕着不说——话里如实发生的事，系统自会照看落账。`,
           },
           {
             role: "user" as const,
@@ -4265,6 +4567,24 @@ ${craft ? 12 : 11}. ${isDining
               ),
             },
           }));
+        };
+
+        /**
+         * 一席话散了，把这一段里的实事照账落下：给出去的东西、许下的钱、动过的手，
+         * 都按分类表由路由认一遍，认得什么便落什么，不再因为「这是私聊」就一概不记。
+         */
+        const settleTalk = async (npcLine: string) => {
+          const text = `玩家：${content.trim()}\n${profile.name}：${npcLine}`;
+          if (!text.trim() || signal.aborted) return;
+          try {
+            const state = useGameStore.getState().getSnapshot() as unknown as GameState;
+            const extraction = await runOpsExtraction(settings, state, text, signal, { source: "npc" });
+            if (signal.aborted || extraction.ops.length === 0) return;
+            useGameStore.getState().applyOps(extraction.ops);
+            console.debug("[npcChat] 这一席落账", extraction.ops.length, "条");
+          } catch (e) {
+            if (!signal.aborted) console.warn("[npcChat] 这一席的数据结算未成:", e);
+          }
         };
 
         /**
@@ -4290,6 +4610,8 @@ ${craft ? 12 : 11}. ${isDining
             { id: `msg-${Date.now()}`, role: "npc", content: shown, timestamp: Date.now() },
             !!checkBox.check,
           );
+
+          await settleTalk(shown);
 
           if (cue) {
             handOffChatToNarration(profile.name, cue);
@@ -4341,6 +4663,7 @@ ${craft ? 12 : 11}. ${isDining
               },
               false,
             );
+            await settleTalk(follow.text);
             if (follow.cue) handOffChatToNarration(profile.name, follow.cue);
           } catch (e) {
             if (!signal.aborted) console.warn("[sendNPCMessage] 判定通过后的续话未成:", e);
@@ -4619,6 +4942,29 @@ ${craft ? 12 : 11}. ${isDining
         }));
         noteDown(party, { id: playerLine.id, role: "player", content: playerLine.content, timestamp: stamp });
 
+        /**
+         * 席间的实事照账落下：递出去的、许下的、说定的、恼了的，凡路由认得的都记。
+         * 一轮里只结这一回，各人说过的话一并递过去，免得一句一算。
+         */
+        let settledTo = transcript.length;
+        const settleRound = async () => {
+          const fresh = transcript.slice(settledTo).filter((m) => m.role !== "system");
+          settledTo = transcript.length;
+          const spokenRound = fresh.map((m) => `${m.speakerName}：${m.content}`).join("\n");
+          if (!spokenRound.trim()) return;
+          try {
+            const state = useGameStore.getState().getSnapshot() as unknown as GameState;
+            const extraction = await runOpsExtraction(settings, state, spokenRound, new AbortController().signal, {
+              source: "npc",
+            });
+            if (extraction.ops.length === 0) return;
+            useGameStore.getState().applyOps(extraction.ops);
+            console.debug("[npcChat] 这一席落账", extraction.ops.length, "条");
+          } catch (e) {
+            console.warn("[npcChat] 这一席的数据结算未成:", e);
+          }
+        };
+
         const cityName = getMarker(gs.currentPlaceId)?.name ?? "未知之地";
         const locationName = LOCATIONS.find((l) => l.id === gs.currentLocation)?.name ?? gs.currentLocation;
         const timeStr = formatGameTime(gs.currentTime);
@@ -4706,7 +5052,7 @@ ${CRAFT_MARK}
 <<<END>>>
 ` : ""}
 7. 若话说到这里，接下来已不是席上几句能了结的——众人要起身出门、上船启程、同去某处——就在回话的最后另起一行只写 ${STORY_MARK} 一句话写明接下来做什么、往哪里去。只是随口提及去处、人还没动身，就不要写这一行。
-8. 除上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${profile.scene?.craft ? `、${CRAFT_MARK}` : ""} 这几行以外，不要输出任何数据操作标记，只输出你要说的这段话`,
+8. 上面点名的 ${CHECK_MARK}、${QUEST_MARK}、${SETTLE_MARK}、${PACT_MARK}、${STORY_MARK}${profile.scene?.craft ? `、${CRAFT_MARK}` : ""} 这几行，格式须照要求写，别写岔了，也别另起别的记号。除此之外，席间当真说定了什么、递了什么东西、动了气伤了谁、许下多少钱财货物，只管照实说出口去，不必绕着不说——话里如实发生的事，系统自会照看落账`,
               },
             ];
 
@@ -4737,6 +5083,7 @@ ${CRAFT_MARK}
             noteDown([member.id], { id: line.id, role: "npc", content: shown, timestamp: line.timestamp });
 
             if (cue) {
+              await settleRound();
               handOffChatToNarration(profile.name, cue);
               return;
             }
@@ -4792,6 +5139,7 @@ ${CRAFT_MARK}
                     timestamp: followLine.timestamp,
                   });
                   if (follow.cue) {
+                    await settleRound();
                     handOffChatToNarration(profile.name, follow.cue);
                     return;
                   }
@@ -4801,6 +5149,8 @@ ${CRAFT_MARK}
               }
             }
           }
+          // 这一席说完了，把席间散落的事照账落下
+          await settleRound();
         } catch (e) {
           set((st) => ({ npcChat: { ...st.npcChat, errorMsg: (e as Error).message } }));
         } finally {
@@ -5437,6 +5787,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         const kind: "sect" | "city" | "village" =
           role === "defender" ? "sect" : brief.targetKind ?? "sect";
         const player = game.player;
+        // 内伤一类状态压低了此刻的气血上限，山门战里也照这个数排阵
+        const playerMaxHp = effectiveHpMax(player);
         const companions = game.relations.filter((r) => r.traveling);
         const beast = game.beast;
 
@@ -5469,8 +5821,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             name: player.name || "玩家",
             type: "player",
             position: { x: 5, y: 5 },
-            hp: player.hp,
-            maxHp: player.hpMax,
+            hp: Math.min(player.hp, playerMaxHp),
+            maxHp: playerMaxHp,
             mp: player.mp,
             maxMp: player.mpMax,
           },
@@ -5645,6 +5997,11 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         const playerId =
           battleState.map.entities.find((e) => e.type === "player")?.id ?? "player";
         const playerEntity = battleState.map.entities.find((e) => e.id === playerId);
+        // 气血上限照开战那一刻算：内伤一类状态已压过一道，战斗里再散也不中途反弹
+        const battleMaxHp = Math.max(
+          1,
+          Math.trunc(Number(playerEntity?.maxHp) || effectiveHpMax(player)),
+        );
 
         // 第一步：请模型把这一句行动读懂——使哪一招、打谁、往哪儿挪。只解析参数，不碰数值
         let intent: BattleIntent = {
@@ -5666,8 +6023,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
                 name: player.name,
                 x: playerEntity?.position.x ?? 0,
                 y: playerEntity?.position.y ?? 0,
-                hp: player.hp,
-                maxHp: player.hpMax,
+                hp: Math.min(player.hp, battleMaxHp),
+                maxHp: battleMaxHp,
                 mp: player.mp,
                 maxMp: player.mpMax,
               },
@@ -5703,8 +6060,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         const actor: CombatActor = {
           realmIndex: player.realmIndex,
           cultivation: player.cultivation,
-          hp: player.hp,
-          maxHp: player.hpMax,
+          hp: Math.min(player.hp, battleMaxHp),
+          maxHp: battleMaxHp,
           mp: player.mp,
           maxMp: player.mpMax,
           stats: {
@@ -5810,7 +6167,7 @@ ${PROSE_STYLE}
 当前战斗状态：
 - 回合：${battleState.round}
 - 当前行动方：${battleState.turn}
-- 玩家状态：气血=${player.hp}/${player.hpMax}，灵力=${player.mp}/${player.mpMax}
+- 玩家状态：气血=${Math.min(player.hp, battleMaxHp)}/${battleMaxHp}，灵力=${player.mp}/${player.mpMax}
 - 玩家属性：体魄=${player.stats.vitality}，神魂=${player.stats.soul}，悟性=${player.stats.wisdom}，身法=${player.stats.agility}
 - 玩家境界：${player.cultivation}
 - 玩家法宝：${playerWeapons.map((w) => `${w.name}(${w.grade})`).join(", ") || "无"}
@@ -5882,6 +6239,13 @@ MODIFY player.mp - 10
             useGameStore.getState().applyOps(modelOps);
           }
 
+          // OPS 块之外，叙事里另有的实事也经路由认一遍：得的东西、结的仇、损的法器
+          await settleBattleNarrative(settings, parsed.narrative, {
+            mpSpent: local.mpSpent,
+            mpRestored: local.mpRestored,
+            hpSpent: local.hpSpent,
+          });
+
           // 走位、别处的增减听模型的；凡本地判定定下的那几位，气血与位次以本地为准
           const mergedEntities = mergeBattleEntities(
             local.entities,
@@ -5944,6 +6308,13 @@ MODIFY player.mp - 10
               if (modelOps.length > 0) {
                 useGameStore.getState().applyOps(modelOps);
               }
+
+              // 同主力模型那条路：叙事里另有的实事也经路由认一遍
+              await settleBattleNarrative(settings, parsed.narrative, {
+                mpSpent: local.mpSpent,
+                mpRestored: local.mpRestored,
+                hpSpent: local.hpSpent,
+              });
 
               // 同主力模型那条路：本地判定定下的那几位，气血与位次以本地为准
               const mergedEntities = mergeBattleEntities(

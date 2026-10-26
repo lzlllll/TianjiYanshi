@@ -188,13 +188,14 @@ export function emptyPlot(input: { place: string; cityId?: string; districtId?: 
 /**
  * 现成买下的宅院：院中已有一间正房居中，左右各一间厢房。
  * 空地上起屋是另一回事——那种宅地买来时仍是荒地。
+ * 三间一律朝左（调转朝向），入院即见门面朝同一侧，不显凌乱。
  */
 export function readyBuiltPlot(input: { place: string; cityId?: string; districtId?: number }): ManorPlot {
   const plot = emptyPlot(input);
   const mid = Math.floor(MANOR_GRID / 2);
   const center = mid * MANOR_GRID + mid;
-  plot.cells[center] = { shape: "正房", level: 1, facing: 0 };
-  plot.cells[center - 1] = { shape: "厢房", level: 1, facing: 0 };
-  plot.cells[center + 1] = { shape: "厢房", level: 1, facing: 0 };
+  plot.cells[center] = { shape: "正房", level: 1, facing: 1 };
+  plot.cells[center - 1] = { shape: "厢房", level: 1, facing: 1 };
+  plot.cells[center + 1] = { shape: "厢房", level: 1, facing: 1 };
   return plot;
 }

@@ -17,6 +17,13 @@ release
 # 本地测试与浏览器缓存产物
 .playtest/
 .ab/
+.ab-profile/
+.abhome/
+
+# 打包用的 electron 解压副本与缓存，体积大且可再生成
+electron-dist/
+.cache-local/
+.backup/
 
 # 额度结算服务的运行期账本
 server/data/

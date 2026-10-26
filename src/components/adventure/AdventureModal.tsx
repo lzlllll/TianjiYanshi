@@ -4,6 +4,7 @@ import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { ChangeNotice } from "@/components/ui/ChangeNotice";
 import { adventureWhere, dangerLabel } from "@/data/adventures";
+import type { AdventureChoice } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Loader2, Send, Swords } from "lucide-react";
 
@@ -14,14 +15,18 @@ import { AlertTriangle, Loader2, Send, Swords } from "lucide-react";
  * 交互有两路——几句话问明白（文字往来），或从旁使一个手段（探查、交涉、出手）。
  * 这里的得失都照算：正文里写下的赏罚经结算落到身上，模型点明了结之后，
  * 这一处或撤去、或留在此处，视它的性质而定。
+ *
+ * 说过的话会记在奇遇名下，收起这一窗之后再点开，仍是先前那些话，接着往下写。
  */
 export function AdventureModal() {
   const adventure = useAIStore((s) => s.adventure);
   const replyAdventure = useAIStore((s) => s.replyAdventure);
   const actAdventure = useAIStore((s) => s.actAdventure);
+  const chooseAdventure = useAIStore((s) => s.chooseAdventure);
   const closeAdventure = useAIStore((s) => s.closeAdventure);
   const currentPlaceId = useGameStore((s) => s.currentPlaceId);
   const adventures = useGameStore((s) => s.adventures);
+  const removeAdventure = useGameStore((s) => s.removeAdventure);
 
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -56,11 +61,18 @@ export function AdventureModal() {
     }
   };
 
-  const acts: { id: "explore" | "parley" | "fight"; label: string }[] = [
+  // 模型没拟出选择时，退回原先那三个老手段
+  const fallbackActs: { id: "explore" | "parley" | "fight"; label: string }[] = [
     { id: "explore", label: "四下探查" },
     { id: "parley", label: "出言交涉" },
     { id: "fight", label: "出手相搏" },
   ];
+  const choices: AdventureChoice[] = adventure.choices;
+
+  const handleRemove = () => {
+    if (!found) return;
+    removeAdventure(found.id);
+  };
 
   return (
     <div className="fixed inset-0 z-[65] flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -79,18 +91,30 @@ export function AdventureModal() {
               <h2 className="font-brush text-xl tracking-widest text-gold-400">{adventure.title || "奇遇"}</h2>
               <p className="mt-0.5 font-serif text-xs text-paper-400">
                 {found ? `${found.kind} · 凶险${dangerLabel(found.danger)} · 在${adventureWhere(found)}` : ""}
-                {adventure.resolved ? "　·　这一处已了结" : ""}
+                {found?.status === "done" ? "　·　这一处已了结" : ""}
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={closeAdventure}
-            className="rounded border-2 border-paper-400 px-3 py-1 font-serif text-xs text-paper-300 transition hover:border-gold-400 hover:text-paper-50"
-          >
-            收起
-          </button>
+          <div className="flex items-center gap-2">
+            {found && found.status === "done" && (
+              <button
+                type="button"
+                onClick={handleRemove}
+                title="把这一处从舆图上抹去"
+                className="rounded border-2 border-cinnabar-500/45 px-3 py-1 font-serif text-xs text-cinnabar-300 transition hover:border-cinnabar-400 hover:text-cinnabar-200"
+              >
+                抹去
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={closeAdventure}
+              className="rounded border-2 border-paper-400 px-3 py-1 font-serif text-xs text-paper-300 transition hover:border-gold-400 hover:text-paper-50"
+            >
+              收起
+            </button>
+          </div>
         </div>
 
         {adventure.errorMsg && (
@@ -160,32 +184,80 @@ export function AdventureModal() {
         </div>
 
         <div className="sticky bottom-0 border-t border-gold-500/20 bg-ink-800/95 px-6 py-4 backdrop-blur">
-          {adventure.resolved ? (
-            <p className="font-serif text-xs text-paper-400/60">
-              这一处已经了结。收起后，它{found?.persistent ? "仍在舆图上，日后再来仍有戏" : "便从舆图上撤去"}。
-            </p>
+          {adventure.reading ? (
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-serif text-xs text-paper-400/60">
+                这一处已经了结，只剩先前那些话可看。
+              </p>
+              {found && (
+                <button
+                  type="button"
+                  onClick={handleRemove}
+                  className="shrink-0 rounded border border-cinnabar-500/45 px-3 py-1 font-serif text-xs text-cinnabar-300 transition hover:bg-cinnabar-500/15 hover:text-cinnabar-200"
+                >
+                  抹去此处
+                </button>
+              )}
+            </div>
+          ) : adventure.resolved ? (
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-serif text-xs text-paper-400/60">
+                这一处已经了结。收起后，它{found?.persistent ? "仍在舆图上，日后再来仍有戏" : "便从舆图上撤去"}。
+              </p>
+              {found && (
+                <button
+                  type="button"
+                  onClick={handleRemove}
+                  className="shrink-0 rounded border border-cinnabar-500/45 px-3 py-1 font-serif text-xs text-cinnabar-300 transition hover:bg-cinnabar-500/15 hover:text-cinnabar-200"
+                >
+                  抹去此处
+                </button>
+              )}
+            </div>
           ) : (
             <>
               <div className="mb-3 flex flex-wrap gap-2">
-                {acts.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    disabled={busy || !adventure.opening}
-                    onClick={() => void actAdventure(a.id)}
-                    className={cn(
-                      "flex items-center gap-1.5 rounded border px-3 py-1 font-serif text-xs transition",
-                      busy || !adventure.opening
-                        ? "border-paper-400/15 text-paper-400/40"
-                        : a.id === "fight"
-                          ? "border-cinnabar-500/45 bg-cinnabar-500/15 text-cinnabar-300 hover:bg-cinnabar-500/25"
-                          : "border-gold-500/35 bg-gold-500/10 text-gold-300 hover:bg-gold-500/20",
-                    )}
-                  >
-                    {a.id === "fight" && <Swords size={12} />}
-                    {a.label}
-                  </button>
-                ))}
+                {choices.length > 0
+                  ? choices.map((c, i) => (
+                      <button
+                        key={`${c.act}-${i}`}
+                        type="button"
+                        disabled={busy || !adventure.opening}
+                        onClick={() => void chooseAdventure(c)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded border px-3 py-1 font-serif text-xs transition",
+                          busy || !adventure.opening
+                            ? "border-paper-400/15 text-paper-400/40"
+                            : c.act === "fight"
+                              ? "border-cinnabar-500/45 bg-cinnabar-500/15 text-cinnabar-300 hover:bg-cinnabar-500/25"
+                              : c.act === "leave"
+                                ? "border-paper-400/25 text-paper-400/80 hover:bg-paper-400/10"
+                                : "border-gold-500/35 bg-gold-500/10 text-gold-300 hover:bg-gold-500/20",
+                        )}
+                      >
+                        {c.act === "fight" && <Swords size={12} />}
+                        {c.text}
+                      </button>
+                    ))
+                  : fallbackActs.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        disabled={busy || !adventure.opening}
+                        onClick={() => void actAdventure(a.id)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded border px-3 py-1 font-serif text-xs transition",
+                          busy || !adventure.opening
+                            ? "border-paper-400/15 text-paper-400/40"
+                            : a.id === "fight"
+                              ? "border-cinnabar-500/45 bg-cinnabar-500/15 text-cinnabar-300 hover:bg-cinnabar-500/25"
+                              : "border-gold-500/35 bg-gold-500/10 text-gold-300 hover:bg-gold-500/20",
+                        )}
+                      >
+                        {a.id === "fight" && <Swords size={12} />}
+                        {a.label}
+                      </button>
+                    ))}
                 <button
                   type="button"
                   onClick={closeAdventure}

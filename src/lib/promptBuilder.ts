@@ -16,6 +16,7 @@ import { buffCatalogBrief } from "@/data/buffs";
 import { sectModifierBrief } from "@/data/sectModifiers";
 import { climateAggression } from "@/data/sects";
 import { PLAYER_SHOP_KINDS } from "@/data/playerShops";
+import { buildCatalogText, buildWritableHint } from "@/data/dataCatalog";
 import {
   OPENING_GAME_TIME,
   SHICHEN_NAMES,
@@ -125,6 +126,8 @@ export function buildDataSchema(state: GameState): string {
   const lines: string[] = [];
   lines.push(`player.name = ${p.name || ""}`);
   lines.push(`player.title = ${p.title || ""}`);
+  // 性别是开局就定死的一桩，务必每轮都摆出来，免得叙事把它写反、写成另一个人
+  lines.push(`player.gender = ${p.gender === "female" ? "女" : "男"}（既定之数，不得改动）`);
   lines.push(`player.realm = ${REALM_NAMES[p.realmIndex] ?? "未知"} (realmIndex=${p.realmIndex}, stage=${p.realmStage})`);
   // 修炼的算法摆在这儿：每时辰多少、离下一境还差多少
   const realmIdx = Math.max(0, Number(p.realmIndex) || 0);
@@ -284,11 +287,13 @@ export function buildDataSchema(state: GameState): string {
     const where =
       q.realmGoal !== undefined
         ? `修到${REALM_NAMES[q.realmGoal] ?? "某境"}`
-        : q.itemGoal
-          ? `寻得${q.itemGoal.name}×${q.itemGoal.count}`
-          : q.stoneGoal
-            ? `凑足${q.stoneGoal}下品灵石`
-            : q.place || "去处未定";
+        : q.kind === "人物物品" && q.itemGoal
+          ? `带${q.itemGoal.name}×${q.itemGoal.count}交到${q.target?.person || "某人"}手上`
+          : q.itemGoal
+            ? `寻得${q.itemGoal.name}×${q.itemGoal.count}`
+            : q.stoneGoal
+              ? `凑足${q.stoneGoal}下品灵石`
+              : q.place || "去处未定";
     lines.push(
       `quests[${q.id}] = ${q.name}【${q.kind ?? "事件"}】（${q.status === "open" ? "在办" : q.status === "done" ? "已了" : "已误"}） ${where} ${left} 托自${q.giver || "无名"} 交差：${q.condition || "未写明"} 酬：${reward} 罚：${penalty}${q.outcome ? ` 结果：${q.outcome}` : ""}`,
     );
@@ -510,31 +515,42 @@ function relationTypeLabel(t: string): string {
   )[t] ?? t;
 }
 
-/** flash 提示：判断决策涉及的数据路径 + 是否涉及炼丹/画符，要求 JSON 输出 */
-export function buildFlashPrompt(decision: string, schema: string): ChatMessage[] {
+/**
+ * flash 提示：判断这段叙事/对话涉及哪些数据，并圈定这一段可能写到哪些数据。
+ * 读（paths）与写（writable）分开报：读的喂给正文，写的交给落账判权。
+ */
+export function buildFlashPrompt(decision: string, schema: string, catalog?: string): ChatMessage[] {
+  const catalogBlock = catalog ? `\n\n【可改数据分类表】\n${catalog}` : "";
   return [
     {
       role: "system",
-      content: `你是修仙文字游戏的数据判断助手。给定玩家决策与全部数据路径摘要，判断此次决策涉及的数据。
+      content: `你是修仙文字游戏的数据判断助手。给定玩家决策、全部数据路径摘要与可改数据分类表，判断此次决策涉及的数据。
 
 必须只输出一个 JSON 对象，不要输出解释、注释或代码围栏：
 {
   "crafting": "none",
-  "paths": ["player.cultivation", "inventory"]
+  "paths": ["player.cultivation", "inventory"],
+  "writable": ["player.cultivation", "inventory"]
 }
 
 【crafting 规则】
 - 仅当决策明确包含"开炉炼丹""炼制丹药""画符""绘制符箓"等百艺制作行为时，填 "alchemy" 或 "talisman"
 - 玩家只是"服用丹药""使用符箓""查看丹药"等使用或查看行为，一律填 "none"
 
-【paths 规则】
-- 从数据路径摘要中原样复制本次决策会读取或修改的路径，每项一个字符串
+【paths 规则】（读）
+- 从数据路径摘要中原样复制本次决策会读取的路径，每项一个字符串
 - 路径可以是字段（如 player.cultivation）、数组元素（如 techniques[t1].proficiency）或集合名（如 inventory、relations、sect.tasks）
-- 不得编造摘要中不存在的路径；无涉及时输出空数组`,
+- 不得编造摘要中不存在的路径；无涉及时输出空数组
+
+【writable 规则】（写）
+- 从可改数据分类表中原样复制本段叙事/对话**可能改动**的数据路径
+- 步子别迈小了：玩家说话、办事、交战、赶路、修炼、议价、结交、拆建、传信，凡落在哪一域，就把那一域的路径圈进来
+- 宁宽勿窄。多圈几条不碍事，圈漏了才会让真实发生的变化落不了账
+- 同样不得编造分类表以外的路径；实在看不出来时输出空数组，落账那边仍会照全局分类表处理`,
     },
     {
       role: "user",
-      content: `【玩家决策】\n${decision}\n\n【全部数据路径摘要】\n${schema}\n\n请输出 JSON：`,
+      content: `【玩家决策】\n${decision}\n\n【全部数据路径摘要】\n${schema}${catalogBlock}\n\n请输出 JSON：`,
     },
   ];
 }
@@ -542,7 +558,10 @@ export function buildFlashPrompt(decision: string, schema: string): ChatMessage[
 /** 解析 flash 判断结果 */
 export interface FlashDecision {
   crafting: "alchemy" | "talisman" | null;
+  /** 本回合要读的数据 */
   paths: string[];
+  /** 本回合叙事可能写的数据；旧格式缺失时退化为 paths */
+  writable: string[];
 }
 
 /** 解析 flash 输出的 JSON 判断结果，兼容旧的纯文本格式 */
@@ -558,11 +577,18 @@ export function parseFlashDecision(raw: string): FlashDecision {
       ? rawPaths.map((p: any) => String(p).trim()).filter(Boolean).slice(0, 60)
       : [];
 
-    return { crafting, paths };
+    // 旧格式只报 paths：那时 paths 兼具读写两种用途，便顺着当 writable 用
+    const rawWritable = (parsed as any).writable;
+    const writable = Array.isArray(rawWritable)
+      ? rawWritable.map((p: any) => String(p).trim()).filter(Boolean).slice(0, 80)
+      : paths;
+
+    return { crafting, paths, writable };
   }
 
   // 回退：兼容旧的分行文本格式
-  return { crafting: parseFlashCraftingText(raw), paths: parseFlashPathsText(raw) };
+  const textPaths = parseFlashPathsText(raw);
+  return { crafting: parseFlashCraftingText(raw), paths: textPaths, writable: textPaths };
 }
 
 /** 解析旧文本格式的 CRAFTING 标记 */
@@ -851,6 +877,10 @@ export function buildProPrompt(params: {
 }): ChatMessage[] {
   const { state, summary, recentTurns, decision, relevantData, chatSummary, craftingResult, customPrompt, opening } = params;
   const realm = REALM_NAMES[state.player.realmIndex] ?? "未知";
+  // 性别是开局定下的，人称、相貌、旁人称呼都要照它落笔，不许由着文气改换
+  const isFemale = state.player.gender === "female";
+  const genderText = isFemale ? "女" : "男";
+  const pronoun = isFemale ? "她" : "他";
   const location = LOCATION_INFO[state.currentLocation] || { name: "未知场所", allowed: "所有行为", forbidden: "无" };
   const place = getMarker(state.currentPlaceId);
   const placeName = place?.name ?? "未知之地";
@@ -885,19 +915,36 @@ export function buildProPrompt(params: {
     : "";
 
   const system = `
-#你是一部古风修仙文字游戏的叙事引擎。以第三人称叙述玩家的修真经历——行文称其姓名或称号，需要时以「他」「她」代指，全篇人称如一。文笔古雅、意象丰沛、节奏紧凑，单次叙事正文 600 至 1000 字，最多不超过 1200 字。
+#你是一部古风修仙文字游戏的叙事引擎。以第三人称叙述玩家的修真经历——行文称其姓名或称号，需要时以「${pronoun}」代指，全篇人称如一。玩家是${genderText}子，相貌、体态、衣着、旁人的称呼与礼数皆须照此落笔，不得写成另一种。文笔古雅、意象丰沛、节奏紧凑，单次叙事正文 600 至 1000 字，最多不超过 1200 字。
 ## 一、AI行为准则
 - 扮演开放世界沙盒，禁止AI语气，关闭中立模式
 - 严守修仙设定（修炼体系、天道规则、灵气环境）
 - 主动推演剧情，动态生成事件/机遇/后果
 - 使用小说式叙述，感官化描写，文风古典仙侠可略带白话
-【输出格式 — 只输出正文】
-- 你的回复必须是纯粹的叙事正文，不要输出任何数据操作、JSON、字段名、代码块或标记符号
-- 正文中严禁出现 <<< >>> 之类的标记字样，也不要写"系统提示""数据变化""参数"等出戏内容
-- 不要写标题、前言、总结或对玩家的点评，直接开始叙事
-- ${opening
-    ? "开篇这一轮只立人物、铺世界，不得写成你来我往的逐回合交锋，也不得输出任何标记"
-    : `唯一例外：若本轮叙事发展为需要你来我往、逐回合交锋的正面战斗，在正文写完之后另起一行，单独输出一行 <<<MODE>>>{"mode":"battle","enemies":[{"name":"对手名号","realm":"炼气中期","count":1,"desc":"一句长相或来路"}]}<<<END>>>——enemies 写清这一场都有谁：name 写名号或称谓（如「黑风寨三当家」「灰袍道人」），不要写「敌人」「对手」这类泛称；realm 写其境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘，再加初期、中期、后期、圆满），拿不准便照与玩家相仿写；count 是同一模样的人数，1 到 4；desc 一句长相或来路，可省。人数与强弱须与正文所写相合：正文写三五人围上来，enemies 便要有三五个；正文写对方是筑基修士，realm 便写筑基某期；若与尘缘里认得的人交手，name 须与其中的人名一字不差。玩家没有主动招惹（不曾挑衅、挑斗、闯入他人门户、行凶夺物）时，单个对手的境界不得高过玩家一个大境界——玩家炼气，对手至多筑基；enemies 的总人数也不得成倍压过玩家，寻常拦路寻衅的不过一两人，须留出能打、能退的余地，不可动辄摆出必败之局。玩家自己上门挑衅、以卵击石时，才可照剧情写出更强的对手。玩家有同行或灵兽在侧时，对手的人数与强弱照这一伙人的合力斟酌。整场交锋的强弱须与玩家的境界、功法与法宝相称，赏罚与战利品也照这个分寸给，不可为求惊险而失衡。若是玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门，则改在正文写完之后另起一行输出一行 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>——role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。若本轮叙事发展为一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价），则在正文写完之后另起一行输出一行 <<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名","itemType":"买的是哪一类"}<<<END>>>——mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；itemType 只在买时写，取 材料、丹药、符箓、法宝、灵兽、杂物 之一，买的是活的灵兽便写「灵兽」；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。若本轮叙事发展为玩家动身前往某家铺面买或卖（走进铺子去挑货、出货），则在正文写完之后另起一行输出一行 <<<SHOP>>>{"shop":"铺子名"}<<<END>>>——shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。若本轮叙事里有人（须是摘要中 relations 里认得的人）当面与玩家搭话、话头正等玩家来接，便在正文写完之后另起一行输出一行 <<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>——npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。战斗标记（battle／SECTWAR 二择其一）、讲价标记、铺面标记与对谈标记不可同时出现；除这几行之外不得出现任何标记`}
+【输出格式】
+回复只含两块：正文在前，交付行在后。正文里不得出现 <<< >>> 标记、JSON、字段名、代码块，也不得写"系统提示""数据变化""参数"这类出戏字样，不写标题、前言、总结或对玩家的点评，直接起笔叙事。
+交付行只在正文当真写到下面某一种情形时才给，写在正文之后另起一行；五种至多取其一，①与②互斥，③④⑤彼此互斥。一种都没走到，正文之外一字不加。
+
+① 本轮转为需要你来我往、逐回合厮杀的正面交锋：
+<<<MODE>>>{"mode":"battle","enemies":[{"name":"对手名号","realm":"炼气中期","count":1,"desc":"一句长相或来路"}]}<<<END>>>
+enemies 写清这一场都有谁：name 写名号或称谓（如「黑风寨三当家」「灰袍道人」），不要写「敌人」「对手」这类泛称；realm 写其境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘，再加初期、中期、后期、圆满），拿不准便照与玩家相仿写；count 是同一模样的人数，1 到 4；desc 一句长相或来路，可省。人数与强弱须与正文所写相合：正文写三五人围上来，enemies 便要有三五个；正文写对方是筑基修士，realm 便写筑基某期；若与尘缘里认得的人交手，name 须与其中的人名一字不差。玩家没有主动招惹（不曾挑衅、挑斗、闯入他人门户、行凶夺物）时，单个对手的境界不得高过玩家一个大境界——玩家炼气，对手至多筑基；enemies 的总人数也不得成倍压过玩家，寻常拦路寻衅的不过一两人，须留出能打、能退的余地，不可动辄摆出必败之局。玩家自己上门挑衅、以卵击石时，才可照剧情写出更强的对手。玩家有同行或灵兽在侧时，对手的人数与强弱照这一伙人的合力斟酌。整场交锋的强弱须与玩家的境界、功法与法宝相称，赏罚与战利品也照这个分寸给，不可为求惊险而失衡。
+
+② 玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门：
+<<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>
+role 取 attacker 表示我方去攻，取 defender 表示本门遭人来攻；opponentName 攻宗门时取摘要中「江湖上的门派」里的名号，攻城取城池名，攻村取村名，我方被攻时写来犯那一处宗门。
+
+③ 本轮是一场当场讨价还价、值得玩家亲自出面还价的买卖（与市井摊贩、铺面掌柜或行商就某样货物、某件物什讲价）：
+<<<HAGGLE>>>{"mode":"buy 或 sell","subject":"货名或物名","count":件数,"basePrice":原价整数,"keeper":"对方姓名","shop":"铺子或去处名","itemType":"买的是哪一类"}<<<END>>>
+mode 取 buy 表示玩家要买、取 sell 表示玩家要卖；subject 买时写那件货的名目、卖时写行囊里那一样的名目；basePrice 买时写铺面标价、卖时写对方起初的出价；itemType 只在买时写，取 材料、丹药、符箓、法宝、灵兽、杂物 之一，买的是活的灵兽便写「灵兽」；keeper 须与摘要中 relations 里的人名一致，认不出人来就不要写这一行；一场寻常的买卖、或是玩家没打算还价的，不必写。
+
+④ 玩家动身前往某家铺面买或卖（走进铺子去挑货、出货）：
+<<<SHOP>>>{"shop":"铺子名"}<<<END>>>
+shop 须与摘要中「本城铺面」那一行里的名号一字不差；正文写到踏进门内即可，买卖的经过、价钱与得失都交给铺面界面由玩家自己经手，不要写。
+
+⑤ 摘要中 relations 里认得的人当面与玩家搭话，话头正等玩家来接：
+<<<CONVERSE>>>{"npc":"那人姓名"}<<<END>>>
+npc 须与摘要里 relations 的人名一字不差，且此人此刻就在玩家近前；只是路人随口插一句、或是玩家自个儿去与人搭话的，不必写这一行。
+${opening ? "开篇这一轮只立人物、铺世界，不得写成你来我往的逐回合交锋，故这一轮不得输出任何交付行。" : ""}
 
 ${PROSE_STYLE}
 【笔法】不做大段的解释与直接的心理独白，心境借行为与环境暗示；对话高度生活化，用来推动剧情、显露人情；环境描写要有用处，能带出时间与变化。
@@ -949,6 +996,10 @@ ${PROSE_STYLE}
 
   const user = `【当前时间】${formatGameTime(state.currentTime || OPENING_GAME_TIME)}
 
+【玩家姓名】${state.player.name || "（未定）"}${state.player.title ? `（${state.player.title}）` : ""}
+【玩家性别】${genderText}（既定之数，不得改动）
+【当前境界】${realm}
+
 【玩家身世背景】
 ${state.player.background || "（暂无记载）"}
 
@@ -978,8 +1029,12 @@ export function buildOpsExtractionPrompt(params: {
   state: GameState;
   craftingType?: "alchemy" | "talisman";
   craftingSummary?: string;
+  /** 本回合路由（flash）圈定的可写数据；只作引导，不作禁令 */
+  writable?: string[];
+  /** 这一段叙事的来源，便于模型判断该记什么 */
+  source?: "turn" | "npc" | "event" | "battle" | "crafting" | "opening";
 }): ChatMessage[] {
-  const { narrative, state, craftingType, craftingSummary } = params;
+  const { narrative, state, craftingType, craftingSummary, writable, source = "turn" } = params;
   const now = state.currentTime;
   // 机缘的期限、人物的固定出没都以日序记，模型得知道今天是第几日
   const todaySerial = daySerial(now || OPENING_GAME_TIME);
@@ -1027,23 +1082,42 @@ export function buildOpsExtractionPrompt(params: {
           .join("\n")
       : "";
 
+  const sourceNote =
+    source === "npc"
+      ? "这一段是与某人的当面交谈。交谈里许下的、给过的、说定的、恼了的，同样算数，照实落账。"
+      : source === "event"
+        ? "这一段是途中撞上的变故。变故里的伤、得的物、结下的人、改了的去向，照实落账。"
+        : source === "battle"
+          ? "这一段是一场交锋的经过。胜负、伤势、损耗、掉落的物事、结下的仇怨，照实落账。"
+          : source === "crafting"
+            ? "这一段是百艺制作的收尾。制作系统已当场结算过的材料、灵力与产物不要重复记，其余照实落账。"
+            : source === "opening"
+              ? "这一段是开局建档。此人此世的底子要一并立住：功法、财宝、尘缘、本事、来历、性情、形貌。"
+              : "这一段是本回合的正文。凡是正文里当真发生了的，都要落账。";
+
   const system = `你是修仙文字游戏的数据结算助手。请阅读一段叙事正文，对照当前游戏数据，输出本轮实际发生的数据变动。
 
-必须只输出一个 JSON 对象，不要输出解释、注释或代码围栏：
+必须只输出一个 JSON 对象，不要输出解释、注释或代码围栏。下面这一份只是格式示范，尖括号里是占位，须照本轮正文换成本轮的真事；字段名一个不许改，占位一个不许照抄：
 {
   "ops": [
-    { "kind": "modify", "path": "player.cultivation", "op": "+", "value": 50 },
-    { "kind": "modify", "path": "currentTime.hour", "op": "=", "value": "午时" },
-    { "kind": "add", "collection": "inventory", "payload": { "id": "i20", "name": "凝气丹", "type": "丹药", "grade": "凡品", "count": 1, "icon": "丹", "desc": "服之可凝练灵力" } },
-    { "kind": "delete", "collection": "inventory", "id": "i10" }
+    { "kind": "modify", "path": "<分类表里的路径，如 player.cultivation>", "op": "+", "value": <本轮实际数> },
+    { "kind": "modify", "path": "currentTime.hour", "op": "=", "value": "<十二时辰之一，如 午时>" },
+    { "kind": "add", "collection": "inventory", "payload": { "id": "<本局从未出现过的新号>", "name": "<本轮所得之物>", "type": "<材料/丹药/符箓/法宝/灵兽/杂物>", "grade": "<凡品/灵品/玄品/天品/仙品>", "count": <件数>, "icon": "<一字>", "desc": "<一句说明>" } },
+    { "kind": "delete", "collection": "inventory", "id": "<摘要里确有的条目 id>" }
   ],
-  "quickDecisions": ["前往坊市采买药材", "闭关参悟新得功法", "拜访师父请教疑难"]
+  "quickDecisions": ["<照本轮结局另拟，8-20字>", "<同上>", "<同上>"]
 }
+
+【本段来源】${sourceNote}
+
+${buildCatalogText()}
+
+${buildWritableHint(writable)}
 
 【ops 规则】
 - 只按上面这一种写法输出，别的写法一律不收：kind 只写 modify、add、delete、buy；modify 只带 kind、path、op、value 四个字段，add 只带 kind、collection、payload，delete 只带 kind、collection、id，buy 只带 kind、what、name、price、count、type、grade、desc、place。不许用 type、action、key、val、target、data 之类的别名，也不许在一条 op 里夹带说明字段。
-- modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
-- add：collection 只能取 inventory、log、techniques、relations、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sect.modifiers、sectSites、sectRelations、occupations、news.items、player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields、skills、checks、quests、pacts、adventures、manorPlots、shop.goods 之一；payload 为该条目的完整字段对象。集合名照这张单子照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会被当作越界丢掉；只有 player.meridians、player.stats.heartScores、player.timeline 这几项本就带 player. 前缀。
+- modify：path 须能对上【可改数据分类表】里的某一条，或数据摘要里已有的具体条目；认得准就照分类表的写法写，拿不准也别缩手，系统会照语义尽量归一。op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号。
+- add：凡分类表里的集合都可添，payload 为该条目的完整字段对象。集合名照分类表照抄，不要自作主张加 player. 前缀——写成 player.relations、player.inventory 这类会对不上；只有 player.meridians、player.stats.heartScores、player.timeline、player.buffs、player.shields 这几项本就带 player. 前缀。
 - 宅地：叙事中若确有一处产业落到玩家名下（受赠、置办、承继），可用 add manorPlots 给他一处宅地，payload 只需写 {"place":"地名"}；地块一律由空地起，屋里盖什么由玩家自己张罗。寻常的落脚、借宿不要立宅地。
 - 铺面添货：叙事里若给某家铺子调来了货、补了存货（新到一批药材、庄上送来新酒、行商送来紧俏物事），用 add shop.goods，payload 写 {"shop":"铺子名","goods":[{"name":"货名","price":单价下品灵石,"stock":存货数,"desc":"一句说明"}]}；铺子名须与摘要中「本城铺面」那一行的名号一字不差，已有的货便添存量，没有的便新上一样。玩家自己去铺子挑货、出货那一类买卖不要写这一条，那由铺面界面结算。
 - delete：用 collection 与 id 两个字段，id 必须是摘要中已存在的条目 id。
@@ -1053,8 +1127,8 @@ export function buildOpsExtractionPrompt(params: {
 1. 只输出叙事中确实发生的变化，没有发生就不要编造；本轮若无任何变化，ops 输出空数组。
 2. 数值幅度必须与叙事相符，不要夸大，也不要凭空赠送珍稀物品。
 3. 时间：每轮都要回传最新日期。正文里时间若确实走动，用 modify currentTime.year / currentTime.month / currentTime.day / currentTime.hour 把它写足：正文写「三日后」「过了半月」「闭关一月」这类跨度，须照上面给的今日日期折算成新的年月日一并写上，不能只改时辰；时辰字段只写十二时辰的名字，取 ${SHICHEN_NAMES.join("、")} 之一；时间没动就照原值再写一遍。当前时间：${formatGameTime(now)}。
-4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复；物品的 type 只取 材料、丹药、符箓、法宝、灵兽、杂物 之一——叙事里收服、买下一头活物，就用 add inventory 记下，type 写「灵兽」、name 写兽的名目，玩家往后可在灵兽栏把它收作随身；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
-5. 可修改的玩家字段：player.name、player.title、player.realmIndex、player.cultivation、player.hp、player.hpMax、player.mp、player.mpMax、player.spirit、player.spiritMax、player.lifespanCurrent、player.lifespanMax、player.body、player.fortune、player.karma、player.personality、player.description、player.background、player.spiritRoots.<元素>、player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。
+4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复——id 是条目唯一的标记：add 时自拟一个摘要里从未出现过的新号，delete 与 modify 里引用旧条目则须照摘要一字不差地抄，不许自拟；上面示例里的号只是占位，照抄便与旧条目撞车，会被当作重复条目丢掉。物品的 type 只取 材料、丹药、符箓、法宝、灵兽、杂物 之一——叙事里收服、买下一头活物，就用 add inventory 记下，type 写「灵兽」、name 写兽的名目，玩家往后可在灵兽栏把它收作随身；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
+5. 玩家自身：凡叙事里改动了玩家自身的数——名号、修为、气血、灵力、神念、寿元、资质、经脉、心性、履历、随身状态——照【可改数据分类表】里「玩家本体」那一域写，不必逐项报备，也不必因为某个字段没被点到就跳过。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。player.gender 是例外：性别是开局既定之数，摘要里写着什么便是什么，纵是叙事笔误写成另一种，也不得改写它。
 6. 新闻 news.items 仅在跨天时新增，同一天内不要重复生成；每条需含 category（官府公告/宗门布告/市井传言）、title、content、source 四个字段。
 7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。心法类可在 skills 里留一招以气血换灵力的招式，写明 hpCost 与 mpRestore；其余门类不写这两项。
 8. "服用丹药""使用符箓"只是消耗已有物品，如叙事中确有消耗，用 modify 扣减对应 inventory 条目的 count，不要用 add。
@@ -1070,12 +1144,13 @@ ${buffCatalogBrief()}
 15. 货物行情：正文中若出现某样货物因时局一时涨跌（漕路不通、战事吃紧、丰年跌价、瘟疫抢药），用 modify price.<货名> 记下，value 写成「幅度 天数」，如 "+30% 3天"、"-两成 五日"。货名只能是这些：${ALL_GOOD_NAMES.join("、")}；天数 1 到 30，幅度在 -80% 到 +200% 之间。同一样货再写一次即覆盖上一次的行情。寻常的讨价还价、铺面标价不必写这一条。
 16. 判定（硬规矩）：正文中凡涉及考校玩家见识与本事之处——知识问答、辨识真伪、鉴定旧物、辨药材、看品相、认路、看天时、听口音、解典籍掌故、修器物之类——一律用 add checks 掷一次骰子，每条 {"skill":"技能名","dc":难度,"context":"为什么考这一门"}，不得跳过，也不得由你自己判定成败。skill 优先取摘要中 skills 里最贴近的那一门；确无对应的，就照实写一门最贴切的（系统按零级算，成不成全看玩家的本事）。dc 取 ${DC_HINT}：寻常事取易，需些眼力取中，险要或精微处取难、极难。骰子与成败由系统掷定，你不要写 roll 与 success，正文里也不得替它宣布成败、把结果写死（莫写「他一眼认出」「他没看出什么」这类定论），只把该铺的场面铺开，成败留待下回照判定结果续写。口才、说服、谈判、寒暄一类不掷骰子，用正文直接写。同一件事只掷一次，不要反复掷。
 17. 判定改口：若正文中玩家把先前没看准的事掰了回来（翻书查证、找来行家印证、反复端详终于看出门道），用 modify check.<技能名> 记下，value 写「成」；若他撂开手认了栽，value 写「败」。只改最近一次还悬着的那条判定，没悬着的不要写。
-18. 机缘：正文或交谈里若有人托付、立约、许下报酬要办一件事，用 add quests 立一桩，每条 {"id","name","kind","desc","place","dueDay","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff"}。kind 必写，只取 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的一桩事，place 可省；地点是奔着某一处地方去的，place 须是本城或别城真有的去处，事就在那一处办、不必有固定的人；人物是奔着某个人去的，place 写那人的落脚处、也须是真有的去处，且定有那个人；修为是修到某一层境界便算办到的长期目标，place 可省、也不必有人，另写 realmGoal 为境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘 之一，再加 初期、中期、后期、圆满，如「炼气后期」），系统照境界表折成序号，玩家修到那一层便自行了结；物品是寻某一样东西，place 可省，另写 itemGoal 为 {"name":"物名","count":件数}，玩家行囊里凑齐了这些件便自行了结；灵石是凑某数灵石，place 可省，另写 stoneGoal 为整数，四等灵石按一比一百折成下品来算，攒够了便自行了结。name 不超过 10 字，说清是什么事；desc 写清来龙去脉；place 写去哪儿办，事件类、修为类、物品类与灵石类不限定地点可省；地点类与人物类的去处须是眼下真有的地方，可以是城内某条街区（如「长安·西市」）、某座山门里的某座建筑（写作「山门名·建筑名」，如「青云宗·炼丹房」）、舆图上某处奇遇的名目、或某座村庄的名目，这四样皆可；确要另起一处舆图上没有的，也可照剧情写一处城外的具体地方（如「城西三十里的废寺」），系统会在附近现开一处；能对上真有的去处时，仍先照真有的写；dueDay 写第几日截止，今日为第 ${todaySerial} 日，「三日后」就写 ${todaySerial + 3}，不限时则省略；giver 是托付人的名字，须与 relations 中的人名一致；condition 写玩家做到什么才算办成，修为类可写「修到炼气后期」，物品类可写「寻到青玉佩三枚」，灵石类可写「凑足三百下品灵石」。
+18. 机缘：正文或交谈里若有人托付、立约、许下报酬要办一件事，用 add quests 立一桩，每条 {"id","name","kind","desc","place","dueDay","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff","shop"}。kind 必写，只取 事件、地点、人物、人物物品、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的一桩事，place 可省；地点是奔着某一处地方去的，place 须是本城或别城真有的去处，事就在那一处办、不必有固定的人；人物是奔着某个人去的，place 写那人的落脚处、也须是真有的去处，且定有那个人；人物物品是既要寻到某样东西、又得亲手交到某个人手上，place 写那人的落脚处（须是真有的去处），itemGoal 写要交的物，系统会把那人钉在那一处，玩家须走到那人跟前、把东西交出去才算办成，只把东西攒在行囊里不算；修为是修到某一层境界便算办到的长期目标，place 可省、也不必有人，另写 realmGoal 为境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘 之一，再加 初期、中期、后期、圆满，如「炼气后期」），系统照境界表折成序号，玩家修到那一层便自行了结；物品是寻某一样东西，place 可省，另写 itemGoal 为 {"name":"物名","count":件数}，玩家行囊里凑齐了这些件便自行了结；灵石是凑某数灵石，place 可省，另写 stoneGoal 为整数，四等灵石按一比一百折成下品来算，攒够了便自行了结。name 不超过 10 字，说清是什么事；desc 写清来龙去脉；place 写去哪儿办，事件类、修为类、物品类与灵石类不限定地点可省；地点类、人物类与人物物品类的去处须是眼下真有的地方，可以是城内某条街区（如「长安·西市」）、一整座山门（只写山门名号，如「青云宗」）、某座山门里的某座建筑（写作「山门名·建筑名」，如「青云宗·炼丹房」）、坊市里的某一间铺子（写作「城名·坊市名·铺名」，如「长安·西市·回春堂」；街上本没有这一家也无妨，系统会照名现设一个门面，铺子的光景与掌柜由你在 shop 一项里写定）、舆图上某处奇遇的名目、或某座村庄的名目，这六样皆可；确要另起一处舆图上没有的，也可照剧情写一处城外的具体地方（如「城西三十里的废寺」），系统会在附近现开一处；能对上真有的去处时，仍先照真有的写；dueDay 写第几日截止，今日为第 ${todaySerial} 日，「三日后」就写 ${todaySerial + 3}，不限时则省略；giver 是托付人的名字，须与 relations 中的人名一致；condition 写玩家做到什么才算办成，修为类可写「修到炼气后期」，物品类可写「寻到青玉佩三枚」，灵石类可写「凑足三百下品灵石」。
+   - shop 只在去处是坊市里的一间铺子时写：{"name":"铺名","kind":"营生","desc":"门面光景一句","keeper":{"name":"掌柜姓名","title":"掌柜或老板娘","realm":"境界","gender":"男或女","age":岁数,"origin":"出身","personality":"性情","appearance":"形貌","note":"来历与做派一句","persona":"一段话写定他怎么待客、怎么说话"}}。name 须与 place 最后一截一字不差，kind 用二到六字，如 丹药铺/医馆、茶棚、当铺、镖局、书铺、武馆，desc 不少于 15 字；keeper 只写这一位，往后他就是这家铺子的掌柜，玩家走到铺里才见得到，不必在 relations 里另立一条。铺子与掌柜都照这一城的风物、这桩事的来由现写，不要套模板；此人若正是这桩事要找的人（人物、人物物品类），就在这里把他的名姓写定。
    - rewardKind 只取 灵石、修为、物品、人情、状态、正道名声、魔道名声、平民名声、官府名声 之一，penaltyKind 只取 灵石、修为、业力、状态、正道名声、魔道名声、平民名声、官府名声 之一；amount 为 1 到 5000 的整数，且必须与对应的 rewardKind／penaltyKind 同时给出，只写其中一个就当没写。名目不在表内的不要写，写了也作废，赏罚只认这几样。名声那几条数额宜小，三五点到十点上下，那是世人议论攒出来的，不是一夜之间的事。名目写「状态」的那一条不要给 amount。
    - 赏的是一条状态，就把名录上的那一条写进 rewardBuff；罚的是一条状态，写进 penaltyBuff。写法只有一种：{"template":"名录里的 id","hours":顶几个时辰}。赏只许挑名录里的增益，罚只许挑减益；名目、类别、图标与效力都由名录定，其余字段一概不认。名录里挑不出合用的就不要写这一条，宁可按字面给句话；顶的时辰取 1 到 720。
    - reward 与 penalty 是写给人看的字面话，与名目/amount 不冲突时可一并写；赏罚是一条状态时，这两句话要与会落到身上的那条状态对得上。
    - 同一件事只立一次；已有在办的机缘不要重复立。
-19. 机缘了结：成与不成由你照剧情判，系统只照单落账，不再替你判。只有叙事里明说了成与不成——那人点了头，或是事在那一处办到了头、确已黄了——才用 modify quest.<机缘编号或名目> 记下，value 只写 done 或 failed：办成写 done，黄了、废了、误了写 failed。路径里的编号照摘要中 quests[id] 的 id 抄最稳，抄不出再写名目。酬谢与责罚由系统照单落账，你不要另写 add player.buffs 之类去兑现。拿不准就先留着，不要替人点头。
+19. 机缘了结：成与不成由你照剧情判，系统只照单落账，不再替你判。只有叙事里明说了成与不成——那人点了头，或是事在那一处办到了头、确已黄了——才用 modify quest.<机缘编号或名目> 记下，value 只写 done 或 failed：办成写 done，黄了、废了、误了写 failed。人物物品型另有硬规矩：须是正文里当真把那件东西交到了那人手上，才可写 done；人还没见着、东西仍揣在怀里，就不要写。路径里的编号照摘要中 quests[id] 的 id 抄最稳，抄不出再写名目。酬谢与责罚由系统照单落账，你不要另写 add player.buffs 之类去兑现。拿不准就先留着，不要替人点头。
 20. 固定出没的人物：正文里若冒出一个有头有脸、往后还会再遇上的人物，在 add relations 时用 persona 写定他的人设（一段话，交代脾气、口风、来历、与玩家的干系，往后每回都照它演），并可用 cityId 写他所在的城池名、metAt 写具体去处、fixedUntilDay 写他钉在此处的截止日（今日为第 ${todaySerial} 日，如「这一阵子都在」就写 ${todaySerial + 7}）。期限一过他便不再守在原处，往后随缘在别处露面。只在城中一面之缘的路人不必写这几项。
 21. 人物行踪：尘缘里的人各有各的去处，摘要里写作「现在在某某城·某某处」。正文里若有人说要走了、动身去了别处、或是打听到谁如今在哪儿，用 modify relations[<id>].place 改写他的行踪，value 写成「城名」或「城名·去处」，城池必须是摘要中 currentPlaceId 可选值里的一个，去处写城中具体的地方（如「西市」「城南山货铺」）；只改到城池也认，那时他在那一带出没。没提到谁挪了地方就不要改；与你同行的人（摘要中标着「与你同行」）一路都跟着你，他的行踪不必另写。
 22. 修炼：正文里若写到打坐、静修、闭关、参悟功法，照摘要里「修炼效率」那一行算——打坐几个时辰就给几点进度，用 modify techniques[<id>].proficiency 加到对应功法上。proficiency 写加完后的绝对点数，不写百分比，也不写 proficiencyMax；千万不要另给 player.cultivation：这门功法进度长了多少，境界进度会照数自动补上，写了便是重复记账。修炼多则进度多、少则进度少，闭门一日不过几点到十几点，闭关一月也不过百余点，别把大数随手给出，一夜之间便把一门功法写满；叙事里根本没有修炼之事，就不要动 proficiency。${fillRule}${missingRule}${craftingRule}${adventureRule}
@@ -1089,8 +1164,8 @@ ${buffCatalogBrief()}
 30. 宗门关系：正文里若两处宗门结盟、交好、反目、开战，或一家为另一家所并、所臣服，用 add sectRelations 记下，payload 写 {"a":"一方门派名号","b":"另一方门派名号","stance":"附庸／结盟／友好／中立／敌对 之一","relation":-100 到 100,"note":"一句说明"}。a 与 b 只能取自摘要中「江湖上的门派」那一行，须两处都认得出、且不相同；同一对宗门再去一笔便改旧的，不另添。别家宗门之间打起来、或一家为另一家所破，也照这一条记关系，另在 news 里带一句。本门与他门的恩怨同样写在这里；但本门要不要趁势收别家做附庸、还是毁其门户，留待战后由玩家发落，叙事里不要替玩家定。
 31. 城村易主：正文里若有宗门攻下了一座城或一个村（城名取自摘要中「九州城池可往来者」那一行，村名取自摘要中的村庄），用 add occupations 记下，payload 写 {"kind":"city 或 village","targetName":"城名或村名","ownerName":"占家宗门的名号"}。ownerName 须是摘要中「江湖上的门派」里认得出的一处，本门也照它的名号写。同一处再去一笔便是易主，改旧的即可。占了便按月收贡金，正文里可顺带提一句纳贡之事。别家占的城村也照这一条记；本门要不要去夺，留待玩家自己动手。
 32. 驻城执事：正文里若某家宗门占了城、或派了人坐镇某城理事，可 add relations 添一位「执事」或「总督」，写全字段：name、title 写「执事」或「总督」、affiliation 写那家宗门的名号、cityId 写该城标点编号（见摘要中 currentPlaceId 可选值）、metAt 写「城名·官署」一类去处、persona 一段话交代其脾性与职守、fixedUntilDay 写一个较远的日序（如今日为第 ${todaySerial} 日，常驻写 ${todaySerial + 360}）。只在正文确实点到这么一个人时才添，不要凭空派官。
-33. 交付界面的事不由你记账：正文里若写到玩家动身去某家铺子买卖、与人交手、或开炉炼丹／画符，这几桩的经过与得失——钱财、货物、丹符的成色与数量、胜负与伤亡、气血与灵力——都由对应的界面或系统当场结算，你不要在 ops 里重复记这一笔（不要 modify spiritStones、inventory、player.hp、player.mp，也不要 add 产物）；只照常记时间推进与玩家去向。
-34. 当场买卖：叙事里当场买成了东西（路边摊、行商、拍卖，或铺子里当场付钱拿货），用一条 buy 记下：{"kind":"buy","what":"item","name":"货名","price":单价,"count":1,"type":"材料/丹药/符箓/法宝/灵兽/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句说明","place":"在哪儿买的"}；买下一处宅地写 {"kind":"buy","what":"manor","name":"宅地名目","price":地价,"place":"所在地"}。price 按下品灵石计，count 为件数，不给便是 1 件。buy 由系统当场兑钱交货，不要另写 modify spiritStones，也不要 add inventory／manorPlots。只写真买成了的：先照摘要里的灵石算，四等按一比一百兑尽了仍不够，就不要写 buy，正文里直接写他钱不够、终究没能买下。走铺面界面、讲价界面、屋舍界面的买卖仍由界面结算，不要写 buy。
+33. 界面结算与本账单不重复：正文里若写到玩家去铺子买卖、与人交手、或开炉炼丹／画符，这几桩往往另有界面当场结算。本回合已由界面结算过的那一笔——钱财、货物、丹符的成色与数量、胜负伤亡、气血灵力——不要在这里再记一遍，免得一笔账记两回。除此之外，正文里确已发生的其他变化，照分类表一样落账，莫因这段叙事挂在哪个界面上就撂手不记。
+34. 当场买卖：叙事里当场买成了东西（路边摊、行商、拍卖，或铺子里当场付钱拿货），用一条 buy 记下：{"kind":"buy","what":"item","name":"货名","price":单价,"count":1,"type":"材料/丹药/符箓/法宝/灵兽/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句说明","place":"在哪儿买的"}；买下一处宅地写 {"kind":"buy","what":"manor","name":"宅地名目","price":地价,"place":"所在地"}。price 按下品灵石计，count 为件数，不给便是 1 件。buy 由系统当场兑钱交货，不要另写 modify spiritStones，也不要 add inventory／manorPlots。只写真买成了的：先照摘要里的灵石算，四等按一比一百兑尽了仍不够，就不要写 buy，正文里直接写他钱不够、终究没能买下。同一个回合里若这笔买卖已经由铺面界面、讲价界面或屋舍界面当场结清，就不要再写 buy，免得一笔账记两回；正文里另有当场买成、界面上没经手的，照写不误。
 35. 约定：正文里若玩家与某人当面说定一桩日后要践的事（几日后在何处相见、替人捎话带物、应下去赴的约），用 add pacts 记下，payload 写 {"name":"约定名目","giver":"与谁说定","place":"在哪儿了结","days":几日后,"desc":"一句原委"}。name 不超过 20 字，须说清是什么事；giver 写对面那人的姓名，尘缘里认得便照抄那一字不差的名字；place 写城中真有的去处，说不准可省；days 取 1 到 720 的整数，不写便按三日算；desc 不超过 120 字，交代来龙去脉。同一桩事只立一次，福缘「约定」里已在办的不必再立。只是寒暄、客套、含糊应承的不要立；买卖当场银货两讫的也不要立。
 【宗门修正名录】
 ${sectModifierBrief()}`;
@@ -1108,6 +1183,14 @@ ${narrative}
     { role: "user", content: user },
   ];
 }
+
+/**
+ * 结算补一跳：上一次的输出没能当成 JSON 读出来时，把它原样贴回去，
+ * 只求一个合法对象，不重写对叙事的理解——重来一遍反倒会生出一批对不上的账。
+ */
+export const OPS_REPAIR_INSTRUCTION = `你上一次的回复没能被当作 JSON 读出来。请把上一次那份结果照原意改写成下面这一个 JSON 对象，只修格式，不添不减：
+{"ops": [], "quickDecisions": []}
+不要代码围栏，不要解释，不要在 JSON 之前或之后添任何字；字符串里的引号与换行要转义妥当。上一次若被写断了，就照还记得的那些条目重新写完整；一条都拿不准便输出上面这一个空对象。`;
 
 /**
  * 开局建档按领域拆分。
@@ -1137,7 +1220,8 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - 四维：modify player.stats.vitality、player.stats.soul、player.stats.wisdom、player.stats.agility
 - 身世背景：modify player.background，200 字以上的出身来历
 - 心性：modify player.personality，简短中文描述其性情
-- 外貌：modify player.description，简短的外貌特征
+- 外貌：modify player.description，简短的外貌特征；须与摘要中 player.gender 那一行相合，写成「清瘦男子」「素衣女子」这一类，不可写反
+- 性别：player.gender 是玩家开局自填的既定之数，不在可改之列，不得改动、也不得另立一条；开篇叙事里若有与它相左的称呼，一律照 player.gender 纠正过来
 - 名声：modify reputation.righteous、reputation.demonic、reputation.folk、reputation.official，四条各写 -100 到 100 的整数，0 是没人认得你。正数是好名声，负数是坏名声：正道、平民、官府三处的负，是被人当作对头、遭人唾骂；魔道那一处的负，是邪门外道看不上你、懒得理你。照其出身、行径与所处之地定一个起手的数目：初出茅庐、无人识得的写 -10 到 20；在乡里有些名头、或已招了些怨言的，可到三四十，坏名声可到 -30；名动一方、或恶名远扬的，可到六七十乃至 -60。正道与魔道未必同时高，官府名声不必与平民名声相同。四条都不许超出 -100 到 100
 - 心性评分：add player.stats.heartScores，3 至 5 条，每条 {"trait","score","modifiers"}；trait 为 2 至 4 字中文性格词，score 为 0-100 整数，modifiers 固定输出空数组 []
 - 修炼历程：add player.timeline，3 至 5 条，每条 {"year","title","detail"}；year 为时间描述（如 幼年、三年前），detail 不少于 20 字
@@ -1235,11 +1319,12 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
   {
     id: "quest",
     label: "任务",
-    spec: `只产出开篇时已经落在玩家肩上的几桩事，逐桩 add quests，每桩 {"id","name","kind","desc","place","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff","dueDay","status"}：
+    spec: `只产出开篇时已经落在玩家肩上的几桩事，逐桩 add quests，每桩 {"id","name","kind","desc","place","giver","condition","realmGoal","itemGoal","stoneGoal","reward","rewardKind","rewardAmount","rewardBuff","penalty","penaltyKind","penaltyAmount","penaltyBuff","dueDay","status","shop"}：
 - name 不超过 20 字，写明这桩事的名目，如「替师父送一封信」「寻访失踪的同门」
 - kind 必写，只取 事件、地点、人物、修为、物品、灵石 之一：事件是当场起落、未必有固定去处的一桩事；地点是奔着某一处地方去的，place 必须写具体去处，事在那一处办、不必有固定的人；人物是奔着某个人去的，place 必须是那人的落脚处，且必有那个人；修为是修到某一层境界便算办到的长期目标，place 可省，另写 realmGoal 为境界全称（如「炼气后期」），玩家修到那一层便自行了结；物品是寻某一样东西，place 可省，另写 itemGoal 为 {"name":"物名","count":件数}，行囊里凑齐了这些件便自行了结；灵石是凑某数灵石，place 可省，另写 stoneGoal 为整数，四等灵石按一比一百折成下品算，攒够了便自行了结。事件类、修为类、物品类、灵石类可以没有 place
 - desc 不超过 200 字，交代来龙去脉：谁交办的、为什么落在你头上、眼下办到什么地步
-- place 写去处，须是玩家眼下这一带真有的地方：可以是城内某条街区（如「扬州·旧书巷」）、某座山门里的某座建筑（写作「山门名·建筑名」）、舆图上某处奇遇的名目、或某座村庄的名目；就在本城的事便写城内的去处；事件类、修为类、物品类与灵石类不限地点可省
+- place 写去处，须是玩家眼下这一带真有的地方：可以是城内某条街区（如「扬州·旧书巷」）、某座山门里的某座建筑（写作「山门名·建筑名」）、坊市里某一间铺子（写作「城名·坊市名·铺名」，如「长安·西市·回春堂」）、舆图上某处奇遇的名目、或某座村庄的名目；就在本城的事便写城内的去处；事件类、修为类、物品类与灵石类不限地点可省
+- place 写的是坊市里的一间铺子时，另写 shop 一项：{"name":"铺名","kind":"营生","desc":"门面光景一句","keeper":{"name":"掌柜姓名","title":"掌柜或老板娘","realm":"境界","gender":"男或女","age":岁数,"origin":"出身","personality":"性情","appearance":"形貌","note":"来历与做派一句","persona":"一段话写定他怎么待客、怎么说话"}}。name 须与 place 最后一截一字不差，kind 用二到六字，desc 不少于 15 字；keeper 只写这一位，往后他就是这家铺子的掌柜，不必在 relations 里另立一条
 - giver 写交办之人的姓名或身份；尘缘里已经有的人，优先用其中的人来交办
 - condition 不超过 120 字，写清怎样才算办成，须是玩家眼下真做得到的事
 - reward 写在字面上，如「下品灵石三十枚」；rewardKind 只取 灵石、修为、物品、人情、状态、正道名声、魔道名声、平民名声、官府名声；rewardAmount 为整数，物品、人情与状态那三类不必给数额
@@ -2304,6 +2389,8 @@ ${history ? `【先前经过】\n${history}\n` : ""}${briefLines(args.brief)}
 export const ADVENTURE_DONE_MARK = "<<<ADVENTURE_DONE>>>";
 /** 了结后仍留在原处、日后再来的记号 */
 export const ADVENTURE_KEEP_MARK = "<<<ADVENTURE_KEEP>>>";
+/** 正文之后另起一块，写这一回给玩家备下的几个选择 */
+export const ADVENTURE_CHOICE_MARK = "<<<ADVENTURE_CHOICES>>>";
 
 /** 一处奇遇的写照，供提示词引用 */
 export interface AdventureBrief {
@@ -2350,7 +2437,12 @@ ${approach ? `【来由】${approach}` : ""}
 1. 先写这地方的光景——地势、气象、声息、物什，写得具体可感；再写他心里起了什么念头。
 2. 分量要与他的修为和手段相称，纵是凶险之地，也要有可图之处、有回旋的余地；绝不可写他无从下手的死结，也不必立即送他机缘。
 3. 用第三人称古风白话，只写这一段情景，不要列条目清单，不要复述数值与规则，不要出现「系统」「数据」「玩家」「奇遇」这类出戏的字眼。
-4. 收在需要他拿主意或动手的当口，把选择留给他。`;
+4. 收在需要他拿主意或动手的当口，把选择留给他。
+5. 正文写完之后另起一行只写 ${ADVENTURE_CHOICE_MARK}，接着写三个选择，一个一行，照「动作|一句话」的格式：
+探查|贴着石壁细看那些刻痕
+交涉|先开口问那老道的来历
+出手|拔剑逼他让路
+动作只能取「探查」「交涉」「出手」「离去」四者之一；那一句话是站在他的口气上要去做的事，不超过二十字。三个选择要各走一路，别三条都是一个意思。`;
 
   return [
     { role: "system", content: system },
@@ -2386,7 +2478,12 @@ ${history || "（还没动手）"}
 1. 照玩家这一回的作为写出后果：得手了便写得手的样子与所得，失手了便写失手的代价，不要含糊过去，也不要一味顺着他。
 2. 分量仍要与他的修为相称，不可忽然抬到远超他的境地，也不可凭空送他一场大机缘；该给的赏、该受的罚都要落到实处，写清是得了什么、还是折了什么。
 3. 若这一处到此了结（取到了东西、平了凶险、探空了秘境、见势不妙退了出来），在正文之后另起一行只写一个记号：一次性的、往后不再来的写 ${ADVENTURE_DONE_MARK}；常设的、日后再来仍有戏的（集市、洞天之类）写 ${ADVENTURE_KEEP_MARK}。还没有了结就一个记号都不要写。
-4. 只写这一段情景；除上面点明的记号外，不要输出任何标记、说明或数据操作。`;
+4. 只写这一段情景；除上面点明的记号外，不要输出任何说明或数据操作。
+5. 还没了结的，写完记号（没有记号便接着正文）之后另起一行只写 ${ADVENTURE_CHOICE_MARK}，再写三个选择，一个一行，照「动作|一句话」的格式：
+探查|退到洞口，看那串脚印往哪儿去
+交涉|扬声问一句：谁在此处
+出手|抽剑在手，抢先进招
+动作只能取「探查」「交涉」「出手」「离去」四者之一；那一句话是站在他的口气上要去做的事，不超过二十字，要接着眼前这一步往下走，别把已经做过的事再说一遍。三个选择要各走一路。已了结的这一处不必再列选择。`;
 
   return [
     { role: "system", content: system },

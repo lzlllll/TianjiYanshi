@@ -1013,7 +1013,35 @@ export interface QuestBuffSpec {
  * 灵石——凑够某数灵石便算办到，按下品折合算。
  * 地点与人物两类由系统钉下真去处，走上城图寻得着；人物类连同要找的人一并钉下。
  */
-export type QuestKind = "事件" | "地点" | "人物" | "修为" | "物品" | "灵石";
+export type QuestKind = "事件" | "地点" | "人物" | "人物物品" | "修为" | "物品" | "灵石";
+
+/**
+ * 叙事为落在一间铺子里的差事现拟的门面与掌柜。
+ * 铺名、营生、门面光景与掌柜的人设都由叙事写定，代码只照它立人、挂牌，不再另掷。
+ */
+export interface QuestShopBrief {
+  /** 铺名，与 place 最后一截一致 */
+  name: string;
+  /** 营生，如「丹药铺/医馆」 */
+  kind?: ShopKind;
+  /** 门面光景一句 */
+  desc?: string;
+  keeper?: QuestShopKeeper;
+}
+
+/** 这家铺子的掌柜：往后就守在这一处，玩家到铺里才寻得着 */
+export interface QuestShopKeeper {
+  name: string;
+  title?: string;
+  realm?: string;
+  gender?: string;
+  age?: number;
+  origin?: string;
+  personality?: string;
+  appearance?: string;
+  note?: string;
+  persona?: string;
+}
 
 export interface Quest {
   id: string;
@@ -1071,6 +1099,8 @@ export interface Quest {
   stoneGoal?: number;
   /** 差事要办到哪儿去；有了它便在城图上星标出来 */
   target?: JobTarget;
+  /** 去处是坊市里的一间铺子时，叙事写定的门面与掌柜；钉完之后只作存底 */
+  shopBrief?: QuestShopBrief;
   /** 这一桩办到目标地块上要用到的人；生成时照这份说明现掷，钉在那一处 */
   cast?: JobCastRole[];
   /**
@@ -1095,6 +1125,25 @@ export interface QuestBroker {
 
 /** 一桩奇遇了结了没有；keeper 是留在此处待日后再来的那种 */
 export type AdventureStatus = "open" | "done";
+
+/**
+ * 奇遇里说过的一段话。
+ * 记在奇遇名下，收起那扇窗之后仍留着，下回再进来接着看、接着往下写。
+ */
+export interface AdventureLine {
+  role: "event" | "player";
+  content: string;
+  /** 这一段落到账上的变化；只留给人回看，不再第二次入账 */
+  ops?: DataOp[];
+}
+
+/** 奇遇里给玩家备下的一个选择 */
+export interface AdventureChoice {
+  /** 这一选偏哪一路：四下探查、出言交涉、出手相搏、抽身离去，或另作别论 */
+  act: "explore" | "parley" | "fight" | "leave" | "other";
+  /** 说给人听的那句话，选中便照它行事 */
+  text: string;
+}
 
 /**
  * 舆图上预设点位上开出的一桩奇遇。
@@ -1137,6 +1186,10 @@ export interface Adventure {
    * 原本就在舆图上的去处没有这一项，不因机缘了结而消失。
    */
   questId?: string;
+  /** 进去过的那些话：开篇与往来；收起这一窗后仍在，下回再进来接着看 */
+  journal?: AdventureLine[];
+  /** 上一回备下的几个选择；重开这一处时照旧摆出来 */
+  choices?: AdventureChoice[];
 }
 
 /** 约定的两种来路，误了期的算法各不相同 */
@@ -1416,6 +1469,14 @@ export interface JobTarget {
   adventureId?: string;
   /** 去处是野外的某一座村庄时记下它的点位身份 */
   villageKey?: string;
+  /**
+   * 去处是坊市里的某一间铺子时记下铺名与营生。
+   * 这间铺子若是专为这桩差事现开的，集市面板里会临时摆出这一家，事一了便不再露面。
+   */
+  shop?: string;
+  shopKind?: ShopKind;
+  /** 叙事写的门面光景一句；没有便不写 */
+  shopDesc?: string;
 }
 
 /**

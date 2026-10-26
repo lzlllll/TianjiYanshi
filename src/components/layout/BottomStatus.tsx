@@ -2,11 +2,14 @@ import { useState, useRef, useEffect } from "react";
 import { useGameStore } from "@/store/useGameStore";
 import { StatusBar } from "@/components/ui/StatusBar";
 import { cn } from "@/lib/utils";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { ChevronUp } from "lucide-react";
 
 export function BottomStatus() {
   const player = useGameStore((s) => s.player);
   const log = useGameStore((s) => s.log);
+  // 内伤一类临时状态压低了气血上限，底栏照实时的上限报
+  const hpMax = effectiveHpMax(player);
 
   const [showLog, setShowLog] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -29,7 +32,7 @@ export function BottomStatus() {
 
       {/* 三花聚顶：三条状态并排，避免竖排撑高底栏 */}
       <div className="flex-1 grid grid-cols-3 gap-4 px-6 py-3 border-r book-divider-vertical min-w-0">
-        <StatusBar compact label="气血" icon="❤" current={player.hp} max={player.hpMax} color="hp" />
+        <StatusBar compact label="气血" icon="❤" current={Math.min(player.hp, hpMax)} max={hpMax} color="hp" />
         <StatusBar compact label="灵力" icon="✦" current={player.mp} max={player.mpMax} color="mp" />
         <StatusBar compact label="神识" icon="◉" current={player.spirit} max={player.spiritMax} color="spirit" />
       </div>

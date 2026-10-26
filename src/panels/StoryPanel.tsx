@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { AI_BACKEND_READY } from "@/data/backend";
 import { REALM_NAMES } from "@/data/mockData";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import type { BattleEntity, BattleFoeBrief } from "@/data/types";
 
 /** 同一模样的几名对手，按甲乙丙丁依次称 */
@@ -198,6 +199,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     const beast = useGameStore.getState().beast;
     // 对面是谁照叙事最后那一行所报：名号、人数与境界都在那儿，气血由代码照境界算
     const foes = buildBattleFoes(lastTurn.battleFoes, player.realmIndex ?? 0);
+    // 带伤上阵时，内伤一类状态压低了这一刻的气血上限
+    const maxHp = effectiveHpMax(player);
     startBattle({
       width: 10,
       height: 10,
@@ -207,8 +210,8 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
           name: player.name || "玩家",
           type: "player",
           position: { x: 5, y: 5 },
-          hp: player.hp,
-          maxHp: player.hpMax,
+          hp: Math.min(player.hp, maxHp),
+          maxHp,
           mp: player.mp,
           maxMp: player.mpMax,
         },

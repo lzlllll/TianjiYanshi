@@ -6,7 +6,7 @@
  */
 
 import { getDistricts, getMarker } from "@/data/map";
-import type { JobCastRole, Manor, Relation } from "@/data/types";
+import type { JobCastRole, Manor, QuestShopKeeper, Relation } from "@/data/types";
 
 /** 姓氏库 */
 const SURNAMES = [
@@ -581,6 +581,44 @@ export function rollShopkeeper(
     cityId,
     districtId,
     metAt: shopName,
+  };
+}
+
+/**
+ * 照叙事写定的那一份立起掌柜：名姓、称谓、境界与人设都以叙事为准，
+ * 只在它没写到的几处照这一带的风物补上。往后进这家铺子见到的都是这一个人。
+ */
+export function composeShopkeeper(
+  brief: QuestShopKeeper,
+  cityId: string,
+  districtId: number,
+  shopName: string,
+): Relation {
+  const gender = brief.gender === "女" ? "女" : "男";
+  const appearance = brief.appearance || pick(APPEARANCES);
+  const personality = brief.personality || pick(PERSONALITIES);
+  const origin = brief.origin || pick(ORIGINS);
+  const title = brief.title || (gender === "女" ? "老板娘" : "掌柜");
+
+  return {
+    id: makeId(`keeper-${cityId}-${districtId}`),
+    name: brief.name,
+    title,
+    type: "friend",
+    affinity: 20 + Math.floor(Math.random() * 20),
+    affinityMax: 100,
+    realm: brief.realm || pick(REALMS),
+    note: brief.note || `${shopName}的${title}。${appearance}，${personality}，${origin}。`,
+    gender,
+    age: brief.age ?? 26 + Math.floor(Math.random() * 38),
+    origin,
+    personality,
+    appearance,
+    affiliation: shopName,
+    cityId,
+    districtId,
+    metAt: shopName,
+    ...(brief.persona ? { persona: brief.persona } : {}),
   };
 }
 

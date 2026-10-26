@@ -11,6 +11,33 @@ import type {
   HealingResult,
 } from "@/data/types";
 
+/**
+ * 临时状态给气血上限的增减。
+ *
+ * 只认 effects 里 stat 为 maxHp 的那几条：fixed 逐层相加，percentage 照底数折算，
+ * multiplier 连乘，最终至少留 1 点。气血上限本身不改，读的时候照这个数算，
+ * 状态一散，上限便自行回来。
+ */
+export function effectiveHpMax(player: Pick<Player, "hpMax" | "buffs">): number {
+  const base = Math.max(1, Math.trunc(Number(player?.hpMax) || 1));
+  let fixed = 0;
+  let pct = 0;
+  let mul = 1;
+  for (const buff of Array.isArray(player?.buffs) ? player.buffs : []) {
+    if (!buff) continue;
+    const stacks = Math.max(1, Math.trunc(Number(buff.stacks) || 1));
+    for (const effect of Array.isArray(buff.effects) ? buff.effects : []) {
+      if (effect?.stat !== "maxHp") continue;
+      const value = Number(effect.value) || 0;
+      if (effect.valueType === "fixed") fixed += value * stacks;
+      else if (effect.valueType === "percentage") pct += value * stacks;
+      else if (effect.valueType === "multiplier") mul *= Math.pow(value || 1, stacks);
+    }
+  }
+  const total = (base + fixed) * (1 + pct / 100) * mul;
+  return Math.max(1, Math.trunc(Number.isFinite(total) ? total : base));
+}
+
 export function getAttributeModifiers(buffs: Buff[]): AttributeModifiers {
   const modifiers: AttributeModifiers = {
     vitality: 1,

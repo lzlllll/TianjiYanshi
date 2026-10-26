@@ -19,8 +19,11 @@ import type {
   QuestKind,
   QuestPenaltyKind,
   QuestRewardKind,
+  QuestShopBrief,
+  QuestShopKeeper,
   QuestStatus,
   Reputation,
+  ShopKind,
   SpiritStones,
 } from "@/data/types";
 import { EMPTY_REPUTATION, REPUTATION_BY_KIND, REPUTATION_LABELS, shiftReputation } from "@/data/reputation";
@@ -62,12 +65,15 @@ const LEGACY_KIND_ALIAS: Record<string, QuestPenaltyKind> = { 声望: "平民名
 
 export const QUEST_STATUSES: QuestStatus[] = ["open", "done", "failed"];
 
-/** 机缘的六类；地点与人物这两类必有具体去处与接头的人，修为、物品、灵石三类只看手头攒到了什么 */
-export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物", "修为", "物品", "灵石"];
+/**
+ * 机缘的七类；地点、人物、人物物品这三类必有具体去处与接头的人，
+ * 修为、物品、灵石三类只看手头攒到了什么。
+ */
+export const QUEST_KINDS: QuestKind[] = ["事件", "地点", "人物", "人物物品", "修为", "物品", "灵石"];
 
-/** 这一类是不是必有具体去处：事件类可以没有，地点类与人物类必有 */
+/** 这一类是不是必有具体去处：事件类可以没有，地点、人物、人物物品三类必有 */
 export const questKindNeedsPlace = (kind: QuestKind | undefined): boolean =>
-  kind === "地点" || kind === "人物";
+  kind === "地点" || kind === "人物" || kind === "人物物品";
 
 /**
  * 认一认模型写的类别。认得「事件」「事件类」这两种写法；
@@ -79,7 +85,14 @@ export function parseQuestKind(raw: unknown): QuestKind | undefined {
   for (const kind of QUEST_KINDS) {
     if (text === kind || text === `${kind}类`) return kind;
   }
-  return undefined;
+  // 模型偶尔把「人物物品」写成这几样，一并认下
+  const alias: Record<string, QuestKind> = {
+    "人物+物品": "人物物品",
+    "人物与物品": "人物物品",
+    物品交付: "人物物品",
+    交付: "人物物品",
+  };
+  return alias[text];
 }
 
 /** 酬谢与责罚的数额夹在这个区间；再大就离了市井的分寸 */
@@ -156,6 +169,43 @@ function normalizeTarget(raw: any): JobTarget | undefined {
     districtId: Number.isFinite(districtId) && districtId >= 0 ? districtId : undefined,
     label,
     person: clean(raw.person, 20) || undefined,
+    shop: clean(raw.shop, 20) || undefined,
+    shopKind: typeof raw.shopKind === "string" && raw.shopKind.trim() ? (raw.shopKind.trim() as JobTarget["shopKind"]) : undefined,
+    shopDesc: clean(raw.shopDesc, 120) || undefined,
+  };
+}
+
+/** 叙事拟的掌柜：只收写全了名姓的那一位 */
+function normalizeShopKeeper(raw: any): QuestShopKeeper | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const name = clean(raw.name, 16);
+  if (!name) return undefined;
+  const age = Math.trunc(Number(raw.age));
+  return {
+    name,
+    title: clean(raw.title, 12) || undefined,
+    realm: clean(raw.realm, 12) || undefined,
+    gender: clean(raw.gender, 2) || undefined,
+    age: Number.isFinite(age) && age > 0 ? Math.min(200, age) : undefined,
+    origin: clean(raw.origin, 20) || undefined,
+    personality: clean(raw.personality, 20) || undefined,
+    appearance: clean(raw.appearance, 20) || undefined,
+    note: clean(raw.note, 100) || undefined,
+    persona: clean(raw.persona, 200) || undefined,
+  };
+}
+
+/** 叙事为差事现拟的一间铺子：铺名必写，营生、门面与掌柜给多少算多少 */
+function normalizeShopBrief(raw: any): QuestShopBrief | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const name = clean(raw.name ?? raw.shop, 20);
+  if (!name) return undefined;
+  const kind = clean(raw.kind ?? raw.type, 12);
+  return {
+    name,
+    kind: kind ? (kind as ShopKind) : undefined,
+    desc: clean(raw.desc, 120) || undefined,
+    keeper: normalizeShopKeeper(raw.keeper ?? raw.owner),
   };
 }
 
@@ -265,6 +315,8 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     broker: normalizeBroker(raw.broker),
     claimed: raw.claimed === true,
     target: normalizeTarget(raw.target),
+    // 去处落在一间铺子里的，铺子的营生、门面与掌柜一并收下，钉人挂牌都照它来
+    shopBrief: normalizeShopBrief(raw.shop ?? raw.shopBrief),
     realmGoal: normalizeRealmGoal(raw.realmGoal ?? raw.realm ?? raw.targetRealm),
     itemGoal: normalizeItemGoal(raw.itemGoal ?? raw.targetItem ?? raw.item),
     stoneGoal: normalizeStoneGoal(raw.stoneGoal ?? raw.targetStones ?? raw.stone),
@@ -278,6 +330,8 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
  * 才谈得上走到人前递过去。
  */
 export function questCarryItem(quest: Quest): InventoryItem | null {
+  // 已写明要交哪一样东西的（人物物品型之类），本身就是要交的物，不必再另发一份包裹
+  if (quest.itemGoal) return null;
   const text = `${quest.name} ${quest.condition} ${quest.desc}`;
   const letter =
     /捎信|送信|带信|传信|捎个?口信|带个?口信|带话|捎话|书信|信件|一封.{0,6}信|信一封|信物/.test(text);
@@ -341,6 +395,10 @@ export function questAssetGoalMet(
   holdings: { inventory?: InventoryItem[]; spiritStones?: SpiritStones },
 ): boolean {
   if (quest.status !== "open") return false;
+  // 人物物品型得亲手交到那人手上，攒在行囊里不算办成
+  if (quest.kind === "人物物品") return false;
+  // 地点、人物型另有去处与接头的人，行囊凑齐只是头一步，须亲至该处方算了结
+  if (questKindNeedsPlace(quest.kind)) return false;
   if (quest.itemGoal) {
     const have = (holdings.inventory ?? [])
       .filter((i) => i?.name === quest.itemGoal!.name)
@@ -351,6 +409,33 @@ export function questAssetGoalMet(
     return lowStonesWorth(holdings.spiritStones) >= quest.stoneGoal;
   }
   return false;
+}
+
+/**
+ * 从行囊里按名目取走若干件（可跨同名的几摞）。
+ * 凑不齐便返回 null，调用方据此认定这桩交付还没到时候。
+ */
+export function takeItemsByName(
+  inventory: InventoryItem[] | undefined,
+  name: string,
+  count: number,
+): InventoryItem[] | null {
+  const list = Array.isArray(inventory) ? inventory : [];
+  const need = Math.max(1, Math.trunc(Number(count)) || 1);
+  const have = list
+    .filter((i) => i?.name === name)
+    .reduce((sum, i) => sum + Math.max(0, Math.trunc(Number(i.count) || 0)), 0);
+  if (have < need) return null;
+
+  let left = need;
+  return list.flatMap((i) => {
+    if (left <= 0 || i?.name !== name) return [i];
+    const haveCount = Math.max(0, Math.trunc(Number(i.count) || 0));
+    const take = Math.min(left, haveCount);
+    left -= take;
+    const rest = haveCount - take;
+    return rest > 0 ? [{ ...i, count: rest }] : [];
+  });
 }
 
 /** 这桩事是不是已经误了期（还没了结的那种） */

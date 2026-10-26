@@ -311,6 +311,16 @@ export function WorldMap({
       ),
     [quests],
   );
+  // 差事办在某一座山门的：那一处山门挂星标，免得在图上遍寻不着
+  const questSectIds = useMemo(
+    () =>
+      new Set(
+        quests
+          .filter((q) => q.status === "open" && q.target?.sectId)
+          .map((q) => q.target!.sectId as string),
+      ),
+    [quests],
+  );
   // 宅邸图自绘等距院景，按平铺坐标算出来的地名戳在斜视角上会错位，这一层不再叠
   const showDistrictLabels = scene.kind !== "manor";
   // 路网与水系：把相邻同类地块的中心连成线，描在格子之上；
@@ -1104,8 +1114,15 @@ export function WorldMap({
                 >
                   宗
                 </span>
-                <span
-                  className="absolute top-full whitespace-nowrap font-brush text-[10px] leading-none text-cinnabar-200"
+                {questSectIds.has(site.id) && (
+                  <span
+                    className="absolute -top-1.5 -right-0.5 font-brush text-[12px] leading-none text-cinnabar-300"
+                    style={{ textShadow: "0 1px 2px rgba(0,0,0,0.95)" }}
+                  >
+                    ★
+                  </span>
+                )}
+                <span className="absolute top-full whitespace-nowrap font-brush text-[10px] leading-none text-cinnabar-200"
                   style={{
                     left: "50%",
                     transform: "translateX(-50%)",

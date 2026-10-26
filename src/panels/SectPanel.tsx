@@ -189,7 +189,11 @@ export function SectPanel() {
 
 function SectOverview() {
   const sect = useGameStore((s) => s.sect);
+  const player = useGameStore((s) => s.player);
   const currentTime = useGameStore((s) => s.currentTime);
+  // 掌门一栏与顶栏的职位本是两处数据，认一下是不是玩家自己，免得看着像另一个人
+  const leaderIsMe =
+    !!sect.leader && (sect.leader === "你" || (!!player.name && sect.leader === player.name));
   const hasAppearance = (sect.appearance || "").length > 0;
   const hasReputation = (sect.reputationDesc || "").length > 0;
   const hasSurroundings = (sect.surroundings || "").length > 0;
@@ -229,7 +233,10 @@ function SectOverview() {
           <div className="space-y-3">
             <InfoRow label="门派等级" value={`Lv.${sect.level}`} />
             <InfoRow label="门派声望" value={sect.reputation.toLocaleString()} />
-            <InfoRow label="掌门" value={sect.leader} />
+            <InfoRow
+              label="掌门"
+              value={leaderIsMe && sect.leader !== "你" ? `${sect.leader}（你）` : sect.leader}
+            />
             <InfoRow label="护法长老" value={`${sect.elders} 位`} />
             <InfoRow label="门下弟子" value={`${sect.disciples} 人`} />
             <InfoRow label="宗门驻地" value={sect.territory} />

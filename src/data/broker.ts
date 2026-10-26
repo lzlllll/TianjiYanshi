@@ -11,7 +11,7 @@
 
 import { getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { normalizeAdventure, pickOrNudgeSpotNear } from "@/data/adventures";
-import { relationWhereabout, rollQuestNpc } from "@/data/npcGen";
+import { composeShopkeeper, relationWhereabout, rollQuestNpc } from "@/data/npcGen";
 import { questKindNeedsPlace } from "@/data/quests";
 import type {
   Adventure,
@@ -23,6 +23,7 @@ import type {
   QuestRewardKind,
   Relation,
   SectSite,
+  ShopKind,
   Village,
 } from "@/data/types";
 
@@ -483,6 +484,95 @@ function resolveVillageTarget(text: string, villages: Village[]): JobTarget | un
   return { cityId: "", label: hit.name, villageKey: hit.key };
 }
 
+/**
+ * 把去处对回舆图上的一整座山门。
+ * 只写山门名号，或「某某宗山门」「某某宗门下」这类说法的，钉在那一处山门上；
+ * 写到具体建筑的先由 resolveSectBuildingTarget 认下，不会落到这里。
+ */
+function resolveSectTarget(text: string, sectSites: SectSite[]): JobTarget | undefined {
+  const raw = String(text ?? "").trim();
+  if (!raw) return undefined;
+  for (const site of sectSites) {
+    const name = String(site?.name ?? "").trim();
+    if (!name || !raw.startsWith(name)) continue;
+    const rest = raw.slice(name.length).replace(/^[·•.\s]+/, "").trim();
+    // 空着便是只说山门；余下的若还说着门墙内外，也算整座山门
+    if (!rest || /^(山门|门外|门前|门口|门下|宗门|一派)$/.test(rest)) {
+      return { cityId: "", label: `${name}山门`, sectId: site.id };
+    }
+  }
+  return undefined;
+}
+
+/** 铺名里的字眼归到营生：认不出便当杂货铺 */
+const SHOP_KIND_BY_WORD: [RegExp, ShopKind][] = [
+  [/茶/, "茶棚"],
+  [/酒|客栈|驿|楼/, "客栈"],
+  [/浴|汤/, "浴堂"],
+  [/药|医|丹|回春|济世|仁心|杏林/, "丹药铺/医馆"],
+  [/瓦|戏|曲/, "瓦舍"],
+  [/兽/, "灵兽栏"],
+  [/符|箓/, "符箓铺"],
+  [/器|铁|铸|锻/, "炼器坊"],
+  [/宝|珍|古玩/, "宝物阁"],
+  [/旧|故/, "旧货铺"],
+  [/当|质/, "当铺"],
+  [/镖/, "镖局"],
+  [/牙|行/, "牙行"],
+  [/书|墨|砚|纸/, "书铺"],
+  [/琴|乐|笛|筝|鼓/, "乐器坊"],
+  [/武|拳|剑|刀/, "武馆"],
+];
+
+function shopKindOfName(name: string): ShopKind {
+  for (const [re, kind] of SHOP_KIND_BY_WORD) if (re.test(name)) return kind;
+  return "杂货铺";
+}
+
+/**
+ * 把去处对回坊市里的某一间铺子。
+ * 写法是「城名·坊市名·铺名」（如「长安·西市·回春堂」）；只写了坊市、没写铺名的不算——
+ * 那是奔着整条街去的，交给 resolveJobTarget 认。铺子未必真开着，事办完便不再露面。
+ */
+function resolveShopTarget(
+  text: string,
+  cityId: string,
+  districtNames: Record<string, string> | undefined,
+): JobTarget | undefined {
+  const raw = String(text ?? "").trim();
+  if (!raw || !cityId) return undefined;
+  const cityName = getMarker(cityId)?.name ?? "";
+  if (getCityMarkers().some((m) => m.name !== cityName && raw.startsWith(m.name))) return undefined;
+  const rest = cityName && raw.startsWith(cityName) ? raw.slice(cityName.length).replace(/^[·•.\s]+/, "") : raw;
+
+  for (const d of getDistricts(cityId)) {
+    if (d.nature !== "坊市") continue;
+    const named = districtNames?.[`${cityId}:${d.id}`];
+    const hit = rest === d.nature || (!!named && (rest === named || rest.includes(named))) || rest.includes(d.nature);
+    if (!hit) continue;
+
+    // 铺名取最后一段；若街区名与铺名连写（如「西市药铺」），把街区那一截剥掉
+    const segs = rest.split(/[·•.\s]+/).map((s) => s.trim()).filter(Boolean);
+    let shop = segs[segs.length - 1] ?? "";
+    for (const boundary of [named, d.nature]) {
+      if (!boundary) continue;
+      if (shop === boundary) shop = "";
+      else if (shop.startsWith(boundary)) shop = shop.slice(boundary.length).replace(/^[·•.\s的]+/, "");
+    }
+    shop = shop.trim().slice(0, 20);
+    if (!shop) return undefined;
+
+    return {
+      cityId,
+      districtId: d.id,
+      label: `${cityName || "此城"}·${named || d.nature}·${shop}`,
+      shop,
+      shopKind: shopKindOfName(shop),
+    };
+  }
+  return undefined;
+}
+
 /** 这一桩差事眼下还接不接得：柜上没撤、也还没被人接下 */
 export function jobOpen(job: BrokerJob | undefined): boolean {
   return !!job && !job.taken;
@@ -521,7 +611,7 @@ function narrativeCastRoles(quest: Quest): JobCastRole[] {
  * 去处对得上某座城池真有的街区便钉在那儿，人照这份说明现掷一个钉在目标地块上，
  * 玩家得走到那儿才寻得着人、交得了差。
  * 去处写明是别城的，就认那一座城，不必强按在本城头上；那一座若也没画过街区，才作罢。
- * 去处也可以是一处山门建筑、舆图上的奇遇，或野外的一座村庄——写明它们的名目便钉到那一处。
+ * 去处也可以是一处山门（整座山门或其中的某座建筑）、舆图上的奇遇，或野外的一座村庄——写明它们的名目便钉到那一处。
  * 已经有了去处的（先前认下或存档里带来的），就地用人，不再另认。
  */
 export function pinNarrativeQuest(args: {
@@ -555,7 +645,9 @@ export function pinNarrativeQuest(args: {
     target =
       resolveAdventureTarget(text, args.adventures ?? []) ??
       resolveVillageTarget(text, args.villages ?? []) ??
+      resolveSectTarget(text, args.sectSites ?? []) ??
       resolveSectBuildingTarget(text, args.sectSites ?? []) ??
+      resolveShopTarget(text, cityId, districtNames) ??
       resolveJobTarget(text, cityId, districtNames);
     // 事件类可以没有具体去处：认不出便不钉，由叙事随缘去办，不硬安一个星标
     if (!target && !questKindNeedsPlace(quest.kind)) return { quest, people: [] };
@@ -611,10 +703,36 @@ export function pinNarrativeQuest(args: {
     }
   }
 
+  // 差事办在某间铺子里的：铺子的营生、门面与掌柜都以叙事写定的那一份为准。
+  // 叙事没写掌柜的，这一家照旧挂出来，人便暂且空着，不再由代码另掷一个。
+  // 要找的人本就有的（人物、人物物品），掌柜便是那人
+  const shopBrief = target?.shop ? quest.shopBrief : undefined;
+  let shopKeeper: Relation | undefined;
+  if (target?.shop) {
+    if (shopBrief?.keeper) {
+      shopKeeper = composeShopkeeper(
+        shopBrief.keeper,
+        target.cityId || cityId,
+        target.districtId ?? 0,
+        target.shop,
+      );
+    }
+    target = {
+      ...target,
+      shopKind: shopBrief?.kind ?? target.shopKind ?? shopKindOfName(target.shop),
+      shopDesc: shopBrief?.desc ?? target.shopDesc,
+      ...(shopKeeper ? { person: shopKeeper.name } : {}),
+    };
+  }
+
   // 去处落了实、却本不是奔人去的：按落下的去处归到地点类，不另钉人——
-  // 到了那一处怎么办，由叙事去写。奔人去的照旧：去处连同要找的人一并钉下
-  if (quest.kind !== "人物") {
-    return { quest: { ...quest, kind: "地点", target }, people: [], ...(born ? { adventure: born } : {}) };
+  // 到了那一处怎么办，由叙事去写。奔人去的（含要当面交物的）照旧：去处连同要找的人一并钉下
+  if (quest.kind !== "人物" && quest.kind !== "人物物品") {
+    return {
+      quest: { ...quest, kind: "地点", target },
+      people: shopKeeper ? [shopKeeper] : [],
+      ...(born ? { adventure: born } : {}),
+    };
   }
 
   const roles = narrativeCastRoles(quest);
@@ -633,6 +751,9 @@ export function pinNarrativeQuest(args: {
     ),
     fixedUntilDay: until,
   }));
+
+  // 铺子里要找的人就是叙事写定的那位掌柜：照他立起，替掉现掷的那一个
+  if (shopKeeper) people[0] = { ...shopKeeper, fixedUntilDay: until };
 
   return {
     quest: {

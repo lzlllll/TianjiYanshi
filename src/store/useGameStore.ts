@@ -113,7 +113,7 @@ import { applySectFeatureBias, sectBuildingRoster, sectBuildingSpec } from "@/da
 import { SHOP_KINDS, rollMarket, syncMarket } from "@/data/shops";
 import { aliveRumors } from "@/data/rumors";
 import { findSkill, rollSkillCheck, trainOnceADay, trainSkill } from "@/data/skills";
-import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest, questAssetGoalMet, questRealmGoalMet } from "@/data/quests";
+import { applyQuestLedger, holdRewardOutcome, isQuestOverdue, isRewardHeld, pickOpenQuest, questAssetGoalMet, questRealmGoalMet, takeItemsByName } from "@/data/quests";
 import { EMPTY_REPUTATION, normalizeReputation, reputationFirstImpression, shiftReputation } from "@/data/reputation";
 import { spendLowStones } from "@/data/spiritStones";
 import type { BuskResult } from "@/data/types";
@@ -137,6 +137,7 @@ import { rollWorkshop } from "@/data/craftsmen";
 import { PACT_KEPT_AFFINITY, PACT_OVERDUE_AFFINITY, pactLapsed, pactReady } from "@/data/pacts";
 import { showsToday } from "@/data/theatre";
 import { pruneBuffs, shortenDebuffs } from "@/lib/buffTime";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
 import { BATH_RELIEF_PER_HOUR, bathCost, clampHours } from "@/data/bath";
 import { goodDesc } from "@/data/goods";
@@ -374,7 +375,7 @@ interface GameStore extends GameState {
   setTraveling: (relationId: string, traveling: boolean) => boolean;
   addLog: (msg: string) => void;
   resetGame: () => void;
-  applyOps: (ops: DataOp[]) => string[];
+  applyOps: (ops: DataOp[], opts?: { writable?: string[] }) => string[];
   getSnapshot: () => GameSnapshot;
   restoreSnapshot: (snap: GameSnapshot) => void;
   updateNews: (newItems: { category: string; title: string; content: string; source: string }[]) => void;
@@ -398,6 +399,10 @@ interface GameStore extends GameState {
   settleAdventure: (id: string, keep: boolean) => void;
   /** 玩家行至某处奇遇的点位：把位置钉到那一处，供入内交互 */
   arriveAtAdventure: (id: string) => void;
+  /** 给一处奇遇打补丁：把说过的话记成一卷、把备下的选择记下 */
+  patchAdventure: (id: string, patch: Partial<Adventure>) => void;
+  /** 把一处奇遇从舆图上抹去；了结之后玩家自己动的手 */
+  removeAdventure: (id: string) => void;
   /** 替任务人物立传改名：照 id 打补丁（名、性别、年岁、出身、性情、形貌、修为），
    *  并把机缘里指向旧名的接头人一并改过来 */
   patchRelations: (
@@ -2384,11 +2389,12 @@ EFFECT: [效果描述]`,
           gainCultivation(real);
           return { gain: real, name: target.name || "", eff };
         };
-        /** 疗伤：泡得够久便全复，短的只回几成 */
+        /** 疗伤：泡得够久便全复，短的只回几成；上限照临时状态压过的那一道算 */
         const mend = (full: boolean) => {
+          const maxHp = effectiveHpMax(player);
           player = {
             ...player,
-            hp: full ? player.hpMax : Math.min(player.hpMax, Math.round(player.hp + player.hpMax * 0.3)),
+            hp: full ? maxHp : Math.min(maxHp, Math.round(player.hp + maxHp * 0.3)),
             mp: full ? player.mpMax : Math.min(player.mpMax, Math.round(player.mp + player.mpMax * 0.3)),
           };
         };
@@ -2848,6 +2854,17 @@ EFFECT: [效果描述]`,
 
         // 成与不成由 AI 判，本地只照单落账；日子过没过只是到期结算另算
 
+        // 人物物品型：交差时行囊里真得有那件东西，取走才算交到人手上；
+        // 东西不在，这桩交付便不算数，机缘照旧开着
+        let inventory = Array.isArray(st.inventory) ? st.inventory : [];
+        if (status === "done" && target.kind === "人物物品" && target.itemGoal) {
+          const left = takeItemsByName(inventory, target.itemGoal.name, target.itemGoal.count);
+          if (!left) return false;
+          inventory = left;
+        }
+        // 捎信捎物一类的事了结，手里那件东西一并销去
+        if (target.carryItemId) inventory = inventory.filter((i) => i.id !== target.carryItemId);
+
         // 为这桩事现开的那一处去处，事一了便撤去；原本就在舆图上的去处不归它管
         const questAdventure = (Array.isArray(st.adventures) ? st.adventures : []).find(
           (a) => a.questId === target.id,
@@ -2864,10 +2881,8 @@ EFFECT: [效果描述]`,
           set({
             adventures,
             currentAdventureId,
-            // 捎信捎物一类的事了结，手里那件东西一并销去
-            inventory: target.carryItemId
-              ? st.inventory.filter((i) => i.id !== target.carryItemId)
-              : st.inventory,
+            // 交出去的那件东西已从行囊里销去
+            inventory,
             quests: st.quests.map((q) =>
               q.id === target.id
                 ? { ...q, status: "done", settledDay: daySerial(st.currentTime), claimed: false, outcome: held }
@@ -2904,9 +2919,7 @@ EFFECT: [效果描述]`,
           adventures,
           currentAdventureId,
           // 捎信捎物一类的事了结，手里那件东西一并销去
-          inventory: target.carryItemId
-            ? st.inventory.filter((i) => i.id !== target.carryItemId)
-            : st.inventory,
+          inventory,
           quests: st.quests.map((q) =>
             q.id === target.id
               ? { ...q, status, settledDay: daySerial(st.currentTime), outcome }
@@ -3040,6 +3053,25 @@ EFFECT: [效果描述]`,
           currentLocation: "outdoor",
           mapSceneId: WORLD_SCENE_ID,
           log: [`你行至「${adv.name}」所在的那一处地头。`, ...st.log].slice(0, 30),
+        });
+      },
+
+      patchAdventure: (id, patch) => {
+        const st = get();
+        const list = Array.isArray(st.adventures) ? st.adventures : [];
+        if (!list.some((a) => a.id === id)) return;
+        set({ adventures: list.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
+      },
+
+      removeAdventure: (id) => {
+        const st = get();
+        const list = Array.isArray(st.adventures) ? st.adventures : [];
+        const target = list.find((a) => a.id === id);
+        if (!target) return;
+        set({
+          adventures: list.filter((a) => a.id !== id),
+          currentAdventureId: st.currentAdventureId === id ? undefined : st.currentAdventureId,
+          log: [`「${target.name}」这一处已从舆图上抹去。`, ...st.log].slice(0, 30),
         });
       },
 
@@ -3428,6 +3460,37 @@ EFFECT: [效果描述]`,
         if (positions.length === 0) return;
 
         const current = String(st.player?.position || "").trim();
+        const playerName = String(st.player?.name || "").trim();
+        const leaderName = String(st.sect?.leader || "").trim();
+        // 一门之主是谁，只认这一条：宗门数据里的掌门之名与玩家自己对得上。
+        // 立宗、开篇自述、禅位都写在这个字段里，故它是唯一凭据；
+        // 对得上便是掌门，职位树里没这一格也得补上——领头的身份不该被职位表吞掉
+        const ownsSect =
+          !!leaderName && (leaderName === "你" || (!!playerName && leaderName === playerName));
+        if (ownsSect) {
+          const seat = positions.find((p) => p?.name === "掌门");
+          if (current === "掌门" && seat?.isCurrent && leaderName !== "你") return;
+          const next = seat
+            ? positions.map((p) => ({ ...p, isCurrent: p.name === "掌门" }))
+            : [
+                {
+                  id: "leader",
+                  name: "掌门",
+                  level: positions.reduce((max, p) => Math.max(max, Number(p.level) || 1), 4) + 1,
+                  contributionNeeded: 0,
+                  privilege: "执掌本门，总理诸事。",
+                  isCurrent: true,
+                  unlocked: true,
+                },
+                ...positions.map((p) => ({ ...p, isCurrent: false })),
+              ];
+          set({
+            player: { ...st.player, position: "掌门" },
+            sect: { ...st.sect, leader: leaderName === "你" ? st.player.name || "你" : leaderName, positions: next },
+          });
+          return;
+        }
+
         const match = current
           ? positions.find(
               (p) => p?.name && (p.name === current || p.name.includes(current) || current.includes(p.name)),
@@ -3866,7 +3929,7 @@ EFFECT: [效果描述]`,
         set({ ...initialState, sectSites: rollSectSites(), log: ["重入轮回，再启修真。"], ending: null });
       },
 
-      applyOps: (ops) => {
+      applyOps: (ops, opts) => {
         // 结算里没能做成的买卖，回一句给叙事收尾
         const settleNotes: string[] = [];
         if (ops.length === 0) return settleNotes;
@@ -3917,6 +3980,7 @@ EFFECT: [效果描述]`,
           };
           const next = applyOpsToState(dataView, ops, {
             onNote: (text) => settleNotes.push(text),
+            writable: opts?.writable,
           });
           // 首次获得心法时自动生效，否则玩家不打开功法面板手动切换就一直是「未定心法」
           const nextPlayer = { ...next.player };
@@ -5303,6 +5367,10 @@ EFFECT: [效果描述]`,
         // 舆图上兴许又生出一处奇遇，落在眼前这一带
         void import("@/store/useAIStore")
           .then(({ useAIStore }) => useAIStore.getState().maybeSpawnAdventure(hours))
+          .catch(() => {});
+        // 每月至少开一处非任务奇遇：当月还空着，便在走过这一段时补上
+        void import("@/store/useAIStore")
+          .then(({ useAIStore }) => useAIStore.getState().ensureMonthlyAdventure())
           .catch(() => {});
         // 重伤不愈：气血不满两成，每过一个时辰再掉一点；油尽灯枯、寿元耗尽都是终局
         get().tickMortality(Math.max(0, Math.trunc(hours)));

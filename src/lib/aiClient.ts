@@ -298,6 +298,13 @@ function snapThinkingTemperature(temperature: number): number {
 }
 
 /**
+ * 要 JSON 的那一路另有温度：结算、建档这类活儿图的是结构稳、字段名不跑偏，
+ * 不该跟着设置里那个为叙事起伏留的温度走。调用方没有单独指定温度时压到这里。
+ * 要文采又要 JSON 的（如推演风闻、生成奇遇），调用方自会显式给高一点。
+ */
+const JSON_TEMPERATURE = 0.15;
+
+/**
  * 请求体只在这一处生成。三处调用各写一份，参数适配迟早走岔。
  * 推理档与非推理档的差别全在这里收口：输出额度放宽、不硬要 response_format。
  */
@@ -713,7 +720,7 @@ export async function chatWithModel(
     jsonMode?: boolean;
     /**
      * 单独指定温度。建档、结算这类要求输出合法 JSON 的活儿该压低些，
-     * 不必跟着设置里那个随叙事起伏的温度走。
+     * 不必跟着设置里那个随叙事起伏的温度走。不指定时，jsonMode 一律按低温办。
      */
     temperature?: number;
     /**
@@ -741,7 +748,9 @@ export async function chatWithModel(
         model,
         messages,
         stream: false,
-        temperature: opts.temperature ?? settings.temperature,
+        temperature:
+          opts.temperature ??
+          (opts.jsonMode ? Math.min(settings.temperature, JSON_TEMPERATURE) : settings.temperature),
         reasoning: isReasoningSlot(settings, slotOf(settings, model)),
         jsonMode: opts.jsonMode,
         signal: controller.signal,

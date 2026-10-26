@@ -4,6 +4,7 @@ import { lowStonesWorth } from "@/data/spiritStones";
 import { useAIStore } from "@/store/useAIStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { HOURS_PER_DAY } from "@/data/rooms";
 import { RENT_TENANT_KINDS } from "@/data/estates";
 import { getMarker } from "@/data/map";
@@ -126,9 +127,11 @@ export function ManorDock({ plot, index }: { plot: ManorPlot; index: number | nu
   const rest = () => {
     if (rented) return;
     const ratio = restRatio(manorBonusOf("客舍"));
+    // 内伤一类状态压低了此刻的气血上限，回血不越过这一道
+    const maxHp = effectiveHpMax(player);
     setPlayer({
       ...player,
-      hp: Math.min(player.hpMax, Math.round(player.hp + player.hpMax * ratio)),
+      hp: Math.min(maxHp, Math.round(player.hp + maxHp * ratio)),
       mp: Math.min(player.mpMax, Math.round(player.mp + player.mpMax * ratio)),
     });
     advanceTime(HOURS_PER_DAY);

@@ -188,6 +188,60 @@ export function playerSectName(raw: string | undefined): string {
   return name && name !== "散修" ? name : "";
 }
 
+/** 名号末尾那些只作点缀的字：判是不是同一处山门时先抹去 */
+const SECT_NAME_TAILS = [
+  "宗", "门", "派", "阁", "观", "院", "寺", "殿", "堂", "楼",
+  "庵", "祠", "宫", "府", "城", "堡", "寨", "谷", "坞", "涧",
+  "岛", "洲", "屿", "洞", "窟", "庄", "坪", "山",
+];
+
+/**
+ * 一个宗名的「内核」：抹去末尾的地貌字与常见门号，
+ * 白鹿院、白鹿涧、白鹿洞、白鹿洲 便都归到「白鹿」名下。
+ * 抹完不足两字的照旧留着（「蛊楼」不抹作「蛊」），抹空了便返回原名。
+ */
+export function sectNameCore(raw: string | undefined): string {
+  const name = String(raw ?? "").trim();
+  if (!name) return "";
+  let core = name;
+  for (;;) {
+    const tail = SECT_NAME_TAILS.find((t) => core.endsWith(t) && core.length - t.length >= 2);
+    if (!tail) break;
+    core = core.slice(0, -tail.length);
+  }
+  return core || name;
+}
+
+/**
+ * 舆图上与这个名号算同一处的那一家。
+ *
+ * 一字不差的自然算；同一带里名号内核相同的也算——叙事把「白鹿涧」写成了「白鹿洞」，
+ * 那是同一处山门被写岔了一个字，不该在图上另立一处。
+ * 本门另当别论：内核与本门相同而写着别一字的，哪一带都不许另立。
+ */
+export function findSameSectSite(
+  existing: SectSite[],
+  name: string,
+  culture?: string,
+): SectSite | undefined {
+  const list = Array.isArray(existing) ? existing : [];
+  const want = String(name ?? "").trim();
+  if (!want) return undefined;
+
+  const exact = list.find((s) => String(s?.name ?? "").trim() === want);
+  if (exact) return exact;
+
+  const core = sectNameCore(want);
+  if (!core) return undefined;
+  const near = list.filter((s) => !!s?.name && sectNameCore(s.name) === core);
+  if (near.length === 0) return undefined;
+
+  const here = normalizeSectCulture(culture);
+  const local = near.find((s) => normalizeSectCulture(s.culture) === here);
+  if (local) return local;
+  return near.find((s) => s.mine);
+}
+
 /**
  * 叙事里提到一处本局舆图上还没有的宗门时，由它自述的信息。
  * 名号必写，其余给多少算多少。
@@ -241,13 +295,14 @@ export function composeSectSite(
   const name = String(spec?.name ?? "").trim().slice(0, 20);
   const list = Array.isArray(existing) ? existing : [];
   if (!name) return null;
-  if (list.some((s) => s?.name === name)) return null;
+  // 没说在哪一带，就按玩家眼下的文化圈落点
+  const culture = normalizeSectCulture(spec?.culture || fallbackCulture);
+  // 名号近似的也算同一处：白鹿涧、白鹿院、白鹿洞、白鹿洲 只许留一处
+  if (findSameSectSite(list, name, culture)) return null;
 
   const cities = getCityMarkers();
   if (cities.length === 0) return null;
 
-  // 没说在哪一带，就按玩家眼下的文化圈落点
-  const culture = normalizeSectCulture(spec?.culture || fallbackCulture);
   const spot = pickSectSpot(culture, list, cities);
   if (!spot) return null;
 

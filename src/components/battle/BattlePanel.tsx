@@ -6,6 +6,7 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { PanelTitle } from "@/components/ui/PanelTitle";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { Swords, X, Loader2, Flame, Footprints, Package, Coins, Skull, Flag } from "lucide-react";
 
 export function BattlePanel() {
@@ -192,6 +193,8 @@ function BattleOngoingView() {
 
   const [action, setAction] = useState("");
   const isResolving = battle.isResolving;
+  // 内伤一类状态压低了气血上限，界面上照实时的上限报
+  const hpMax = effectiveHpMax(player);
   const incenseBuffs = (Array.isArray(player.buffs) ? player.buffs : []).filter(
     (b) => b.durationType === "incense",
   );
@@ -260,12 +263,12 @@ function BattleOngoingView() {
       >
         <div className="grid grid-cols-4 gap-2 sm:gap-4">
           <div className="text-center">
-            <div className="font-brush text-lg text-cinnabar-400 text-glow-formation">{player.hp}</div>
-            <div className="font-serif text-xs text-paper-400/50">气血 / {player.hpMax}</div>
+            <div className="font-brush text-lg text-cinnabar-400 text-glow-formation">{Math.min(player.hp, hpMax)}</div>
+            <div className="font-serif text-xs text-paper-400/50">气血 / {hpMax}</div>
             <div className="h-1 bg-ink-900 rounded mt-1 overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-cinnabar-600 to-cinnabar-400 transition-all shadow-inner-glow"
-                style={{ width: `${(player.hp / player.hpMax) * 100}%` }}
+                style={{ width: `${(Math.min(player.hp, hpMax) / hpMax) * 100}%` }}
               />
             </div>
           </div>

@@ -6,7 +6,7 @@ import { SealButton } from "@/components/ui/SealButton";
 import { HaggleModal } from "@/components/map/HaggleModal";
 import { AppraiseModal } from "@/components/map/AppraiseModal";
 import { manorKey } from "@/data/npcGen";
-import { goodDesc, goodPrice, itemSalePrice } from "@/data/goods";
+import { goodDesc, goodPrice, itemSalePrice, itemSalePriceFor } from "@/data/goods";
 import { formatGameTime } from "@/lib/gameTime";
 import type { Good, InventoryItem, Shop } from "@/data/types";
 import { Coins, Gem, MessageSquare, Tag, User, X } from "lucide-react";
@@ -56,6 +56,8 @@ export function GeneralStoreModal({
   const [mode, setMode] = useState<"buy" | "sell">("buy");
   const [pickedGood, setPickedGood] = useState("");
   const [pickedItem, setPickedItem] = useState("");
+  /** 卖出时从这一组里取几件：默认一件，可自己改，也可一键全卖 */
+  const [sellCount, setSellCount] = useState(1);
   const [haggling, setHaggling] = useState<{ mode: "buy" | "sell"; subject: HaggleSubject | null } | null>(
     null,
   );
@@ -70,6 +72,9 @@ export function GeneralStoreModal({
   const priceOf = (g: Good) => goodPrice(g.name, g.base, currentTime, priceAdjusts);
   const selectedGood = goods.find((g) => g.name === pickedGood) ?? null;
   const selectedItem: InventoryItem | undefined = inventory.find((i) => i.id === pickedItem);
+  /** 这一组要卖出几件：夹在 1 到存货数之间 */
+  const sellTake = selectedItem ? Math.max(1, Math.min(Math.trunc(sellCount) || 1, selectedItem.count)) : 0;
+  const sellTotal = selectedItem ? itemSalePriceFor(selectedItem, sellTake) : 0;
 
   /** 按标价直接买下 */
   const buyNow = (g: Good) => {
@@ -81,12 +86,14 @@ export function GeneralStoreModal({
     }
   };
 
-  /** 按掌柜起初的价直接卖 */
+  /** 按掌柜起初的价直接卖，卖几件照选定的数目 */
   const sellNow = (item: InventoryItem) => {
-    const total = itemSalePrice(item);
-    if (sellItem({ itemId: item.id, totalPrice: total, count: item.count })) {
-      setNote(`卖出「${item.name}」${item.count} 件，得 ${total} 下品灵石。`);
+    const count = Math.max(1, Math.min(sellTake, item.count));
+    const total = itemSalePriceFor(item, count);
+    if (sellItem({ itemId: item.id, totalPrice: total, count })) {
+      setNote(`卖出「${item.name}」${count} 件，得 ${total} 下品灵石。`);
       setPickedItem("");
+      setSellCount(1);
     } else {
       setNote("这笔买卖没成。");
     }
@@ -311,6 +318,7 @@ export function GeneralStoreModal({
                           key={item.id}
                           onClick={() => {
                             setPickedItem(item.id);
+                            setSellCount(1);
                             setNote("");
                           }}
                           className={
@@ -349,8 +357,39 @@ export function GeneralStoreModal({
                     <p className="font-serif text-sm text-paper-200 leading-relaxed mt-1">
                       {selectedItem.desc}
                     </p>
+                    {/* 这一组要卖几件：默认一件，也可以自己填或一键全卖 */}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="font-serif text-[11px] text-paper-400/60">卖出</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={selectedItem.count}
+                        value={sellTake}
+                        onChange={(e) =>
+                          setSellCount(
+                            Math.max(1, Math.min(selectedItem.count, Math.trunc(Number(e.target.value)) || 1)),
+                          )
+                        }
+                        className="w-16 rounded border border-gold-500/30 bg-ink-900/60 px-2 py-1 font-number text-xs text-paper-100 outline-none focus:border-gold-400"
+                      />
+                      <span className="font-serif text-[11px] text-paper-400/60">/ {selectedItem.count} 件</span>
+                      <button
+                        type="button"
+                        onClick={() => setSellCount(1)}
+                        className="rounded border border-gold-500/25 px-1.5 py-0.5 font-serif text-[10px] text-paper-300 transition hover:border-gold-400/60"
+                      >
+                        一件
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSellCount(selectedItem.count)}
+                        className="rounded border border-gold-500/25 px-1.5 py-0.5 font-serif text-[10px] text-paper-300 transition hover:border-gold-400/60"
+                      >
+                        全部
+                      </button>
+                    </div>
                     <p className="font-serif text-[11px] text-paper-400/55 mt-1.5">
-                      掌柜起初肯出 {itemSalePrice(selectedItem)} 下品灵石。
+                      掌柜起初肯出 {sellTotal} 下品灵石。
                     </p>
                   </ScrollCard>
                 )}
@@ -401,7 +440,7 @@ export function GeneralStoreModal({
                   onClick={() => selectedItem && sellNow(selectedItem)}
                   className="px-4 py-2 text-sm"
                 >
-                  按此价出售
+                  按此价出售（{sellTotal}）
                 </SealButton>
                 <SealButton
                   variant="ghost"
@@ -413,15 +452,15 @@ export function GeneralStoreModal({
                       subject: {
                         mode: "sell",
                         name: selectedItem.name,
-                        count: selectedItem.count,
-                        basePrice: itemSalePrice(selectedItem),
+                        count: sellTake,
+                        basePrice: sellTotal,
                         itemId: selectedItem.id,
                       },
                     })
                   }
                   className="px-4 py-2 text-sm"
                 >
-                  讲价
+                  {sellTake > 1 ? `讲价（卖 ${sellTake} 件）` : "讲价"}
                 </SealButton>
               </>
             )}

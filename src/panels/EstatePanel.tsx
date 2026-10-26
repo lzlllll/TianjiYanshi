@@ -9,6 +9,7 @@ import { HOURS_PER_DAY } from "@/data/rooms";
 import { cultivationGain } from "@/data/cultivation";
 import { estateEfficiency, RENT_TENANT_KINDS } from "@/data/estates";
 import { manorBonuses, restRatio } from "@/data/manors";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { manorSceneId } from "@/data/map";
 import type { Estate } from "@/data/types";
 import { Coins, Home, Loader2, Package, Sparkles, Swords } from "lucide-react";
@@ -155,11 +156,12 @@ function EstateInterior({ estate }: { estate: Estate }) {
   /** 歇息：屋里不收钱，一样把气血灵力养回来；租出去了便住不得 */
   const rest = () => {
     if (ruined || rented) return;
-    // 回复按日算，宅邸里的「客舍」再抬一抬
+    // 回复按日算，宅邸里的「客舍」再抬一抬；上限照临时状态压过的那一道算
     const ratio = restRatio(useGameStore.getState().manorBonus("客舍")) * days;
+    const maxHp = effectiveHpMax(player);
     setPlayer({
       ...player,
-      hp: Math.min(player.hpMax, Math.round(player.hp + player.hpMax * ratio)),
+      hp: Math.min(maxHp, Math.round(player.hp + maxHp * ratio)),
       mp: Math.min(player.mpMax, Math.round(player.mp + player.mpMax * ratio)),
     });
     advanceTime(hours);

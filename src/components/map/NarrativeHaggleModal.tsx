@@ -3,7 +3,7 @@ import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { HaggleModal } from "@/components/map/HaggleModal";
 import type { HaggleSubject } from "@/components/map/GeneralStoreModal";
-import { itemSalePrice } from "@/data/goods";
+import { itemSalePriceFor } from "@/data/goods";
 import type { Relation } from "@/data/types";
 
 /**
@@ -50,11 +50,13 @@ export function NarrativeHaggleModal() {
     }
     const item = inventory.find((i) => i.name === brief.subject);
     if (!item) return null;
+    // 叙事点了几件便照那几件起谈，没说或超过存量才退回整组
+    const count = Math.max(1, Math.min(Math.trunc(Number(brief.count)) || item.count, item.count));
     return {
       mode: "sell",
       name: item.name,
-      count: item.count,
-      basePrice: itemSalePrice(item),
+      count,
+      basePrice: itemSalePriceFor(item, count),
       itemId: item.id,
     };
   }, [brief, inventory]);

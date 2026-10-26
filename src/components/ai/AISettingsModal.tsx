@@ -11,6 +11,7 @@ import { CustomApiModal } from "@/components/ai/CustomApiModal";
 import { SealButton } from "@/components/ui/SealButton";
 import { bgm, DEFAULT_BGM_VOLUME } from "@/lib/bgm";
 import { cn } from "@/lib/utils";
+import { effectiveHpMax } from "@/lib/buffUtils";
 import { X, Loader2, CheckCircle2, AlertTriangle, Plug } from "lucide-react";
 
 const DEFAULT_FONT_SCALE = 1;
@@ -595,6 +596,7 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
                   <button
                     onClick={() => {
                       const player = useGameStore.getState().player;
+                      const maxHp = effectiveHpMax(player);
                       startBattle({
                         width: 10,
                         height: 10,
@@ -604,8 +606,8 @@ export function AISettingsModal({ open, onClose, allowTestTools = false }: AISet
                             name: player.name,
                             type: "player",
                             position: { x: 5, y: 5 },
-                            hp: player.hp,
-                            maxHp: player.hpMax,
+                            hp: Math.min(player.hp, maxHp),
+                            maxHp,
                             mp: player.mp,
                             maxMp: player.mpMax,
                           },
