@@ -69,6 +69,7 @@ import type {
   Village,
 } from "@/data/types";
 import { resolveLocation } from "@/data/locations";
+import { normalizeAdventure, pickOrNudgeSpotNear } from "@/data/adventures";
 import { OPENING_GAME_TIME, OPENING_DAY_SERIAL, LEGACY_DAY_OFFSET, ERA_YEAR_OFFSET, daySerial, gameDateKey, gameMonthKey, normalizeGameTime, shiftGameTime, shichenName } from "@/lib/gameTime";
 import { MAX_TRAVEL_COMPANIONS, isNpcAround, manorKey, rollManor, rollQuestNpc, travelingCount } from "@/data/npcGen";
 import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
@@ -550,6 +551,28 @@ function validateAndFixPlayer(player: any): Player {
   };
 }
 
+/**
+ * 宗门那一摊子数组里常有半截条目：模型落账时写进一条 null、或漏了名目，
+ * 概览一读 h.status 便整页崩掉。载入存档、回放快照时一律清一遍：
+ * 只留得下对象的条目，名目也没有的便舍了。
+ */
+function normalizeSectData(raw: any): GameState["sect"] {
+  const base = (raw && typeof raw === "object" ? raw : {}) as any;
+  const entries = (value: any) =>
+    Array.isArray(value)
+      ? value.filter((item: any) => item && typeof item === "object" && !Array.isArray(item))
+      : [];
+  return {
+    ...initialState.sect,
+    ...base,
+    positions: entries(base.positions),
+    tasks: entries(base.tasks),
+    shop: entries(base.shop),
+    heritage: entries(base.heritage).filter((h: any) => h.name),
+    resources: entries(base.resources).filter((r: any) => r.name),
+  };
+}
+
 function validateAndFixState(state: any): GameState {
   return {
     ...initialState,
@@ -567,14 +590,7 @@ function validateAndFixState(state: any): GameState {
       : { low: 0, mid: 0, high: 0, supreme: 0 },
     reputation: normalizeReputation(state?.reputation),
     beast: normalizeBeast(state?.beast),
-    sect: typeof state?.sect === "object" && state.sect !== null
-      ? {
-        ...initialState.sect,
-        ...state.sect,
-        positions: Array.isArray(state.sect.positions) ? state.sect.positions : [],
-        tasks: Array.isArray(state.sect.tasks) ? state.sect.tasks : [],
-      }
-      : initialState.sect,
+    sect: normalizeSectData(state?.sect),
     // 旧档只有情谊，载入时折成关系与信任
     relations: Array.isArray(state?.relations) ? state.relations.map(migrateRelation) : [],
     log: Array.isArray(state?.log) ? state.log : [],
@@ -1460,8 +1476,40 @@ EFFECT: [效果描述]`,
         const dueDay = today + days;
         const cityId = task.target?.cityId ?? "";
         const districtId = typeof task.target?.districtId === "number" ? task.target.districtId : undefined;
-        const label = task.place || task.target?.label || "门中";
+        let label = task.place || task.target?.label || "门中";
         const culture = cityId ? getMarker(cityId)?.culture : undefined;
+
+        // 这一桩的去处舆图上本没有：在本门就近处现开一处奇遇，星标钉在那一处。
+        // 开不出来（那一带的点位都被人占满了）便照旧落在街区上，好歹有处可去
+        const questId = `quest-${task.id}`;
+        let born: Adventure | undefined;
+        if (task.spawnAdventure && !task.target?.adventureId) {
+          const nearby = pickOrNudgeSpotNear(
+            { sectSites: s.sectSites, adventures: s.adventures },
+            cityId,
+          );
+          if (nearby) {
+            born =
+              normalizeAdventure(
+                {
+                  name: task.spawnAdventure.name,
+                  kind: task.spawnAdventure.kind,
+                  summary: task.spawnAdventure.summary,
+                  danger: task.spawnAdventure.danger,
+                  // 事一了，这一处便随那桩机缘一并撤去
+                  questId,
+                },
+                {
+                  state: { sectSites: s.sectSites, adventures: s.adventures },
+                  spot: nearby,
+                  cityId,
+                  day: today,
+                  origin: "story",
+                },
+              ) ?? undefined;
+            if (born) label = `${born.name}（${born.kind}）`;
+          }
+        }
 
         // 接取时把托付要用的人钉到目标地块上：办到那儿，才寻得着人、交得了差
         const relations = s.relations.map((r) => ({ ...r }));
@@ -1477,7 +1525,8 @@ EFFECT: [效果描述]`,
             });
           }
           if (added.length > 0) contact = added[0].name;
-        } else if (cityId && districtId !== undefined && cast.length > 0) {
+        } else if (cityId && cast.length > 0) {
+          // 去处是城内街区、坊市铺面，或就地现开的奇遇：人照这一处钉下，到了才寻得着
           for (const role of cast) {
             added.push({ ...rollQuestNpc(role, label, cityId, districtId, culture), fixedUntilDay: dueDay });
           }
@@ -1491,9 +1540,19 @@ EFFECT: [效果描述]`,
           person: contact,
           ...(task.target?.sectId ? { sectId: task.target.sectId } : {}),
           ...(task.target?.building ? { building: task.target.building } : {}),
+          // 去处是舆图上的一处奇遇：现开的那一处优先，其次是任务原本点名的
+          ...(born
+            ? { adventureId: born.id }
+            : task.target?.adventureId
+              ? { adventureId: task.target.adventureId }
+              : {}),
+          // 去处是坊市里现开的一间铺子：集市面板照这一项临时摆出摊面
+          ...(task.target?.shop ? { shop: task.target.shop } : {}),
+          ...(task.target?.shopKind ? { shopKind: task.target.shopKind } : {}),
+          ...(task.target?.shopDesc ? { shopDesc: task.target.shopDesc } : {}),
         };
         const quest: Quest = {
-          id: `quest-${task.id}`,
+          id: questId,
           name: task.title,
           desc: task.desc,
           place: label,
@@ -1512,6 +1571,10 @@ EFFECT: [效果描述]`,
 
         set({
           quests: [...s.quests, quest],
+          // 现开的那一处去处一并落在舆图上，星标才点得着
+          ...(born
+            ? { adventures: [...(Array.isArray(s.adventures) ? s.adventures : []), born] }
+            : {}),
           relations: [...relations, ...added],
           sect: {
             ...s.sect,
@@ -1521,6 +1584,7 @@ EFFECT: [效果描述]`,
           },
           log: [
             `接下门派任务「${task.title}」，限期 ${days} 日，须往${label}走一趟，交付了才算完。`,
+            ...(born ? [`舆图上多了一处去处：${born.name}。`] : []),
             ...s.log,
           ].slice(0, 30),
         });
@@ -1540,7 +1604,15 @@ EFFECT: [效果描述]`,
 
         const targets = brokerTargetsFor(cityId, st.districtNames, st.relations);
         const buildings = sectTaskBuildings(st, site);
-        const next = rollSectTasks(targets, buildings, 4);
+        const next = rollSectTasks(
+          targets,
+          buildings,
+          4,
+          // 舆图上现开着的奇遇也能当去处：门中派一桩事，往那处去探个究竟
+          (Array.isArray(st.adventures) ? st.adventures : [])
+            .filter((a) => a && a.id && a.name)
+            .map((a) => ({ id: a.id, name: a.name, kind: a.kind, cityId: a.cityId })),
+        );
         if (next.length === 0) return;
 
         set({
@@ -5532,7 +5604,7 @@ EFFECT: [效果描述]`,
           markets: snap.markets ? clone(snap.markets) : {},
           // 旧存档没有这一项：只好留用眼前这一套，免得名号换了、与已占的城村对不上
           sectSites: Array.isArray(snap.sectSites) ? clone(snap.sectSites) : get().sectSites,
-          sect: clone(snap.sect),
+          sect: normalizeSectData(clone(snap.sect)),
           relations: Array.isArray(snap.relations) ? clone(snap.relations) : [],
           currentPanel: null,
           craftingTab: "talisman",

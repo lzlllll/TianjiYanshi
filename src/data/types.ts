@@ -757,6 +757,20 @@ export interface SectTask {
   dueDay?: number;
   /** 要办到哪儿去；有了它便在城图上星标出来 */
   target?: JobTarget;
+  /**
+   * 这一桩的去处舆图上本没有：接下时在本门就近处现开一处奇遇，
+   * 星标钉在那一处，事一了便随那桩机缘一并撤去。
+   */
+  spawnAdventure?: {
+    /** 奇遇名目，如「城西三十里的废祠」 */
+    name: string;
+    /** 类别，如 遗迹、秘境、凶险 */
+    kind: string;
+    /** 一句说清这是个什么地方、有什么可图 */
+    summary: string;
+    /** 凶险程度 1 至 5 */
+    danger: number;
+  };
   /** 办到目标地块上要打交道的人 */
   cast?: JobCastRole[];
   /** 这事儿已经了结——交差或误期，不再挂在板上 */

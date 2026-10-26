@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { Users, Award, Flag } from "lucide-react";
 import { useGameStore } from "@/store/useGameStore";
 import { lowStonesWorth } from "@/data/spiritStones";
@@ -33,6 +33,12 @@ type SubTab = "overview" | "position" | "task" | "shop" | "heritage" | "relation
 
 /** 登座讲经可挑的几个题目；挑了才讲得成，不是按一下便算 */
 const PREACH_TOPICS = ["本门经义", "养生之道", "丹道火候", "剑理刀法"];
+
+/**
+ * 空数组只留这一份：选择器里现造一个 []，zustand 每回都当成新值，
+ * 会连着重渲染直到 React 报超出更新深度。
+ */
+const EMPTY_LIST: never[] = [];
 
 export function SectPanel() {
   const sect = useGameStore((s) => s.sect);
@@ -203,6 +209,7 @@ function SectOverview() {
   const nextPosition = [...sect.positions]
     .filter(
       (p) =>
+        p &&
         !p.isCurrent &&
         (Number(p.level) || 1) > currentLevel &&
         p.contributionNeeded > sect.contribution,
@@ -213,8 +220,10 @@ function SectOverview() {
     : 100;
 
   // 传承完整：已习传承占全部传承的比例
-  const heritageTotal = sect.heritage.length;
-  const heritageLearned = sect.heritage.filter((h) => h.status === "已习").length;
+  // 旧档或落账时可能混进半截条目，先把认不出名目的滤掉，免得读 status 时整页崩
+  const heritageList = (Array.isArray(sect.heritage) ? sect.heritage : []).filter((h) => h && h.name);
+  const heritageTotal = heritageList.length;
+  const heritageLearned = heritageList.filter((h) => h.status === "已习").length;
   const heritagePct = heritageTotal > 0 ? Math.round((heritageLearned / heritageTotal) * 100) : 0;
 
   // 资源储备：灵石储备可支撑的日常开销天数
@@ -224,7 +233,7 @@ function SectOverview() {
 
   // 门中眼下生效的修正：政策、态势一类的时效，由叙事立起、到期自灭
   const today = daySerial(currentTime);
-  const sectMods = (sect.modifiers ?? []).filter((m) => Number(m.until) >= today);
+  const sectMods = (sect.modifiers ?? []).filter((m) => m && Number(m.until) >= today);
 
   return (
     <div className="space-y-4">
@@ -424,7 +433,7 @@ function SectOverview() {
 
 /** 宗门之间的交情：起初一张白纸，由叙事与新闻添改；附庸另列一栏 */
 function SectRelationsBoard() {
-  const relations = useGameStore((s) => (Array.isArray(s.sectRelations) ? s.sectRelations : []));
+  const relations = useGameStore((s) => (Array.isArray(s.sectRelations) ? s.sectRelations : EMPTY_LIST));
   const sectSites = useGameStore((s) => s.sectSites);
   const nameOf = (id: string) => sectSites.find((s) => s.id === id)?.name ?? id;
   const mine = sectSites.find((s) => s.mine);
@@ -516,7 +525,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 function PositionTree() {
-  const positions = useGameStore((s) => Array.isArray(s.sect?.positions) ? s.sect.positions : []);
+  const positions = useGameStore((s) => Array.isArray(s.sect?.positions) ? s.sect.positions : EMPTY_LIST);
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const promote = useGameStore((s) => s.promote);
   // 眼下排在第几级：此一档及以下皆视为已达，只往上领职，不往回降
@@ -598,7 +607,7 @@ function PositionTree() {
 }
 
 function TaskBoard() {
-  const tasks = useGameStore((s) => Array.isArray(s.sect?.tasks) ? s.sect.tasks : []);
+  const tasks = useGameStore((s) => Array.isArray(s.sect?.tasks) ? s.sect.tasks : EMPTY_LIST);
   const quests = useGameStore((s) => s.quests);
   const acceptTask = useGameStore((s) => s.acceptTask);
   const refreshSectTasks = useGameStore((s) => s.refreshSectTasks);
@@ -726,7 +735,7 @@ function TaskBoard() {
 }
 
 function ShopBoard() {
-  const shop = useGameStore((s) => Array.isArray(s.sect?.shop) ? s.sect.shop : []);
+  const shop = useGameStore((s) => Array.isArray(s.sect?.shop) ? s.sect.shop : EMPTY_LIST);
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const buyShop = useGameStore((s) => s.buyShop);
 
@@ -783,9 +792,9 @@ function ShopBoard() {
 function ContributionExchange() {
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const position = useGameStore((s) => s.player.position);
-  const positions = useGameStore((s) => (Array.isArray(s.sect?.positions) ? s.sect.positions : []));
+  const positions = useGameStore((s) => (Array.isArray(s.sect?.positions) ? s.sect.positions : EMPTY_LIST));
   const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
-  const inventory = useGameStore((s) => (Array.isArray(s.inventory) ? s.inventory : []));
+  const inventory = useGameStore((s) => (Array.isArray(s.inventory) ? s.inventory : EMPTY_LIST));
   const donateStonesToSect = useGameStore((s) => s.donateStonesToSect);
   const donateItemToSect = useGameStore((s) => s.donateItemToSect);
   const redeemContributionForStones = useGameStore((s) => s.redeemContributionForStones);
@@ -904,9 +913,13 @@ function ContributionExchange() {
 }
 
 function HeritageBoard() {
-  const heritage = useGameStore((s) => Array.isArray(s.sect?.heritage) ? s.sect.heritage : []);
-  const resources = useGameStore((s) => Array.isArray(s.sect?.resources) ? s.sect.resources : []);
-  const positions = useGameStore((s) => Array.isArray(s.sect?.positions) ? s.sect.positions : []);
+  // 选择器只取原数组：在这里现造一个空数组或过一遍滤，都会让 zustand 每回都当成新值
+  const heritageRaw = useGameStore((s) => (Array.isArray(s.sect?.heritage) ? s.sect.heritage : EMPTY_LIST));
+  const resourcesRaw = useGameStore((s) => (Array.isArray(s.sect?.resources) ? s.sect.resources : EMPTY_LIST));
+  // 半截条目在这里一并滤掉：旧档、或模型落账时写空的那一条，都不该让这一页崩掉
+  const heritage = heritageRaw.filter((h) => h && h.name);
+  const resources = resourcesRaw.filter((r) => r && r.name);
+  const positions = useGameStore((s) => Array.isArray(s.sect?.positions) ? s.sect.positions : EMPTY_LIST);
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
   const sectLevel = useGameStore((s) => s.sect?.level || 1);
   const lastPreachDay = useGameStore((s) => s.sect?.lastPreachDay || 0);

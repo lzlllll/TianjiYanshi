@@ -11,7 +11,7 @@
  * 不凭空编一个走不到的地名——这一条与牙行同一套规矩。
  */
 
-import { getCityMarkers } from "@/data/map";
+import { getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { REALM_NAMES } from "@/data/mockData";
 import { normalizeHour } from "@/lib/gameTime";
 import type { BrokerTargets } from "@/data/broker";
@@ -174,13 +174,20 @@ interface SectTaskTemplate {
   condition: string;
   /** 限期几日 */
   days: number;
-  /** 奔地方去、奔人去，还是奔本门某座建筑去 */
-  toward: "place" | "person" | "building";
+  /** 奔地方去、奔人去、奔本门某座建筑、奔舆图上一处奇遇，还是奔坊市里一间铺子去 */
+  toward: "place" | "person" | "building" | "adventure" | "shop";
   /**
    * 奔建筑去时，限用哪几类建筑；不填则本门任意一座皆可。
    * 如「送药材」只指丹房一类，门中没有丹房便不派这桩事。
    */
   buildingKinds?: FacilityKindId[];
+  /** 奔铺子去时那间铺子的名目；街上本没有，接取后会在坊市里临时摆出这一家 */
+  shopName?: string;
+  /**
+   * 奔舆图上本没有的去处去时，就地现开一处：给个名目、类别与一句光景。
+   * 舆图上一处奇遇都没有，或想就此另开一处新的，都照这个开。
+   */
+  wild?: { name: string; kind: string; summary: string; danger: number };
   /** 贡献的数额区间 */
   contribution: [number, number];
   /** 下品灵石的数额区间 */
@@ -412,6 +419,43 @@ const SECT_TASK_TEMPLATES: SectTaskTemplate[] = [
       },
     ],
   },
+  {
+    name: "往{at}采办一批用度",
+    desc: "门中近日开销大，库房里的常备用度见了底。掌事托你往{at}走一趟，照单子上的名目采买齐了。",
+    condition: "在{at}采齐用度，带回山门交库房",
+    days: 4,
+    toward: "shop",
+    shopName: "杂货铺",
+    contribution: [25, 50],
+    stone: [15, 45],
+    cast: [
+      {
+        title: "铺面的掌柜",
+        persona: "在坊市里开着一间杂货铺的掌柜，货物杂、记性更好。见宗门来人，先报个虚价，见你懂行才肯让到实处。",
+      },
+    ],
+  },
+  {
+    name: "往{at}探个究竟",
+    desc: "近来门中弟子多提{at}一带有些异样：去的默不作声，回来的也只说「莫再去了」。长老要你亲走一趟，看看到底是什么。",
+    condition: "在{at}探明情形，回山门照实回禀",
+    days: 6,
+    toward: "adventure",
+    wild: {
+      name: "城西三十里的废祠",
+      kind: "遗迹",
+      summary: "一座荒废多年的祠堂，梁木半塌，近来夜里偶有灯火与人语，去过的都说回来便病了一场。",
+      danger: 2,
+    },
+    contribution: [40, 80],
+    stone: [25, 70],
+    cast: [
+      {
+        title: "一道去的同门",
+        persona: "常在门中走动的一位同门，胆子不大、眼睛却尖。路上话多，真遇着事便往你身后站。",
+      },
+    ],
+  },
 ];
 
 const pickIndex = (len: number) => Math.floor(Math.random() * len);
@@ -437,6 +481,14 @@ export interface SectTaskBuilding {
   label: string;
 }
 
+/** 舆图上一处可当任务去处的奇遇 */
+export interface SectTaskAdventure {
+  id: string;
+  name: string;
+  kind?: string;
+  cityId?: string;
+}
+
 /** 从本门的建筑里挑一座当去处；限了类别的便只在那一类里挑，没有便退而取任意一座 */
 function pickBuilding(sites: SectTaskBuilding[], kinds?: FacilityKindId[]): SectTaskBuilding | undefined {
   if (sites.length === 0) return undefined;
@@ -455,15 +507,26 @@ export function rollSectTasks(
   targets: BrokerTargets | undefined,
   buildings: SectTaskBuilding[] = [],
   count = 4,
+  adventures: SectTaskAdventure[] = [],
 ): SectTask[] {
   const places = Array.isArray(targets?.places) ? targets.places : [];
   const people = Array.isArray(targets?.people) ? targets.people : [];
   const sites = Array.isArray(buildings) ? buildings : [];
-  if (places.length === 0 && people.length === 0 && sites.length === 0) return [];
+  const spots = (Array.isArray(adventures) ? adventures : []).filter((a) => a && a.id && a.name);
+  if (places.length === 0 && people.length === 0 && sites.length === 0 && spots.length === 0) return [];
+
+  // 坊市里的街区：采办一类的事落在铺面上；街上本没有那一家，接取后自会临时摆出来
+  const taskCityId = targets?.cityId ?? "";
+  const marketIds = new Set(
+    taskCityId ? getDistricts(taskCityId).filter((d) => d.nature === "坊市").map((d) => d.id) : [],
+  );
+  const shopPlaces = places.filter((p) => marketIds.has(p.districtId));
 
   const usable = SECT_TASK_TEMPLATES.filter((t) => {
     if (t.toward === "person") return people.length > 0;
     if (t.toward === "building") return sites.length > 0;
+    if (t.toward === "adventure") return spots.length > 0 || !!t.wild;
+    if (t.toward === "shop") return shopPlaces.length > 0;
     return places.length > 0;
   });
   const pool = usable.slice();
@@ -495,6 +558,72 @@ export function rollSectTasks(
         accepted: false,
         place: spot.label,
         condition: fill(tpl.condition, spot.label, undefined),
+        days: tpl.days,
+        target,
+        cast: tpl.cast,
+      });
+      continue;
+    }
+
+    // 奔舆图上一处奇遇去的：到了那一带才算到了地头，星标也钉在那一处。
+    // 现成奇遇与就地现开各有一半机会——门中也会听说一桩从没人探过的异样
+    if (tpl.toward === "adventure") {
+      const useExisting = spots.length > 0 && (!tpl.wild || Math.random() < 0.5);
+      const spot = useExisting ? spots[pickIndex(spots.length)] : undefined;
+      const wild = spot ? undefined : tpl.wild;
+      if (!spot && !wild) continue;
+      const contribution = amountIn(tpl.contribution);
+      const stone = amountIn(tpl.stone);
+      const cityName = getMarker(taskCityId)?.name ?? "";
+      // 现开的那一处，去处写明城名与方位；奇遇本身只叫它自己的名目
+      const label = spot
+        ? `${spot.name}（${spot.kind || "去处"}）`
+        : `${cityName}${wild!.name}`;
+      const target: JobTarget = spot
+        ? { cityId: spot.cityId ?? targets?.cityId ?? "", label, adventureId: spot.id }
+        : { cityId: targets?.cityId ?? "", label };
+      tasks.push({
+        id: `secttask-${Date.now().toString(36)}-${i}-${Math.floor(Math.random() * 1000)}`,
+        title: fill(tpl.name, label, undefined),
+        difficulty: difficultyOf(contribution),
+        contribution,
+        spiritStone: stone,
+        desc: fill(tpl.desc, label, undefined),
+        accepted: false,
+        place: label,
+        condition: fill(tpl.condition, label, undefined),
+        days: tpl.days,
+        target,
+        ...(wild ? { spawnAdventure: { ...wild } } : {}),
+        cast: tpl.cast,
+      });
+      continue;
+    }
+
+    // 奔坊市里一间铺子去的：这间铺子街面上本没有，接取后在集市里临时摆出来
+    if (tpl.toward === "shop") {
+      const place = shopPlaces[pickIndex(shopPlaces.length)];
+      if (!place || place.districtId === undefined) continue;
+      const shopName = tpl.shopName || "杂货铺";
+      const contribution = amountIn(tpl.contribution);
+      const stone = amountIn(tpl.stone);
+      const label = `${place.label}·${shopName}`;
+      const target: JobTarget = {
+        cityId: targets!.cityId,
+        districtId: place.districtId,
+        label,
+        shop: shopName,
+      };
+      tasks.push({
+        id: `secttask-${Date.now().toString(36)}-${i}-${Math.floor(Math.random() * 1000)}`,
+        title: fill(tpl.name, label, undefined),
+        difficulty: difficultyOf(contribution),
+        contribution,
+        spiritStone: stone,
+        desc: fill(tpl.desc, label, undefined),
+        accepted: false,
+        place: label,
+        condition: fill(tpl.condition, label, undefined),
         days: tpl.days,
         target,
         cast: tpl.cast,
