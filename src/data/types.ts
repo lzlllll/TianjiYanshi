@@ -1113,6 +1113,11 @@ export interface Quest {
   stoneGoal?: number;
   /** 差事要办到哪儿去；有了它便在城图上星标出来 */
   target?: JobTarget;
+  /**
+   * 叙事已写给的结构化去处：办到哪一类地方、叫什么名号、找谁。
+   * 有它便照它落地，不再拿去处那行字去猜——猜错了，一桩买药的差事就会长在野地里。
+   */
+  anchor?: QuestAnchor;
   /** 去处是坊市里的一间铺子时，叙事写定的门面与掌柜；钉完之后只作存底 */
   shopBrief?: QuestShopBrief;
   /** 这一桩办到目标地块上要用到的人；生成时照这份说明现掷，钉在那一处 */
@@ -1127,6 +1132,50 @@ export interface Quest {
    * 与牙行那一套并行——赏不押柜上，由宗门当场落账。
    */
   sectTask?: { taskId: string; contribution: number; spiritStone: number };
+}
+
+/** 一桩差事要找的那个人：由叙事点名，本地只照它立传、钉在去处上 */
+export interface QuestAnchorPerson {
+  /** 姓名：尘缘里已有的一字不差地写，没有的便另起一个新名 */
+  name: string;
+  /** 身份，如「药铺掌柜」「山门执事」 */
+  title?: string;
+  /** 一段话写定他的脾性、口风与做派 */
+  persona?: string;
+  gender?: string;
+  age?: number;
+  realm?: string;
+  origin?: string;
+  personality?: string;
+  appearance?: string;
+}
+
+/**
+ * 一桩差事的去处：叙事直接写明办到哪一类地方、叫什么名号。
+ * 有了它，本地只照名号翻成点位；翻不出来才回落到照字面去认。
+ */
+export interface QuestAnchor {
+  kind: "district" | "shop" | "sect" | "sectBuilding" | "village" | "adventure" | "wild";
+  /** 在哪座城；奔山门、村庄、野外去的可省 */
+  city?: string;
+  /** 街区名，kind=district 时用 */
+  district?: string;
+  /** 铺名，kind=shop 时用 */
+  shop?: string;
+  /** 铺面营生，kind=shop 时可省 */
+  shopKind?: string;
+  /** 山门名号，kind=sect、sectBuilding 时用 */
+  sect?: string;
+  /** 建筑名，kind=sectBuilding 时用 */
+  building?: string;
+  /** 村名，kind=village 时用 */
+  village?: string;
+  /** 奇遇名目，kind=adventure 时用 */
+  adventure?: string;
+  /** 就地现开的一处，kind=wild 时用 */
+  wild?: { name: string; kind: string; summary: string; danger: number };
+  /** 到了那一处要找的人 */
+  person?: QuestAnchorPerson;
 }
 
 /** 赏钱押在哪一家牙行 */
@@ -1527,6 +1576,11 @@ export interface BrokerJob {
    * 接取时只把那个人钉到目标地块上，不另掷人。
    */
   cast?: JobCastRole[];
+  /**
+   * 这桩差事落在城外一处本地预置的野地上：接取时在附近现开一处奇遇，
+   * 名目、类别与光景都照这一份来，不劳叙事另编。
+   */
+  spawnAdventure?: { name: string; kind: string; summary: string; danger: number };
   /** 交差条件 */
   condition: string;
   /** 限期几日，从接下的那天算起 */

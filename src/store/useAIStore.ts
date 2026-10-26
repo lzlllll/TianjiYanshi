@@ -535,6 +535,9 @@ function settleQuestMark(text: string, giver: string, broker?: QuestBroker): str
       adventures: Array.isArray(gs.adventures) ? gs.adventures : [],
       villages: Object.values(gs.villages ?? {}),
       sectSites: Array.isArray(gs.sectSites) ? gs.sectSites : [],
+      known: Array.isArray(gs.relations) ? gs.relations : [],
+      // 牙行柜上揽的事只落在真有的地方：认不出便退到城里街区，不在舆图上另开一处
+      noSpawn: !!broker,
     });
     // 捎信捎物一类的事：托付时把该带的东西真放进他的行囊
     const inventory = [...(Array.isArray(gs.inventory) ? gs.inventory : [])];

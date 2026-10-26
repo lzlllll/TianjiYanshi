@@ -14,6 +14,8 @@ import type {
   InventoryItem,
   JobTarget,
   Quest,
+  QuestAnchor,
+  QuestAnchorPerson,
   QuestBroker,
   QuestBuffSpec,
   QuestKind,
@@ -269,6 +271,77 @@ export function buildQuestBuff(spec: QuestBuffSpec, now: GameTime): Buff | null 
 }
 
 /**
+ * 叙事写下的去处意图：办到哪一类地方、叫什么名号、找谁。
+ * 认得出的类别才收，名号空着的也收——落地时自会回落到照字面认。
+ */
+const ANCHOR_KINDS: QuestAnchor["kind"][] = [
+  "district",
+  "shop",
+  "sect",
+  "sectBuilding",
+  "village",
+  "adventure",
+  "wild",
+];
+
+function normalizeAnchorPerson(raw: any): QuestAnchorPerson | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const name = clean(raw.name, 16);
+  if (!name) return undefined;
+  return {
+    name,
+    title: clean(raw.title, 16) || undefined,
+    persona: clean(raw.persona, 160) || undefined,
+    gender: clean(raw.gender, 4) || undefined,
+    age: Number.isFinite(Number(raw.age)) ? Math.trunc(Number(raw.age)) : undefined,
+    realm: clean(raw.realm, 12) || undefined,
+    origin: clean(raw.origin, 20) || undefined,
+    personality: clean(raw.personality, 20) || undefined,
+    appearance: clean(raw.appearance, 20) || undefined,
+  };
+}
+
+function normalizeQuestAnchor(raw: any): QuestAnchor | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  if (!ANCHOR_KINDS.includes(raw.kind)) return undefined;
+
+  const anchor: QuestAnchor = { kind: raw.kind };
+  const city = clean(raw.city, 12);
+  if (city) anchor.city = city;
+  const district = clean(raw.district, 16);
+  if (district) anchor.district = district;
+  const shop = clean(raw.shop, 20);
+  if (shop) anchor.shop = shop;
+  const shopKind = clean(raw.shopKind, 12);
+  if (shopKind) anchor.shopKind = shopKind;
+  const sect = clean(raw.sect, 16);
+  if (sect) anchor.sect = sect;
+  const building = clean(raw.building, 16);
+  if (building) anchor.building = building;
+  const village = clean(raw.village, 16);
+  if (village) anchor.village = village;
+  const adventure = clean(raw.adventure, 24);
+  if (adventure) anchor.adventure = adventure;
+
+  if (raw.wild && typeof raw.wild === "object") {
+    const name = clean(raw.wild.name, 20);
+    if (name) {
+      anchor.wild = {
+        name,
+        kind: clean(raw.wild.kind, 6) || "去处",
+        summary: clean(raw.wild.summary, 80),
+        danger: Math.max(1, Math.min(5, Math.trunc(Number(raw.wild.danger) || 1))),
+      };
+    }
+  }
+
+  const person = normalizeAnchorPerson(raw.person);
+  if (person) anchor.person = person;
+
+  return anchor;
+}
+
+/**
  * 把叙事给的一桩机缘理成能用的样子。
  * 名字为空就当没这桩事，返回 null 由调用方丢弃。
  */
@@ -315,6 +388,8 @@ export function normalizeQuest(raw: any, index = 0): Quest | null {
     broker: normalizeBroker(raw.broker),
     claimed: raw.claimed === true,
     target: normalizeTarget(raw.target),
+    // 叙事直接写明的去处：有它便照它落地，不再拿字面去猜
+    anchor: normalizeQuestAnchor(raw.anchor),
     // 去处落在一间铺子里的，铺子的营生、门面与掌柜一并收下，钉人挂牌都照它来
     shopBrief: normalizeShopBrief(raw.shop ?? raw.shopBrief),
     realmGoal: normalizeRealmGoal(raw.realmGoal ?? raw.realm ?? raw.targetRealm),

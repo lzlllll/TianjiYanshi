@@ -3686,43 +3686,94 @@ EFFECT: [效果描述]`,
         const today = daySerial(st.currentTime);
         const days = Math.max(1, Math.trunc(job.days) || 1);
         const dueDay = today + days;
+        const questId = `quest-${job.id}`;
 
         const cityName = getMarker(cityId)?.name ?? "此城";
         // 去处落在本城平民住宅上；柜上没有明写街区的，从平民住宅里现挑一处
-        const targetDistrictId =
+        let targetDistrictId =
           typeof job.target?.districtId === "number"
             ? job.target.districtId
             : getDistricts(cityId).find((d) => d.nature === "平民住宅")?.id;
         const spot = st.districtNames?.[`${cityId}:${targetDistrictId}`] || "平民住宅";
-        const label = job.target?.label || `${cityName}·${spot}`;
+        let label = job.target?.label || `${cityName}·${spot}`;
 
-        // 奔人去的差事把尘缘里那个人改钉到目标地块上；奔地方去的只管去处，不另钉人——
-        // 到了那一处怎么办，由叙事去写
-        const relations = st.relations.map((r) => ({ ...r }));
-        const added: Relation[] = [];
-        const contact = job.target?.person;
-
-        if (targetDistrictId !== undefined && contact) {
-          const at = relations.findIndex((r) => r.name === contact && r.cityId === cityId);
-          if (at >= 0) {
-            relations[at] = { ...relations[at], cityId, districtId: targetDistrictId, fixedUntilDay: dueDay };
+        // 这桩落在城外一处本地预置的野地上：照那份名目就近现开一处奇遇，
+        // 事一了便随这桩机缘一并撤去。开不出来（那一带占满了）就仍退到城里街区
+        let born: Adventure | undefined;
+        if (job.spawnAdventure) {
+          const nearby = pickOrNudgeSpotNear(
+            { sectSites: st.sectSites, adventures: st.adventures },
+            cityId,
+          );
+          if (nearby) {
+            born =
+              normalizeAdventure(
+                { ...job.spawnAdventure, questId },
+                {
+                  state: { sectSites: st.sectSites, adventures: st.adventures },
+                  spot: nearby,
+                  cityId,
+                  day: today,
+                  origin: "story",
+                },
+              ) ?? undefined;
+            if (born) {
+              targetDistrictId = undefined;
+              label = `${born.name}（${born.kind}）`;
+            }
           }
         }
 
+        // 到了地头总得有人交接：柜上点了名的，翻尘缘找那一位钉过去；
+        // 没点名的（押货、看守、上香这类），本地照这桩事的角色现掷一个交付目标
+        const relations = st.relations.map((r) => ({ ...r }));
+        const added: Relation[] = [];
+        let contact = job.target?.person;
+        let sealed = false;
+        if (contact) {
+          const at = relations.findIndex((r) => r.name === contact && r.cityId === cityId);
+          if (at >= 0) {
+            relations[at] = { ...relations[at], cityId, districtId: targetDistrictId, fixedUntilDay: dueDay };
+            sealed = true;
+          }
+        }
+        if (!sealed) {
+          const role = job.cast?.[0] ?? {
+            title: "接头的人",
+            persona: `「${job.name}」这桩事上要接头的人，在${label}等着，验过凭据才肯办事。`,
+          };
+          const hired = {
+            ...rollQuestNpc(
+              role,
+              label,
+              cityId,
+              targetDistrictId,
+              getMarker(cityId)?.culture,
+              targetDistrictId === undefined ? label : undefined,
+            ),
+            fixedUntilDay: dueDay,
+          };
+          // 差事字面里点的是谁，便立谁：尘缘里已找不到那一位时，名字仍照字面来
+          if (contact) hired.name = contact;
+          added.push(hired);
+          contact = hired.name;
+        }
+
         const target: JobTarget = {
-          cityId,
-          districtId: targetDistrictId,
+          cityId: born?.cityId ?? cityId,
+          ...(targetDistrictId !== undefined ? { districtId: targetDistrictId } : {}),
           label,
           person: contact,
+          ...(born ? { adventureId: born.id } : {}),
         };
 
         const quest: Quest = {
-          id: `quest-${job.id}`,
+          id: questId,
           name: job.name,
           desc: job.desc,
           place: label,
-          // 柜上奔人去的差事算人物类，连人去处一并钉下；奔地方去的算地点类，只管去处
-          kind: contact ? "人物" : "地点",
+          // 柜上的差事到了地头都有人交接，故一律算人物类：去处与人一并钉下
+          kind: "人物",
           dueDay,
           giver: shop.keeper?.name || shop.name,
           condition: job.condition,
@@ -3742,6 +3793,10 @@ EFFECT: [效果描述]`,
 
         set({
           quests: [...st.quests, quest],
+          // 城外现开的那一处去处一并落在舆图上，星标才点得着
+          ...(born
+            ? { adventures: [...(Array.isArray(st.adventures) ? st.adventures : []), born] }
+            : {}),
           relations: [...relations, ...added],
           markets: {
             ...st.markets,
@@ -3756,6 +3811,7 @@ EFFECT: [效果描述]`,
           },
           log: [
             `你在「${shop.name}」接下「${job.name}」，限期 ${days} 日，赏钱押在柜上，办成回来领。`,
+            ...(born ? [`舆图上多了一处去处：${born.name}。`] : []),
             ...st.log,
           ].slice(0, 30),
         });

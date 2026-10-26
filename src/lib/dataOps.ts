@@ -2740,6 +2740,8 @@ function applyOne(root: any, op: DataOp): void {
           adventures: Array.isArray(root?.adventures) ? (root.adventures as Adventure[]) : [],
           villages: Object.values((root?.villages ?? {}) as Record<string, Village>),
           sectSites: Array.isArray(root?.sectSites) ? (root.sectSites as SectSite[]) : [],
+          // 叙事点名要找的人若已在尘缘里，便照那一位，不再另立一个同名的人
+          known: Array.isArray(root?.relations) ? root.relations : [],
         });
         if (pinned.people.length > 0) {
           const relArr = resolveCollection(root, "relations");

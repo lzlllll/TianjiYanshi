@@ -19,6 +19,8 @@ import type {
   JobCastRole,
   JobTarget,
   Quest,
+  QuestAnchor,
+  QuestAnchorPerson,
   QuestPenaltyKind,
   QuestRewardKind,
   Relation,
@@ -42,8 +44,8 @@ interface JobTemplate {
   condition: string;
   /** 限期几日 */
   days: number;
-  /** 这桩事是奔着地方去的，还是奔着人去的 */
-  toward: "place" | "person";
+  /** 这桩事是奔着地方去的、奔着人去的，还是奔城外一处本地预置的野地去的 */
+  toward: "place" | "person" | "wild";
   rewardKind: QuestRewardKind;
   /** 灵石、修为这类赏的数额区间；物品、人情这类没有数额 */
   rewardRange?: [number, number];
@@ -54,6 +56,18 @@ interface JobTemplate {
   /** 罚的书面写法，{n} 处填数额 */
   penaltyText: string;
 }
+
+/**
+ * 柜上偶尔派到城外去的几处常例。
+ * 这几处是本地预置的：名目、类别与光景都写死在这儿，接取时才在舆图上开出来，
+ * 不劳叙事另编一处走不到的地方。
+ */
+const BROKER_WILD_SPOTS: { name: string; kind: string; summary: string; danger: number }[] = [
+  { name: "城西的破庙", kind: "遗迹", summary: "香火断了多年的小庙，梁上还挂着半幅褪色的旧幡。", danger: 1 },
+  { name: "山道上的废驿", kind: "遗迹", summary: "官道改线后荒下的驿站，马厩塌了半边，檐下积着落叶。", danger: 2 },
+  { name: "河滩旧渡口", kind: "去处", summary: "渡船早没了，只剩几根木桩立在浅水里，系船的石头还在。", danger: 1 },
+  { name: "乱葬岗边的草棚", kind: "凶险", summary: "守夜人搭的草棚，如今只剩骨架，风过时呜呜作响。", danger: 3 },
+];
 
 const TEMPLATES: JobTemplate[] = [
   {
@@ -224,6 +238,32 @@ const TEMPLATES: JobTemplate[] = [
     penaltyRange: [3, 8],
     penaltyText: "动重了手，衙门里记你一笔",
   },
+  {
+    name: "替人到城外旧庙上炷香",
+    desc: "有户人家许过一桩愿，如今不便出城，托牙行寻个人往{at}替他们上一炷香，替还了愿便算完。",
+    condition: "到{at}上过香，替许愿的人还了愿",
+    days: 3,
+    toward: "wild",
+    rewardKind: "灵石",
+    rewardRange: [30, 70],
+    rewardText: "谢银 {n} 下品灵石",
+    penaltyKind: "平民名声",
+    penaltyRange: [3, 8],
+    penaltyText: "愿没还上，人家心里要嘀咕",
+  },
+  {
+    name: "去城外取一件寄存的物什",
+    desc: "有人早年在{at}寄存了一样东西，如今去取。那地方荒了多年，托牙行寻个胆大心细的人走一趟。",
+    condition: "到{at}把寄存的物什取回来",
+    days: 5,
+    toward: "wild",
+    rewardKind: "灵石",
+    rewardRange: [60, 140],
+    rewardText: "谢银 {n} 下品灵石",
+    penaltyKind: "灵石",
+    penaltyRange: [30, 80],
+    penaltyText: "东西没取着，倒赔 {n} 下品灵石",
+  },
 ];
 
 /**
@@ -301,6 +341,18 @@ const JOB_CAST: Record<string, JobCastRole[]> = {
       persona: "赖在这户门前讨便宜的地痞，欺软怕硬、色厉内荏。见着单薄的便撒横，遇着硬茬子立马皮笑肉不笑地找台阶。",
     },
   ],
+  替人到城外旧庙上炷香: [
+    {
+      title: "守着香火的老人家",
+      persona: "住在近处、隔三差五来照看这处旧庙的老人家，见有人来还愿，先是意外，随后絮絮地说起这庙当年的光景。",
+    },
+  ],
+  去城外取一件寄存的物什: [
+    {
+      title: "寄存物什的主家",
+      persona: "把东西寄存在这处荒地上的主家，多年不曾来取。见有人替他跑这一趟，既感激又有些不愿多说的隐情。",
+    },
+  ],
 };
 
 /** 柜上现挂的差事可用的去处与要找的人，都由眼下实际有的东西现攒 */
@@ -368,6 +420,34 @@ export function rollBrokerJobs(targets: BrokerTargets, count?: number): BrokerJo
 
   for (let i = 0; i < want && pool.length > 0; i++) {
     const [tpl] = pool.splice(pickIndex(pool.length), 1);
+
+    // 奔城外一处本地预置的野地去的：这里只记名目，接取时才在舆图上开出来
+    if (tpl.toward === "wild") {
+      const spot = BROKER_WILD_SPOTS[pickIndex(BROKER_WILD_SPOTS.length)];
+      const cityName = getMarker(targets.cityId)?.name ?? "此城";
+      const label = `${cityName}${spot.name}`;
+      const rewardAmount = tpl.rewardRange ? amountIn(tpl.rewardRange) : undefined;
+      const penaltyAmount = amountIn(tpl.penaltyRange);
+      jobs.push({
+        id: `job-${Date.now().toString(36)}-${i}-${Math.floor(Math.random() * 1000)}`,
+        name: tpl.name,
+        desc: fill(tpl.desc, label, undefined),
+        place: label,
+        target: { cityId: targets.cityId, label },
+        spawnAdventure: { ...spot },
+        cast: JOB_CAST[tpl.name],
+        condition: fill(tpl.condition, label, undefined),
+        days: tpl.days,
+        reward: fill(tpl.rewardText, label, undefined, rewardAmount),
+        rewardKind: tpl.rewardKind,
+        rewardAmount,
+        penalty: fill(tpl.penaltyText, label, undefined, penaltyAmount),
+        penaltyKind: tpl.penaltyKind,
+        penaltyAmount,
+      });
+      continue;
+    }
+
     const person = tpl.toward === "person" ? people[pickIndex(people.length)] : undefined;
     // 奔人去的差事也落在平民住宅上：接取时把那个人钉到这儿，玩家去这儿才寻得着
     const place = person
@@ -460,13 +540,23 @@ function resolveSectBuildingTarget(text: string, sectSites: SectSite[]): JobTarg
   return undefined;
 }
 
-/** 把去处对回舆图上的一处奇遇：写明它名目的钉在那处点位上 */
+/**
+ * 把去处对回舆图上的一处奇遇：写明它名目的钉在那处点位上。
+ * 只认「就是这一处」「写到这一处之下」的说法，不做见字就收——
+ * 否则「长安·西市·回春堂」里恰好含着一处奇遇的名目，这桩买卖便被抢成野地去了。
+ */
 function resolveAdventureTarget(text: string, adventures: Adventure[]): JobTarget | undefined {
   const raw = String(text ?? "").trim();
   if (!raw) return undefined;
   const hit = adventures.find((a) => {
     const name = String(a?.name ?? "").trim();
-    return !!name && a.status === "open" && (raw === name || raw.includes(name));
+    if (!name || a.status !== "open") return false;
+    if (raw === name || raw.endsWith(`·${name}`) || raw.startsWith(`${name}（`)) return true;
+    // 也认「城名+名目」的写法（如「成都城西三十里的废祠」）：前半截须正好是一座城的名字，
+    // 这样「长安·西市·回春堂」便不会被一处叫「回春堂」的野地抢走
+    if (!raw.endsWith(name)) return false;
+    const prefix = raw.slice(0, raw.length - name.length);
+    return getCityMarkers().some((m) => m.name === prefix);
   });
   if (!hit) return undefined;
   return { cityId: hit.cityId || "", label: `${hit.name}（${hit.kind}）`, adventureId: hit.id };
@@ -529,6 +619,14 @@ function shopKindOfName(name: string): ShopKind {
   return "杂货铺";
 }
 
+/** 末一段像不像一间铺面：带铺面后缀，或字面上点明了营生 */
+const SHOP_TAIL = /(铺|坊|堂|斋|阁|楼|馆|局|栈|棚|号|肆|店)$/;
+const SHOP_WORD = /(药|医|丹|茶|酒|当|镖|书|符|器|宝|杂货|绸缎|米|盐|铁|木)/;
+
+function looksLikeShop(name: string): boolean {
+  return SHOP_TAIL.test(name) || SHOP_WORD.test(name);
+}
+
 /**
  * 把去处对回坊市里的某一间铺子。
  * 写法是「城名·坊市名·铺名」（如「长安·西市·回春堂」）；只写了坊市、没写铺名的不算——
@@ -570,6 +668,25 @@ function resolveShopTarget(
       shopKind: shopKindOfName(shop),
     };
   }
+
+  // 只写了「城名·铺名」、没点明是哪条坊市的，末一段像铺面便归到本城的坊市。
+  // 少了这一条，「长安·回春堂」认不出来，会被当成一处没见过的野地现开在舆图上——
+  // 一桩买药的差事，就这么长在了大地图上
+  const segs = rest.split(/[·•.\s]+/).map((s) => s.trim()).filter(Boolean);
+  const bareShop = (segs[segs.length - 1] ?? "").trim().slice(0, 20);
+  if (looksLikeShop(bareShop)) {
+    const market = getDistricts(cityId).find((d) => d.nature === "坊市") ?? getDistricts(cityId)[0];
+    if (market) {
+      const named = districtNames?.[`${cityId}:${market.id}`];
+      return {
+        cityId,
+        districtId: market.id,
+        label: `${cityName || "此城"}·${named || market.nature}·${bareShop}`,
+        shop: bareShop,
+        shopKind: shopKindOfName(bareShop),
+      };
+    }
+  }
   return undefined;
 }
 
@@ -606,13 +723,177 @@ function narrativeCastRoles(quest: Quest): JobCastRole[] {
   ];
 }
 
+/** 把叙事写明的去处翻成点位时，要用到的眼下实情 */
+interface AnchorContext {
+  currentPlaceId: string;
+  districtNames?: Record<string, string>;
+  today: number;
+  adventures: Adventure[];
+  villages: Village[];
+  sectSites: SectSite[];
+}
+
 /**
- * 给叙事里生成的机缘定下真去处与要见的人，照牙行那一套办：
- * 去处对得上某座城池真有的街区便钉在那儿，人照这份说明现掷一个钉在目标地块上，
- * 玩家得走到那儿才寻得着人、交得了差。
- * 去处写明是别城的，就认那一座城，不必强按在本城头上；那一座若也没画过街区，才作罢。
- * 去处也可以是一处山门（整座山门或其中的某座建筑）、舆图上的奇遇，或野外的一座村庄——写明它们的名目便钉到那一处。
- * 已经有了去处的（先前认下或存档里带来的），就地用人，不再另认。
+ * 照叙事写明的去处翻成点位。
+ * 这一步只做「名号对回真有的那一处」这件确定性的事，不再猜：
+ * 对不上便交回 undefined，由调用方回落到照字面认——宁可退回老路，也不硬安一处。
+ */
+function anchorToTarget(
+  anchor: QuestAnchor,
+  quest: Quest,
+  ctx: AnchorContext,
+): { target?: JobTarget; born?: Adventure } | undefined {
+  const cityId =
+    getCityMarkers().find((m) => m.name === String(anchor.city ?? "").trim())?.id ?? ctx.currentPlaceId;
+  const districts = getDistricts(cityId);
+  const cityName = getMarker(cityId)?.name ?? "此城";
+  const districtLabel = (id: number) => ctx.districtNames?.[`${cityId}:${id}`] ?? "";
+
+  switch (anchor.kind) {
+    case "district": {
+      const want = String(anchor.district ?? "").trim();
+      if (!want) return undefined;
+      const hit =
+        districts.find((d) => districtLabel(d.id) === want || d.nature === want) ??
+        districts.find((d) => {
+          const label = districtLabel(d.id);
+          return (!!label && (label.includes(want) || want.includes(label))) || want.includes(d.nature);
+        });
+      if (!hit) return undefined;
+      return {
+        target: {
+          cityId,
+          districtId: hit.id,
+          label: `${cityName}·${districtLabel(hit.id) || hit.nature}`,
+        },
+      };
+    }
+    case "shop": {
+      const shopName = String(anchor.shop ?? "").trim();
+      if (!shopName) return undefined;
+      const want = String(anchor.district ?? "").trim();
+      const markets = districts.filter((d) => d.nature === "坊市");
+      const market =
+        (want ? markets.find((d) => districtLabel(d.id) === want || d.nature === want) : undefined) ??
+        markets[0] ??
+        districts[0];
+      if (!market) return undefined;
+      return {
+        target: {
+          cityId,
+          districtId: market.id,
+          label: `${cityName}·${districtLabel(market.id) || market.nature}·${shopName}`,
+          shop: shopName,
+          shopKind: (anchor.shopKind as ShopKind) || shopKindOfName(shopName),
+        },
+      };
+    }
+    case "sect": {
+      const site = ctx.sectSites.find((s) => s?.name === anchor.sect);
+      if (!site) return undefined;
+      return { target: { cityId: "", label: `${site.name}山门`, sectId: site.id } };
+    }
+    case "sectBuilding": {
+      const site = ctx.sectSites.find((s) => s?.name === anchor.sect);
+      const building = String(anchor.building ?? "").trim();
+      if (!site || !building) return undefined;
+      return {
+        target: { cityId: "", label: `${site.name}·${building}`, sectId: site.id, building },
+      };
+    }
+    case "village": {
+      const village = ctx.villages.find((v) => v?.name === anchor.village);
+      if (!village) return undefined;
+      return { target: { cityId: "", label: village.name, villageKey: village.key } };
+    }
+    case "adventure": {
+      const adv = ctx.adventures.find((a) => a?.name === anchor.adventure && a.status === "open");
+      if (!adv) return undefined;
+      return {
+        target: {
+          cityId: adv.cityId || cityId,
+          label: `${adv.name}（${adv.kind}）`,
+          adventureId: adv.id,
+        },
+      };
+    }
+    case "wild": {
+      const wild = anchor.wild;
+      if (!wild?.name) return undefined;
+      const nearby = pickOrNudgeSpotNear(
+        { sectSites: ctx.sectSites, adventures: ctx.adventures },
+        cityId,
+      );
+      if (!nearby) return undefined;
+      const born =
+        normalizeAdventure(
+          {
+            name: wild.name,
+            kind: wild.kind,
+            summary: wild.summary,
+            danger: wild.danger,
+            // 事一了，这一处便随那桩机缘一并撤去
+            questId: quest.id,
+          },
+          {
+            state: { sectSites: ctx.sectSites, adventures: ctx.adventures },
+            spot: nearby,
+            cityId,
+            day: ctx.today,
+            origin: "story",
+          },
+        ) ?? undefined;
+      if (!born) return undefined;
+      return {
+        target: { cityId: born.cityId, label: `${born.name}（${born.kind}）`, adventureId: born.id },
+        born,
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** 照叙事点名的那一位立一条尘缘：姓名、身份与人设都用叙事写的那一份 */
+function composeAnchorPerson(
+  person: QuestAnchorPerson,
+  target: JobTarget,
+  cityId: string,
+  culture?: string,
+): Relation {
+  const base = rollQuestNpc(
+    {
+      title: person.title || "接头的人",
+      persona: person.persona || "",
+      gender: person.gender,
+    },
+    target.label,
+    target.cityId || cityId,
+    target.districtId,
+    culture,
+    target.districtId === undefined ? target.label : undefined,
+  );
+  return {
+    ...base,
+    name: person.name,
+    title: person.title || base.title,
+    ...(person.age ? { age: person.age } : {}),
+    ...(person.realm ? { realm: person.realm } : {}),
+    ...(person.origin ? { origin: person.origin } : {}),
+    ...(person.personality ? { personality: person.personality } : {}),
+    ...(person.appearance ? { appearance: person.appearance } : {}),
+    ...(person.persona ? { persona: person.persona, note: person.persona } : {}),
+  };
+}
+
+/**
+ * 给叙事里生成的机缘定下真去处与要见的人，照牙行那一套办。
+ *
+ * 去处由叙事自己说：它写明了是哪一类地方、叫什么名号（quest.anchor），
+ * 这里只把那个名号对回真有的街区、山门建筑、村庄、奇遇或铺面，不再拿整行字去猜；
+ * 没写明锚点的旧式机缘，才照字面依次认一遍。
+ * 要找的人也由叙事点名（anchor.person）：尘缘里已有的照用，没有的便照它立传。
+ * 什么都说不上来的，才在附近现开一处，或落到城里一处住人的街区。
  */
 export function pinNarrativeQuest(args: {
   quest: Quest;
@@ -627,6 +908,13 @@ export function pinNarrativeQuest(args: {
   villages?: Village[];
   /** 江湖上的各处山门；去处写到某座建筑便可钉过去 */
   sectSites?: SectSite[];
+  /** 尘缘里已认得的人：叙事点名要找的人若在其中，便照那一位，不再另立 */
+  known?: Relation[];
+  /**
+   * 不许就地现开新去处：牙行柜上揽的事只落在真有的地方，
+   * 认不出便退到城里住人的街区，不在舆图上另长出一处。
+   */
+  noSpawn?: boolean;
 }): { quest: Quest; people: Relation[]; adventure?: Adventure } {
   const { quest, currentPlaceId, districtNames, today } = args;
   if (!currentPlaceId) return { quest, people: [] };
@@ -640,18 +928,36 @@ export function pinNarrativeQuest(args: {
   let target = quest.target;
   // 若这一桩点名的地方舆图上没有，便现开一处去处；生出来的这一处要一并交回，好落进存档
   let born: Adventure | undefined;
+
+  // 叙事写明了去哪一类地方的，先照它翻成点位
+  if (!target && quest.anchor) {
+    const anchored = anchorToTarget(quest.anchor, quest, {
+      currentPlaceId,
+      districtNames,
+      today,
+      adventures: args.adventures ?? [],
+      villages: args.villages ?? [],
+      sectSites: args.sectSites ?? [],
+    });
+    target = anchored?.target;
+    born = anchored?.born;
+  }
+
   if (!target) {
     // 去处可能是城内街区、某座山门里的建筑、舆图上的奇遇，或一座村庄，按写法依次认一遍
     target =
-      resolveAdventureTarget(text, args.adventures ?? []) ??
-      resolveVillageTarget(text, args.villages ?? []) ??
-      resolveSectTarget(text, args.sectSites ?? []) ??
+      // 山门建筑、整座山门与村名写得最死，先认
       resolveSectBuildingTarget(text, args.sectSites ?? []) ??
+      resolveSectTarget(text, args.sectSites ?? []) ??
+      resolveVillageTarget(text, args.villages ?? []) ??
+      // 铺子写作「城名·坊市·铺名」，结构最清楚，排在奇遇之前：
+      // 否则一处奇遇的名目恰好嵌在铺名里，这桩买卖便被抢成野地去了
       resolveShopTarget(text, cityId, districtNames) ??
+      resolveAdventureTarget(text, args.adventures ?? []) ??
       resolveJobTarget(text, cityId, districtNames);
     // 事件类可以没有具体去处：认不出便不钉，由叙事随缘去办，不硬安一个星标
     if (!target && !questKindNeedsPlace(quest.kind)) return { quest, people: [] };
-    if (!target) {
+    if (!target && !args.noSpawn) {
       // 地点类与人物类须有具体去处：点名的地方城里没有，就在附近还空着的预设点位上现开一处。
       // 只挑这一带近处的空位，远处的不算「附近」；这一带都被人占满了，
       // 便在离城最近的那处点位旁另开一处，仍算在附近
@@ -754,6 +1060,18 @@ export function pinNarrativeQuest(args: {
 
   // 铺子里要找的人就是叙事写定的那位掌柜：照他立起，替掉现掷的那一个
   if (shopKeeper) people[0] = { ...shopKeeper, fixedUntilDay: until };
+
+  // 叙事点名了要找的人：尘缘里已有的照用那一位，没有的便照它立传，
+  // 替掉现掷的那一个——人是谁，由叙事说了算
+  const wanted = quest.anchor?.person;
+  if (wanted) {
+    const knownPerson = (args.known ?? []).find((r) => r?.name === wanted.name);
+    const picked = knownPerson
+      ? { ...knownPerson, fixedUntilDay: until }
+      : { ...composeAnchorPerson(wanted, target!, cityId, culture), fixedUntilDay: until };
+    if (people.length === 0) people.push(picked);
+    else people[0] = picked;
+  }
 
   return {
     quest: {
