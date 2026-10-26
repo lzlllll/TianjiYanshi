@@ -19,6 +19,7 @@
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { exec } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -29,8 +30,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIST_DIR = path.resolve(__dirname, "..", "dist-local");
 /** 默认数据目录；/game/ 前缀的请求直接从这里的 game_data 与 image_assets 取 */
 const DEFAULT_DATA_DIR = path.resolve(__dirname, "..");
-/** 默认存档目录：游戏文件夹下的 saves 次级文件夹 */
-const DEFAULT_SAVES_DIR = path.resolve(__dirname, "..", "saves");
+/**
+ * 默认存档目录：系统「文档」下的天机衍世/saves。
+ * 存档不再随游戏目录走，换版本、换安装位置都不至于把旧档落下；
+ * Electron 那一路会用 app.getPath("documents") 传更准的路径进来。
+ */
+const DEFAULT_SAVES_DIR = path.join(os.homedir(), "Documents", "天机衍世", "saves");
 const GAME_PREFIX = "/game";
 /** 存档夹接口；游戏内直接从这里列档、存档、读档、删档，不必弹系统文件框 */
 const SAVES_PREFIX = "/api/saves";
@@ -124,6 +129,24 @@ function safeSaveName(raw) {
   return cleaned.slice(0, 80);
 }
 
+/**
+ * 只读文件头那一段，认出这份存档是哪个版本留下的。
+ * 存档把 gameVersion 写在最前，读两三百字节便够；旧档没有这一项，留空。
+ */
+function readSaveVersion(file) {
+  try {
+    const fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(320);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const head = buf.subarray(0, n).toString("utf8");
+    const hit = /"gameVersion"\s*:\s*"([^"]{0,40})"/.exec(head);
+    return hit ? hit[1] : "";
+  } catch {
+    return "";
+  }
+}
+
 /** 列出存档夹里的所有存档，新的排前面 */
 function listSaves(res, savesDir) {
   let files = [];
@@ -134,9 +157,10 @@ function listSaves(res, savesDir) {
   }
   const saves = files
     .map((f) => {
+      const full = path.join(savesDir, f);
       let stat = null;
       try {
-        stat = fs.statSync(path.join(savesDir, f));
+        stat = fs.statSync(full);
       } catch {
         stat = null;
       }
@@ -144,6 +168,8 @@ function listSaves(res, savesDir) {
         name: f.replace(/\.json$/i, ""),
         size: stat?.size ?? 0,
         savedAt: stat?.mtimeMs ?? 0,
+        // 跨版本读档时，先看这份是哪个版本留下的
+        gameVersion: readSaveVersion(full),
       };
     })
     .sort((a, b) => b.savedAt - a.savedAt);

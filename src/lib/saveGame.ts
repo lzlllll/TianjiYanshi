@@ -8,6 +8,7 @@
 
 import { useGameStore } from "@/store/useGameStore";
 import { useAIStore } from "@/store/useAIStore";
+import { GAME_VERSION } from "@/lib/gameInfo";
 import type { AISettings, ConversationState, GameSnapshot, NPCChatState } from "@/data/types";
 
 /** 存档格式版本；日后若改结构，导入端照它判断 */
@@ -19,6 +20,8 @@ export const SAVE_ACCEPT = ".json,.gz,.json.gz";
 /** 一份存档的形状；字段宽松读入，缺项或写错也只当没有 */
 export interface SaveFileShape {
   v?: number;
+  /** 写下这份存档时的游戏版本；旧档没有这一项 */
+  gameVersion?: string;
   game?: unknown;
   ai?: { settings?: unknown; conversation?: unknown; npcChat?: unknown };
   timestamp?: number;
@@ -27,6 +30,7 @@ export interface SaveFileShape {
 /** 把当前进度打包成一份存档对象 */
 export function buildSavePayload(): {
   v: number;
+  gameVersion: string;
   game: GameSnapshot;
   ai: { settings: AISettings; conversation: ConversationState; npcChat: Pick<NPCChatState, "profiles"> };
   timestamp: number;
@@ -37,6 +41,8 @@ export function buildSavePayload(): {
   // 临时窗口状态不随存档走，免得读档一进来又弹出早先那一扇
   return {
     v: SAVE_VERSION,
+    // 版本摆在最前：列档时只读文件头便认得出这份旧档是哪个版本留下的
+    gameVersion: GAME_VERSION,
     game,
     ai: {
       settings: ai.settings,

@@ -3,7 +3,7 @@ import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
-import { GAME_TITLE } from "@/lib/gameInfo";
+import { GAME_TITLE, GAME_VERSION } from "@/lib/gameInfo";
 import { REALM_NAMES } from "@/data/mockData";
 import { buildNarrativeText } from "@/lib/narrativeLog";
 import {
@@ -34,6 +34,8 @@ interface SaveRecord {
   name: string;
   size: number;
   savedAt: number;
+  /** 写这份档时的游戏版本；旧档没有这一项 */
+  gameVersion?: string;
 }
 
 const SAVES_API = "/api/saves";
@@ -53,7 +55,7 @@ function fmtSize(bytes: number): string {
 /**
  * 存档管理。
  *
- * 游戏目录下的 saves 次级文件夹里列档、存档、读档、删档，全在游戏内完成，
+ * 「文档／天机衍世／saves」里列档、存档、读档、删档，全在游戏内完成，
  * 不必再弹系统的文件选择框。网页版没有本地存档夹，则自动退回「导出/导入文件」一途。
  */
 export function SaveManagerModal() {
@@ -222,7 +224,7 @@ export function SaveManagerModal() {
             <div>
               <h2 className="font-brush text-2xl text-gold-400 tracking-widest text-shadow-ink">存档管理</h2>
               <p className="font-serif text-xs text-paper-400/60 mt-0.5">
-                {folderMode ? "存档存放于游戏目录下的 saves 文件夹" : "此处无法读写存档夹，改用文件导入导出"}
+                {folderMode ? "存档存放于「文档 / 天机衍世 / saves」，换了版本也不碍事" : "此处无法读写存档夹，改用文件导入导出"}
               </p>
             </div>
           </div>
@@ -252,7 +254,7 @@ export function SaveManagerModal() {
             <div className="rounded border border-gold-500/25 bg-gold-400/5 px-3 py-2.5 flex items-start gap-2">
               <AlertTriangle size={14} className="shrink-0 mt-0.5 text-gold-400" />
               <p className="font-serif text-xs leading-relaxed text-paper-300/80">
-                当前环境读不到游戏目录下的 saves 文件夹（如网页版），改用文件导出与导入——
+                当前环境读不到「文档／天机衍世／saves」这个存档夹（如网页版），改用文件导出与导入——
                 导出的存档为压缩格式，导入时直接选该文件即可，无需另存为 json。
               </p>
             </div>
@@ -311,7 +313,15 @@ export function SaveManagerModal() {
                         <div className="min-w-0 flex-1">
                           <div className="font-brush text-sm text-paper-200 truncate">{s.name}</div>
                           <div className="mt-0.5 font-number text-[11px] text-paper-400/50">
-                            {fmtTime(s.savedAt)} · {fmtSize(s.size)}
+                            {fmtTime(s.savedAt)} · {fmtSize(s.size)} ·{" "}
+                            {s.gameVersion ? (
+                              <span className={s.gameVersion === GAME_VERSION ? "" : "text-gold-400/80"}>
+                                {s.gameVersion}
+                                {s.gameVersion === GAME_VERSION ? "" : "（别版）"}
+                              </span>
+                            ) : (
+                              <span className="text-paper-400/40">旧档</span>
+                            )}
                           </div>
                         </div>
                         <button

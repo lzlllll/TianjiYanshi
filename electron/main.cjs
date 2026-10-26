@@ -13,6 +13,7 @@
  */
 
 const path = require("node:path");
+const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require("electron");
 
@@ -49,22 +50,61 @@ app.on("second-instance", () => {
   mainWindow.focus();
 });
 
+/**
+ * 存档统一放在系统「文档」下。
+ * 早先存档落在游戏目录里，换个版本、挪个安装位置便寻不着了；
+ * 文档夹不随游戏走，跨版本读档、换机带走都方便。
+ */
+function documentsSavesDir() {
+  try {
+    return path.join(app.getPath("documents"), "天机衍世", "saves");
+  } catch {
+    // 极少数环境取不到「文档」：退回用户目录下的 Documents
+    return path.join(app.getPath("home"), "Documents", "天机衍世", "saves");
+  }
+}
+
+/**
+ * 旧档搬家：把早先落在游戏目录里的存档复制到文档夹。
+ * 只补新位置没有的，旧文件原样留着，删不删由玩家自己定。
+ */
+function migrateLegacySaves(targetDir, legacyDirs) {
+  for (const legacy of legacyDirs) {
+    if (!legacy || legacy === targetDir || !fs.existsSync(legacy)) continue;
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+      for (const f of fs.readdirSync(legacy)) {
+        if (!f.toLowerCase().endsWith(".json")) continue;
+        const dest = path.join(targetDir, f);
+        if (fs.existsSync(dest)) continue;
+        fs.copyFileSync(path.join(legacy, f), dest);
+      }
+    } catch (err) {
+      console.warn("[saves] 旧存档搬家没成，旧档仍在原处：", legacy, err && err.message);
+    }
+  }
+}
+
 /** 依运行形态算出静态资源目录、数据目录与存档目录 */
 function resolveDirs() {
+  const savesDir = documentsSavesDir();
   if (app.isPackaged) {
+    // 旧位置：exe 同级的 saves
+    migrateLegacySaves(savesDir, [path.join(path.dirname(process.execPath), "saves")]);
     return {
       // 构建产物打进 app 目录内；数据目录放在 resources/game，方便读写
       distDir: path.join(__dirname, "..", "dist-local"),
       dataDir: path.join(process.resourcesPath, "game"),
-      // 存档另起一处：放在游戏文件夹（exe 同级）下的 saves，玩家一眼能找到、也好带走
-      savesDir: path.join(path.dirname(process.execPath), "saves"),
+      savesDir,
     };
   }
   const root = path.resolve(__dirname, "..");
+  // 旧位置：项目根下的 saves
+  migrateLegacySaves(savesDir, [path.join(root, "saves")]);
   return {
     distDir: path.join(root, "dist-local"),
     dataDir: root,
-    savesDir: path.join(root, "saves"),
+    savesDir,
   };
 }
 
