@@ -1258,7 +1258,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - 每门功法须附 skills，产出 2 至 4 招，依次在熟练度提升时解锁；每招 {"id","name","description","levelRequired","mpCost","damage","cooldown","effects","debuffDuration","rangeShape","rangeSize","rangePattern","buffs","guard"}
 - statGain 写 {"stat","perLevel"}：stat 只取 vitality、soul、wisdom、agility 之一，perLevel 为 1 到 2 的整数，表示每修成一重长哪一条根基；炼体多长 vitality，身法多长 agility，神通多长 wisdom，心法、秘术多长 soul
 - style 只取 长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法 之一：炼体多拳脚或长兵，身法多刺击短兵或射术，神通多术法或符阵，秘术多符阵、音律或御兽，心法多术法或音律
-- prerequisites 写 0 到 2 条修炼条件，每条 {"type","value","minLevel"}：type 只取 realm、technique、spiritRoot、heartTrait；realm 的 value 写大境界名，technique 的 value 写功法名，spiritRoot 的 value 写五行之一，heartTrait 的 value 写一个心性词；minLevel 可省，表示须修到第几重。没有条件便给空数组
+- prerequisites 一律给空数组 []：这几门是他开局便已随身、眼下正在修持的功法，不设门槛，不要写境界、灵根、心性或倚仗别门功法的条件
 - levelRequired 为 1 到 10 的整数，随招式列序递增（如第 1 招 1 级、第 2 招 3 级、第 3 招 6 级、第 4 招 9 级）
 - mpCost 为 0 到 60 的整数，威力越大越贵
 - damage 为 0 到 120 的整数基本伤害；纯辅助招式可给 0
@@ -2298,6 +2298,8 @@ export interface EventPlayerBrief {
   arts?: string;
   /** 江湖上的名声，只报有分量的那几条 */
   renown?: string;
+  /** 相熟的几个人：名号、身份、亲疏与近况，变故偶或从他们身上起 */
+  acquaintances?: string;
 }
 
 function briefLines(brief: EventPlayerBrief): string {
@@ -2313,6 +2315,7 @@ function briefLines(brief: EventPlayerBrief): string {
     brief.arts ? `【所修】${brief.arts}` : "",
     brief.renown ? `【名声】${brief.renown}` : "",
     `【同行】${brief.companions}`,
+    brief.acquaintances ? `【相熟】${brief.acquaintances}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -2323,17 +2326,20 @@ export function buildRandomEventPrompt(args: {
   /** 事由：玩家眼下在做什么 */
   reason: string;
   brief: EventPlayerBrief;
+  /** 这一桩要从哪位相熟的人身上起：掷中了才有，不写便是一桩寻常的路遇 */
+  npcHook?: string;
 }): ChatMessage[] {
+  const hook = String(args.npcHook ?? "").trim();
   const system = `你是这个修真世界的叙事者。玩家在途中往前走了一段，这一段路上出了一桩变故。
 
 ${PROSE_STYLE}
 
 【事由】${args.reason}
 ${briefLines(args.brief)}
-
+${hook ? `\n【牵出的人】${hook}\n这一桩须从此人身上起：他遣人捎信、亲自寻来、遭了事、欠了人情、托你搭手，或他身边的人出了变故，都行。写时守三条：一是须与他的身份、性情与亲疏相合，交情浅的不会托付性命攸关之事，交情厚的好开口求援，交恶的则未必是为了求助而来；二是名姓、身份、修为都照上面所写，不可写成素不相识的陌生人；三是不可写他的死讯，也不可让他凭空拿出一件远超玩家境界的东西。\n` : ""}
 请写这一桩变故的开头，一百五十到三百字。规矩如下：
 1. 分量必须与玩家的修为和手段相称：以他眼下的境界，这件事要有解、有回旋的余地。绝不可出现远超他实力与解决能力的天灾、大妖、绝境、必死之局，也不可写他无从下手的死结。
-2. 事由要落在眼前的路上、天色、路人、鸟兽、物什上，写得具体可感，不要写成抽象的天意或宿命。
+2. 事由要落在眼前的路上、天色、路人、鸟兽、物什上，写得具体可感，不要写成抽象的天意或宿命。${hook ? "牵出的人须在正文里真有个名姓照面，不要只在旁白里提一句。" : ""}
 3. 用第三人称古风白话，只写这一段情景，不要列条目清单，不要复述数值与规则，不要出现「系统」「数据」「玩家」这类出戏的字眼。
 4. 收在需要他拿主意或动手的当口，把选择留给他。
 5. 正文之后另起一块，只列三到四条他眼下可以采取的应对，每条八到十八字，一条一行，写清要做什么、不必写成败，形如：

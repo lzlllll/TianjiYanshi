@@ -5,13 +5,13 @@ import { PanelTitle } from "@/components/ui/PanelTitle";
 import { GradeTag } from "@/components/ui/GradeTag";
 import { ProficiencyRing } from "@/components/ui/ProficiencyRing";
 import { cn } from "@/lib/utils";
-import { techniqueLevelOf } from "@/lib/skillCalc";
+import { meetsTechniquePrereqs, techniqueLevelOf } from "@/lib/skillCalc";
 import { ATTRIBUTE_LABELS } from "@/lib/attributes";
 import { techniqueStatGainOf } from "@/lib/techniqueGrowth";
 import { findBuffTemplate } from "@/data/buffs";
 import { styleBrief, techniqueStyleOf } from "@/data/combatStyles";
 import type { Technique, TechniqueCategory, ElementType } from "@/data/types";
-import { REALM_NAMES } from "@/data/mockData";
+import { countersElement, generatesElement, normalizeElement } from "@/data/elements";
 
 const CATEGORY_INFO: Record<string, { name: string; subtitle: string; color: string }> = {
   心法: { name: "心法", subtitle: "修炼根基，灵力循环", color: "gold" },
@@ -39,42 +39,18 @@ export function TechniquePanel() {
     return result;
   }, [techniques, activeTab, levelFilter]);
 
-  const currentRealm = player.realmIndex;
+  // 修炼条件照共用的那把尺判：境界、灵根、心性、已习功法，与开局落账时用的是同一套
+  const prereqCtx = useMemo(
+    () => ({
+      realmIndex: Number(player.realmIndex) || 0,
+      spiritRoots: Array.isArray(player.spiritRoots) ? player.spiritRoots : [],
+      heartScores: Array.isArray(player.stats?.heartScores) ? player.stats.heartScores : [],
+      techniques,
+    }),
+    [player.realmIndex, player.spiritRoots, player.stats?.heartScores, techniques],
+  );
 
-  const canPractice = (tech: Technique): boolean => {
-    for (const req of tech.prerequisites || []) {
-      if (req.type === "realm") {
-        // req.value 是大境界名（如「炼气」），按境界扁平表找到它的起始索引再比大小
-        const reqStart = REALM_NAMES.findIndex((name) => name.startsWith(String(req.value ?? "")));
-        if (reqStart >= 0 && currentRealm < reqStart) return false;
-      }
-      if (req.type === "technique") {
-        const requiredTech = techniques.find((t) => t.id === req.value || t.name === req.value);
-        if (!requiredTech) return false;
-        const reqLevel = req.minLevel || 1;
-        if (techniqueLevelOf(requiredTech) < reqLevel) return false;
-      }
-      if (req.type === "spiritRoot") {
-        const root = player.spiritRoots.find((r) => r.element === req.value);
-        if (!root) return false;
-        if (req.minLevel && root.value < req.minLevel) return false;
-      }
-      if (req.type === "heartTrait") {
-        const score = (player.stats?.heartScores && Array.isArray(player.stats.heartScores) ? player.stats.heartScores : []).find((hs) => hs.trait === req.value)?.score || 0;
-        if (score < 50) return false;
-      }
-    }
-    return true;
-  };
-
-  const ELEMENT_GENERATE: Record<string, ElementType> = {
-    金: "水", 木: "火", 土: "金", 水: "木", 火: "土",
-    风: "雷", 雷: "火", 冰: "水", 暗: "土",
-  };
-  const ELEMENT_COUNTER: Record<string, ElementType> = {
-    金: "木", 木: "土", 土: "水", 水: "火", 火: "金",
-    风: "土", 雷: "水", 冰: "火", 暗: "风",
-  };
+  const canPractice = (tech: Technique): boolean => meetsTechniquePrereqs(tech, prereqCtx);
 
   interface MatchSource {
     label: string;
@@ -84,16 +60,23 @@ export function TechniquePanel() {
 
   const getMatchBreakdown = (tech: Technique): MatchSource[] => {
     const sources: MatchSource[] = [];
-    const rootElements = (Array.isArray(player.spiritRoots) ? player.spiritRoots : []).map((r) => r.element);
+    // 灵根先归到九系正名，免得 fire、火灵根这类写法认不出
+    const rootElements = (Array.isArray(player.spiritRoots) ? player.spiritRoots : [])
+      .map((r) => normalizeElement(r.element))
+      .filter((el): el is ElementType => Boolean(el));
+    const techElement = normalizeElement(tech.element);
 
-    if (rootElements.includes(tech.element)) {
-      sources.push({ label: "灵根同属性", value: 25, detail: `${tech.element}系匹配` });
+    if (techElement && rootElements.includes(techElement)) {
+      sources.push({ label: "灵根同属性", value: 25, detail: `${techElement}系匹配` });
     }
-    if (rootElements.includes(ELEMENT_GENERATE[tech.element])) {
-      sources.push({ label: "灵根相生", value: 10, detail: `${tech.element}→${ELEMENT_GENERATE[tech.element]}相生` });
+    // 生克要反过来问：玩家的这一系是否生、是否克了功法那一系
+    const generator = techElement ? rootElements.find((el) => generatesElement(el, techElement)) : undefined;
+    if (generator && techElement) {
+      sources.push({ label: "灵根相生", value: 10, detail: `${generator}生${techElement}` });
     }
-    if (rootElements.includes(ELEMENT_COUNTER[tech.element])) {
-      sources.push({ label: "灵根相克", value: -15, detail: `${tech.element}→${ELEMENT_COUNTER[tech.element]}相克` });
+    const counter = techElement ? rootElements.find((el) => countersElement(el, techElement)) : undefined;
+    if (counter && techElement) {
+      sources.push({ label: "灵根相克", value: -15, detail: `${counter}克${techElement}` });
     }
 
     for (const compat of tech.heartCompatibility || []) {
@@ -125,15 +108,20 @@ export function TechniquePanel() {
 
   const getCultivationModifiers = (tech: Technique): CultivationModifier[] => {
     const list: CultivationModifier[] = [];
-    const rootElements = (Array.isArray(player.spiritRoots) ? player.spiritRoots : []).map((r) => r.element);
+    const rootElements = (Array.isArray(player.spiritRoots) ? player.spiritRoots : [])
+      .map((r) => normalizeElement(r.element))
+      .filter((el): el is ElementType => Boolean(el));
+    const techElement = normalizeElement(tech.element);
 
-    if (rootElements.includes(tech.element)) {
+    if (techElement && rootElements.includes(techElement)) {
       list.push({ label: "灵根同属性", value: "+25%", impact: "positive" });
     }
-    if (rootElements.includes(ELEMENT_GENERATE[tech.element])) {
+    const generator = techElement ? rootElements.find((el) => generatesElement(el, techElement)) : undefined;
+    if (generator && techElement) {
       list.push({ label: "灵根相生", value: "+10%", impact: "positive" });
     }
-    if (rootElements.includes(ELEMENT_COUNTER[tech.element])) {
+    const counter = techElement ? rootElements.find((el) => countersElement(el, techElement)) : undefined;
+    if (counter && techElement) {
       list.push({ label: "灵根相克", value: "-15%", impact: "negative" });
     }
 

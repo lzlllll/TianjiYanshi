@@ -458,6 +458,51 @@ function recentStoryBrief(turns: Turn[] | undefined, limit = 2, chars = 420): st
     .join("\n\n");
 }
 
+/** 关系的说法：变故里提到人时，得说清他与玩家是怎么一层关系 */
+const RELATION_LABEL: Record<string, string> = {
+  dao_companion: "道侣",
+  master: "师父",
+  disciple: "弟子",
+  friend: "好友",
+  enemy: "仇敌",
+};
+
+/** 亲疏一栏：新档记 relation，旧档只有情谊 affinity，两样都认 */
+function closenessOf(r: Relation): number {
+  return Number(r.relation ?? r.affinity ?? 0) || 0;
+}
+
+/**
+ * 相熟之人：不是仇敌，且亲疏不低于三十或信任到第三档。
+ * 路上变故有概率从他们身上起，故单挑一份出来。
+ */
+function familiarRelations(gs: GameState): Relation[] {
+  return (Array.isArray(gs.relations) ? gs.relations : [])
+    .filter((r) => r && r.name && r.type !== "enemy")
+    .filter((r) => closenessOf(r) >= 30 || Number(r.trust) >= 3)
+    .sort((a, b) => closenessOf(b) - closenessOf(a));
+}
+
+/** 一个人的一句话近况，变故提示词与【相熟】一栏共用 */
+function acquaintedLine(r: Relation): string {
+  const note = String(r.note ?? "").replace(/\s+/g, " ").trim();
+  return `${r.name}（${r.title || "散修"}，${RELATION_LABEL[String(r.type)] ?? "相识"}，亲疏 ${closenessOf(r)}${
+    r.realm ? `，修为${r.realm}` : ""
+  }${r.location ? `，在${r.location}` : ""}${note ? `；近况：${note.slice(0, 40)}` : ""}）`;
+}
+
+/**
+ * 这一桩变故要不要从某位相熟的人身上起。
+ * 人越多、交情越厚，越容易牵出来，至多四成半；掷中了便把他的近况递进提示词。
+ */
+function rollNpcHook(gs: GameState): string | undefined {
+  const list = familiarRelations(gs);
+  if (list.length === 0) return undefined;
+  if (Math.random() > Math.min(0.45, 0.2 + 0.05 * list.length)) return undefined;
+  const pool = list.slice(0, 6);
+  return acquaintedLine(pool[Math.floor(Math.random() * pool.length)]);
+}
+
 /**
  * 变故提示词里的「玩家简要状况」。
  * 只报与拿捏分寸有关的几样：境界、身份、气血、伤势、身上的钱物与物件、
@@ -552,6 +597,8 @@ function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
     arts: arts || undefined,
     renown,
     companions: mates.length > 0 ? mates.join("、") : "无人同行",
+    // 相熟的几个人：变故偶或从他们身上起，先摆出来，模型才不至于现编一个陌生人
+    acquaintances: familiarRelations(gs).slice(0, 4).map(acquaintedLine).join("；") || undefined,
     place: place || "途中",
     time: formatGameTime(gs.currentTime),
   };
@@ -3476,7 +3523,11 @@ export const useAIStore = create<AIStore>()(
         const timeBefore = useGameStore.getState().currentTime || OPENING_GAME_TIME;
         // 结算里没能做成的买卖，回一句缀在正文末尾，让玩家看见「钱不够，没买成」
         // 路由圈定的可写数据一并递下去，只作诊断，圈不着也照落账
-        const settleNotes = useGameStore.getState().applyOps(ops, { writable: flashWritable });
+        const settleNotes = useGameStore.getState().applyOps(ops, {
+          writable: flashWritable,
+          // 开篇这一笔是随身带来的功法，够不着的修炼条件要照他当下的情形摘掉
+          opening: conv.turns.length === 0,
+        });
         if (settleNotes.length > 0) {
           narrative = `${narrative}\n\n${settleNotes.join("\n")}`;
         }
@@ -3764,7 +3815,7 @@ export const useAIStore = create<AIStore>()(
           }));
         }
 
-        useGameStore.getState().applyOps(extraction.ops);
+        useGameStore.getState().applyOps(extraction.ops, { opening: conversation.turns.length === 1 });
 
         await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
 
@@ -3983,9 +4034,11 @@ export const useAIStore = create<AIStore>()(
         }));
 
         const brief = buildEventBrief(gs as unknown as GameState, gs.hereLabel());
+        // 掷一次：这一桩要不要从某位相熟的人身上起
+        const npcHook = rollNpcHook(gs as unknown as GameState);
 
         try {
-          const raw = await chatWithModel(settings, settings.proModel, buildRandomEventPrompt({ reason, brief }), {
+          const raw = await chatWithModel(settings, settings.proModel, buildRandomEventPrompt({ reason, brief, npcHook }), {
             timeoutMs: 120000,
             signal,
             retries: 1,

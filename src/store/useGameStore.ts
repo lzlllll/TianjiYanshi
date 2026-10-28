@@ -143,6 +143,7 @@ import { pruneBuffs, shortenDebuffs } from "@/lib/buffTime";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import { effectiveAttributes, recoveryFactors, wisdomTrainFactor, withPotential } from "@/lib/attributes";
 import { applyTechniqueGrowth } from "@/lib/techniqueGrowth";
+import { stripUnmetPrereqs } from "@/lib/skillCalc";
 import { applyRealmGrowth } from "@/data/realms";
 import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
 import { BATH_RELIEF_PER_HOUR, bathCost, clampHours } from "@/data/bath";
@@ -387,7 +388,7 @@ interface GameStore extends GameState {
   setTraveling: (relationId: string, traveling: boolean) => boolean;
   addLog: (msg: string) => void;
   resetGame: () => void;
-  applyOps: (ops: DataOp[], opts?: { writable?: string[] }) => string[];
+  applyOps: (ops: DataOp[], opts?: { writable?: string[]; opening?: boolean }) => string[];
   getSnapshot: () => GameSnapshot;
   restoreSnapshot: (snap: GameSnapshot) => void;
   updateNews: (newItems: { category: string; title: string; content: string; source: string }[]) => void;
@@ -4198,6 +4199,16 @@ EFFECT: [效果描述]`,
             onNote: (text) => settleNotes.push(text),
             writable: opts?.writable,
           });
+          // 开局这几门功法是随身带来的，若模型替它们写了够不着的门槛（境界太高、灵根不合），
+          // 玩家便一辈子只能看着；落账时照他当下的情形过一遍，够不着的条件摘掉
+          if (opts?.opening && Array.isArray(next.techniques)) {
+            next.techniques = stripUnmetPrereqs(next.techniques, {
+              realmIndex: Number(next.player.realmIndex) || 0,
+              spiritRoots: Array.isArray(next.player.spiritRoots) ? next.player.spiritRoots : [],
+              heartScores: Array.isArray(next.player.stats?.heartScores) ? next.player.stats.heartScores : [],
+              techniques: next.techniques,
+            });
+          }
           // 首次获得心法时自动生效，否则玩家不打开功法面板手动切换就一直是「未定心法」
           let nextPlayer = { ...next.player };
           // 叙事若把时辰推过去了，到点的状态同一笔账里就散去，别等到下一轮

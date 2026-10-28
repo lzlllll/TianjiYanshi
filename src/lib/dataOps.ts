@@ -23,6 +23,7 @@ import type {
 import { defaultRangeOf, RANGE_PATTERN_MAX, RANGE_SIZE_MAX, SKILL_RANGE_SHAPES } from "@/data/battleRange";
 import { defaultStatGainOf } from "@/lib/attributes";
 import { defaultStyleOf, normalizeCombatStyle } from "@/data/combatStyles";
+import { normalizeElement } from "@/data/elements";
 import { REALM_NAMES } from "@/data/mockData";
 import { assignManorCell, getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
 import { sectBuildingRoster } from "@/data/map/sectBuildings";
@@ -1765,16 +1766,6 @@ const STATS_ALIASES: Record<string, string> = {
   "heart": "heartScores",
 };
 
-/** 灵根元素中文 → 英文映射 */
-const ELEMENT_ALIASES: Record<string, string> = {
-  "金": "金", "木": "木", "水": "水", "火": "火", "土": "土",
-  "风": "风", "雷": "雷", "冰": "冰", "暗": "暗",
-  "metal": "金", "wood": "木", "water": "水", "fire": "火", "earth": "土",
-  "wind": "风", "thunder": "雷", "ice": "冰", "dark": "暗",
-};
-
-const VALID_ELEMENTS = ["金", "木", "水", "火", "土", "风", "雷", "冰", "暗"];
-
 /** 常见材料与丹药的默认元素构成；仅用于补齐模型未给出的 elements，避免炼丹火候与元素体系整块失效 */
 const DEFAULT_ITEM_ELEMENTS: Record<string, Record<string, number>> = {
   "百年灵芝": { 木: 80, 土: 20 },
@@ -1818,8 +1809,8 @@ export function normalizeItemElements(item: any): any {
   const cleaned: Record<string, number> = {};
   if (item.elements && typeof item.elements === "object") {
     for (const [rawKey, rawVal] of Object.entries(item.elements as Record<string, unknown>)) {
-      const elem = ELEMENT_ALIASES[rawKey] || rawKey;
-      if (!VALID_ELEMENTS.includes(elem)) continue;
+      const elem = normalizeElement(rawKey);
+      if (!elem) continue;
       const num = Number(rawVal);
       if (!Number.isFinite(num) || num === 0) continue;
       cleaned[elem] = Math.max(-100, Math.min(100, Math.round(num)));
@@ -2471,9 +2462,9 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
   // 处理 player.spiritRoots.dark 88 → 更新灵根数组
   const rootMatch = normalizedPath.match(/^player\.spiritRoots\.(\S+)$/);
   if (rootMatch) {
-    const elementKey = ELEMENT_ALIASES[rootMatch[1]] || rootMatch[1];
-    // 灵根只认这几行，模型编出来的「光」「混沌」之类一律丢掉
-    if (!VALID_ELEMENTS.includes(elementKey)) return null;
+    // 模型写的英文名、带尾缀的名目一并认，认不出的（光、混沌之类）一律丢掉
+    const elementKey = normalizeElement(rootMatch[1]);
+    if (!elementKey) return null;
     const roots = root?.player?.spiritRoots;
     if (Array.isArray(roots)) {
       const magnitude = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
@@ -3161,11 +3152,25 @@ function applyModify(parent: any, key: PathSeg, op: Extract<DataOp, { kind: "mod
   if (op.op === "=") {
     let value = parseValue(op.value);
 
-    if (key === "spiritRoots" && typeof value === "object" && value !== null && !Array.isArray(value)) {
-      value = Object.entries(value).map(([element, val]) => ({
-        element,
-        value: Number(val),
-      }));
+    if (key === "spiritRoots") {
+      // 对象写法 {金:70, 水:30} 先摊成数组
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        value = Object.entries(value).map(([element, val]) => ({
+          element,
+          value: Number(val),
+        }));
+      }
+      // 元素名一律归到九系正名：模型写 fire、火灵根、Fire 属性都认作火；认不出的丢掉
+      if (Array.isArray(value)) {
+        value = value
+          .map((r: any) => {
+            const element = normalizeElement(r?.element ?? r?.name ?? r);
+            if (!element) return null;
+            const magnitude = Math.max(0, Math.min(100, Math.round(Number(r?.value) || 0)));
+            return { element, value: magnitude };
+          })
+          .filter((r: unknown): r is { element: string; value: number } => Boolean(r));
+      }
     }
 
     if (key === "meridians" && Array.isArray(value)) {

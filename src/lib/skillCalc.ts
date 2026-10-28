@@ -1,5 +1,13 @@
-import type { BattleEntity, Technique, TechniqueCategory, TechniqueSkill } from "@/data/types";
+import type {
+  BattleEntity,
+  Technique,
+  TechniqueCategory,
+  TechniquePrerequisite,
+  TechniqueSkill,
+} from "@/data/types";
 import { heartRecoveryFactor, isSpiritTechnique, soulDamageFactor } from "@/lib/attributes";
+import { normalizeElement } from "@/data/elements";
+import { REALM_NAMES } from "@/data/mockData";
 
 /**
  * 战斗结算里的出招者。AI 只负责照写，数值一律由这里确定性算定，不得随机。
@@ -72,6 +80,73 @@ export function techniqueLevelOf(tech: Pick<Technique, "levels" | "proficiency">
   const prof = Number(tech.proficiency) || 0;
   const idx = levels.findIndex((l) => prof < (Number(l.proficiencyNeeded) || 0));
   return idx === -1 ? levels.length : Math.max(1, idx);
+}
+
+/**
+ * 判一门功法的修炼条件时要看的几样：境界、灵根、心性，以及手里已有哪些功法。
+ * 面板与开局建档共用，免得两边各判一套。
+ */
+export interface TechniquePrereqContext {
+  realmIndex: number;
+  spiritRoots?: { element: string; value?: number }[];
+  heartScores?: { trait: string; score?: number }[];
+  techniques?: Pick<Technique, "id" | "name" | "levels" | "proficiency">[];
+}
+
+/** 单条条件是否已过 */
+function prereqMet(req: TechniquePrerequisite, ctx: TechniquePrereqContext): boolean {
+  if (req.type === "realm") {
+    // req.value 是大境界名（如「炼气」），按境界扁平表找到它的起始索引再比大小
+    const reqStart = REALM_NAMES.findIndex((name) => name.startsWith(String(req.value ?? "")));
+    if (reqStart >= 0 && ctx.realmIndex < reqStart) return false;
+    return true;
+  }
+  if (req.type === "technique") {
+    const required = (ctx.techniques ?? []).find(
+      (t) => t.id === String(req.value) || t.name === String(req.value),
+    );
+    if (!required) return false;
+    return techniqueLevelOf(required) >= (req.minLevel || 1);
+  }
+  if (req.type === "spiritRoot") {
+    // 灵根一律先归到九系正名再比：模型写 fire、火灵根都认作火
+    const want = normalizeElement(req.value);
+    const root = (ctx.spiritRoots ?? []).find((r) => normalizeElement(r.element) === want);
+    if (!root) return false;
+    if (req.minLevel && (Number(root.value) || 0) < req.minLevel) return false;
+    return true;
+  }
+  if (req.type === "heartTrait") {
+    const score = (ctx.heartScores ?? []).find((hs) => hs.trait === req.value)?.score ?? 0;
+    return score >= 50;
+  }
+  // realmIndex 之外的门类（旧档的 cultivation）没有可比之数，不作拦阻
+  return true;
+}
+
+/** 这门功法的条件是否都已具备 */
+export function meetsTechniquePrereqs(
+  tech: Pick<Technique, "prerequisites">,
+  ctx: TechniquePrereqContext,
+): boolean {
+  return (Array.isArray(tech.prerequisites) ? tech.prerequisites : []).every((req) => prereqMet(req, ctx));
+}
+
+/**
+ * 把过不去的条件摘掉，已具备的留着。
+ * 开局那几门功法是随手就有的，若模型替它们写了极高境界或异种灵根，玩家一辈子也修不成；
+ * 故开局落账时照玩家当下的情形过一遍，只留下他确实够得着的那几条。
+ */
+export function stripUnmetPrereqs<T extends Pick<Technique, "prerequisites">>(
+  techniques: T[],
+  ctx: TechniquePrereqContext,
+): T[] {
+  return (Array.isArray(techniques) ? techniques : []).map((tech) => {
+    const list = Array.isArray(tech.prerequisites) ? tech.prerequisites : [];
+    if (list.length === 0) return tech;
+    const kept = list.filter((req) => prereqMet(req, ctx));
+    return kept.length === list.length ? tech : { ...tech, prerequisites: kept };
+  });
 }
 
 /**
