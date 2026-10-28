@@ -645,6 +645,12 @@ export interface InventoryItem {
   count: number;
   icon: string;
   desc: string;
+  /**
+   * 这一件当初花多少灵石买下的，单件计。
+   * 卖出时照它折价：铺子只肯给六成，再按品类看那家铺子的行情。
+   * 叙事白给、路上捡的没有这一项，便按品阶折算。
+   */
+  value?: number;
   equipped?: boolean;
   slot?: "命" | "护" | "辅";
   elements?: Partial<Record<ElementType, number>>;
@@ -889,6 +895,12 @@ export interface Rumor {
   city?: string;
   /** 听到那天的日序，用于判过期 */
   day: number;
+  /** 这话牵出的一桩机缘：循着它便能找上门去 */
+  questId?: string;
+  /** 这话指向的一处野外去处 */
+  adventureId?: string;
+  /** 这话说的一场拍卖 */
+  auctionId?: string;
 }
 
 /** 瓦舍听戏的场次记录：一日之内最多听两场 */
@@ -1253,6 +1265,87 @@ export interface Adventure {
   journal?: AdventureLine[];
   /** 上一回备下的几个选择；重开这一处时照旧摆出来 */
   choices?: AdventureChoice[];
+}
+
+/** 拍卖会上的一件拍品：开场由叙事现写，贵、重、有来历 */
+export interface AuctionLot {
+  name: string;
+  /** 类别：法宝、丹药、符箓、材料、秘籍、灵兽、杂物 */
+  kind: string;
+  grade: ItemGrade;
+  /** 一两句来历 */
+  story: string;
+  /** 用处，写在明面上 */
+  use: string;
+  /** 起拍价，下品灵石 */
+  basePrice: number;
+}
+
+/** 拍卖会上举牌的客人：一场一掷，散了不留在尘缘里 */
+export interface AuctionBidder {
+  id: string;
+  name: string;
+  /** 身份，如「河东盐商」「青云门执事」 */
+  identity: string;
+  /** 一句性子 */
+  persona: string;
+  /** 最多肯出到多少 */
+  budget: number;
+  /** 跟价的狠劲，0 到 1 */
+  keen: number;
+  /** 已经搁牌退出的 */
+  out?: boolean;
+}
+
+/** 拍卖场上的一句话：谁开的价、叫到多少 */
+export interface AuctionLine {
+  who: string;
+  text: string;
+  /** 这一声把价抬到了多少；没抬价的不写 */
+  price?: number;
+  /** 是不是玩家自己说的 */
+  player?: boolean;
+}
+
+/**
+ * 定在某一日宝物阁里的一场拍卖。
+ * 到日子才开；开场时现写拍品与来客，叫价本地推演，连着几轮无人加价便落槌。
+ */
+export interface Auction {
+  id: string;
+  /** 落在哪一家宝物阁 */
+  shopId: string;
+  shopName: string;
+  cityId: string;
+  districtId: number;
+  /** 定在哪一日开拍（日序） */
+  day: number;
+  /** 哪个时辰开拍 */
+  hour: number;
+  /** 由头：为何开这一场 */
+  reason: string;
+  /** open 待开或正在拍，done 已散 */
+  status: "open" | "done";
+  /** 开场那段光景；收起这一窗再进来仍看得见 */
+  opening?: string;
+  lot?: AuctionLot;
+  bidders?: AuctionBidder[];
+  /** 眼下最高价 */
+  highBid?: number;
+  /** 执牌的是谁：客人 id，或 "player" */
+  leaderId?: string;
+  /** 已叫过几轮 */
+  round?: number;
+  /** 连着几轮没人加价 */
+  silent?: number;
+  /** 场上的话 */
+  lines?: AuctionLine[];
+  /** 落槌之后的一句交代 */
+  result?: string;
+  /** 谁得了这一件 */
+  winnerName?: string;
+  /** 是不是玩家得了 */
+  won?: boolean;
 }
 
 /** 约定的两种来路，误了期的算法各不相同 */
@@ -2229,6 +2322,8 @@ export interface GameState {
   sectSites: SectSite[];
   /** 舆图预设点位上开出的奇遇：或由叙事牵出，或由天意现掷 */
   adventures: Adventure[];
+  /** 城里宝物阁定下的拍卖：到日子才开，散了便撤 */
+  auctions: Auction[];
 }
 
 // ===== AI 叙事系统类型 =====

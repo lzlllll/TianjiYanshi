@@ -181,10 +181,11 @@ export const DATA_DOMAINS: DataDomain[] = [
   {
     id: "event",
     label: "事件与记录",
-    hint: "机缘、奇遇、约定、快报、流言、瓦舍、当票、编年史",
+    hint: "机缘、奇遇、拍卖、约定、快报、流言、瓦舍、当票、编年史",
     paths: [
       "quests",
       "adventures",
+      "auctions",
       "pacts",
       "news.items",
       "rumors",

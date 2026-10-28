@@ -37,6 +37,7 @@ import type {
   QuestBroker,
   Adventure,
   AdventureChoice,
+  Auction,
   AdventureLine,
   Technique,
   SectSite,
@@ -129,6 +130,8 @@ import {
   buildAdventureReplyPrompt,
   buildAdventureSpawnPrompt,
   buildTaskNpcPrompt,
+  buildAuctionOpenPrompt,
+  buildAuctionClosePrompt,
   PROSE_STYLE,
   type AdventureBrief,
   type EventPlayerBrief,
@@ -143,6 +146,21 @@ import {
   pickAdventureSpot,
   pickAdventureSpotNear,
 } from "@/data/adventures";
+import {
+  AUCTION_MAX_OPEN,
+  AUCTION_NOTICE_DAYS,
+  applyPlayerBid,
+  applyPlayerPass,
+  auctionHammered,
+  auctionLeaderName,
+  auctionNextBid,
+  findTreasureShop,
+  lotItemType,
+  normalizeAuctionBidders,
+  normalizeAuctionLot,
+  rollAuctionReason,
+} from "@/data/auction";
+import { lowStonesWorth, spendLowStones } from "@/data/spiritStones";
 import {
   RECENT_WINDOW,
   clampSummary,
@@ -309,6 +327,29 @@ const INITIAL_ADVENTURE: AdventureState = {
 
 /** 一席最多请几位；人再多，话就散了 */
 export const MAX_PARTY_SIZE = 4;
+
+/**
+ * 宝物阁拍卖那一窗。
+ * 拍品与来客是开场现写的，叫价由本地按来客的预算与性子推演，
+ * 故这一扇窗只需记下开场那段光景与忙闲。
+ */
+export interface AuctionState {
+  active: boolean;
+  busy: boolean;
+  /** 眼下在哪一场 */
+  id: string;
+  /** 开场那段光景：阁内陈设、来客落座、拍品抬上来 */
+  opening: string;
+  errorMsg: string;
+}
+
+const INITIAL_AUCTION: AuctionState = {
+  active: false,
+  busy: false,
+  id: "",
+  opening: "",
+  errorMsg: "",
+};
 
 /**
  * 照奇遇名下记着的那一卷，把这扇窗摆回先前的样子。
@@ -1267,6 +1308,21 @@ interface AIStore {
   /** 收起奇遇那扇窗；那一处仍留在舆图上 */
   closeAdventure: () => void;
 
+  /** 宝物阁的拍卖：到日子进铺子才开的那一扇窗 */
+  auction: AuctionState;
+  /** 时间往前走过一段，掷一掷有没有哪家宝物阁放出拍卖的消息 */
+  maybeSpawnAuction: (hours: number) => void;
+  /** 定下一场拍卖：本地挑宝物阁、定日子，拍品与来客等开场再写 */
+  spawnAuction: (reason?: string, shopName?: string, opts?: { day?: number; hour?: number }) => void;
+  /** 走进这一场：头一回进来便请模型写拍品与来客 */
+  openAuction: (id: string) => Promise<void>;
+  /** 玩家加一口价，随后客人应一轮 */
+  bidAuction: () => Promise<void>;
+  /** 玩家看着不动，客人照旧应一轮 */
+  passAuction: () => Promise<void>;
+  /** 收起拍卖那一窗 */
+  closeAuction: () => void;
+
   /**
    * 请模型照这桩差事给钉下的任务人物立一份小传：
    * 姓名、性别、年岁、出身、性情、形貌、修为都由它拟定，替掉先前现拼的那些，
@@ -1811,6 +1867,8 @@ function adventureFoe(danger: number, realmIndex: number) {
 let lastAdventureSpawnDay = 0;
 /** 按月保底那处奇遇，这一日试过了没有；试过便不再一个时辰接一个时辰地空转 */
 let lastMonthlyAdventureTry = "";
+/** 上回宝物阁放出拍卖消息是哪一日；一日至多一桩 */
+let lastAuctionSpawnDay = 0;
 
 /**
  * 开局建档：把同一份开篇叙事并发交给多个领域助手，各自只写自己那一块。
@@ -2346,6 +2404,83 @@ async function runNpcMonthlyTick(settings: AISettings, dayLabel: string, signal:
   console.debug("[npcTick] 已为", entries.length, "位重要人物留下行动与概要");
 }
 
+/**
+ * 拍卖落槌：定下谁得了，钱货两清，再请叙事写一段收场。
+ * 玩家执牌便从囊中扣灵石、把东西收进行囊；客人执牌则只记一句。
+ */
+async function hammerAuction(auc: Auction, settings: AISettings): Promise<void> {
+  const gs = useGameStore.getState();
+  const price = Math.max(0, Math.trunc(auc.highBid ?? 0));
+  const winner = price > 0 ? auctionLeaderName(auc) : "无人";
+  const playerWins = price > 0 && auc.leaderId === "player";
+  let won = false;
+  let note = "";
+
+  if (playerWins) {
+    const lot = auc.lot;
+    const paid = lot ? spendLowStones(gs.spiritStones, price) : null;
+    if (lot && paid) {
+      won = true;
+      const type = lotItemType(lot);
+      useGameStore.setState((s) => ({
+        spiritStones: paid,
+        inventory: [
+          ...s.inventory,
+          {
+            id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+            name: lot.name,
+            type,
+            grade: lot.grade,
+            count: 1,
+            // 花的这一笔记在物件上：日后转手照它折价
+            value: price,
+            icon: lot.name.charAt(0),
+            desc: [lot.story, lot.use].filter(Boolean).join(" ") || "在拍卖会上得的。",
+          },
+        ],
+        log: [`你在「${auc.shopName}」的拍卖上以 ${price} 枚下品灵石得了「${lot.name}」。`, ...s.log].slice(0, 30),
+      }));
+    } else {
+      note = "掌槌三声，囊中却凑不出这些灵石，这一件终究没能到手。";
+    }
+  }
+
+  let closing = "";
+  if (aiReady(settings)) {
+    try {
+      const now = useGameStore.getState();
+      const brief = buildEventBrief(now as unknown as GameState, now.hereLabel());
+      closing = String(
+        (await chatWithModel(
+          settings,
+          settings.proModel,
+          buildAuctionClosePrompt({
+            brief,
+            shop: auc.shopName,
+            lotName: auc.lot?.name ?? "那件东西",
+            lotStory: auc.lot?.story ?? "",
+            price,
+            winner,
+            playerWon: won,
+            rounds: Math.max(1, Math.trunc(auc.round ?? 1)),
+          }),
+          { timeoutMs: 120000, retries: 1 },
+        )) ?? "",
+      ).trim();
+    } catch {
+      closing = "";
+    }
+  }
+
+  const fallback = price > 0 ? `掌槌三声，这一件归了${winner}。` : "三声槌响，无人应价，这一件流了。";
+  useGameStore.getState().patchAuction(auc.id, {
+    status: "done",
+    winnerName: winner,
+    won,
+    result: note || closing || fallback,
+  });
+}
+
 export const useAIStore = create<AIStore>()(
   persist(
     (set, get) => ({
@@ -2354,6 +2489,7 @@ export const useAIStore = create<AIStore>()(
       npcChat: INITIAL_NPC_CHAT,
       randomEvent: INITIAL_RANDOM_EVENT,
       adventure: INITIAL_ADVENTURE,
+      auction: INITIAL_AUCTION,
       battle: INITIAL_BATTLE,
       isDeveloperMode: false,
       randomEventDisabled: false,
@@ -2911,6 +3047,7 @@ export const useAIStore = create<AIStore>()(
           workshops: game.workshops,
           pacts: game.pacts,
           adventures: game.adventures,
+          auctions: game.auctions ?? [],
         };
 
         const snapshot = game.getSnapshot();
@@ -4202,6 +4339,206 @@ export const useAIStore = create<AIStore>()(
         abortController?.abort();
         abortController = null;
         set({ adventure: INITIAL_ADVENTURE });
+      },
+
+      maybeSpawnAuction: (hours) => {
+        const st = get();
+        if (st.auction.active || st.auction.busy) return;
+        if (st.conversation.stage === "flash" || st.conversation.stage === "pro") return;
+        const h = Math.max(0, Number(hours) || 0);
+        if (h < 2) return;
+        const gs = useGameStore.getState();
+        const today = daySerial(gs.currentTime);
+        // 一日至多放出桩消息，免得一天里几家阁子一起拍
+        if (today - lastAuctionSpawnDay < 1) return;
+        if ((gs.auctions ?? []).filter((a) => a.status === "open").length >= AUCTION_MAX_OPEN) return;
+        // 只有进过的坊市里才有宝物阁可挂；一间都没开过便先搁着
+        if (!findTreasureShop(gs.markets, { preferCityId: gs.currentPlaceId })) return;
+        const chance = Math.min(0.16, 0.03 + h * 0.008);
+        if (Math.random() > chance) return;
+        lastAuctionSpawnDay = today;
+        get().spawnAuction();
+      },
+
+      spawnAuction: (reason, shopName, opts) => {
+        const gs = useGameStore.getState();
+        const today = daySerial(gs.currentTime);
+        const found = findTreasureShop(gs.markets, { shopName, preferCityId: gs.currentPlaceId });
+        if (!found) return;
+        const gap = AUCTION_NOTICE_DAYS;
+        const wantedDay = Math.trunc(Number(opts?.day));
+        const day = Number.isFinite(wantedDay) && wantedDay > 0
+          ? wantedDay
+          : today + gap[0] + Math.floor(Math.random() * (gap[1] - gap[0] + 1));
+        const wantedHour = Math.trunc(Number(opts?.hour));
+        const auction: Auction = {
+          id: `auction-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+          shopId: found.shop.id,
+          shopName: found.shop.name,
+          cityId: found.cityId,
+          districtId: found.districtId,
+          day: Math.max(today, day),
+          hour: Number.isFinite(wantedHour) ? Math.min(11, Math.max(0, wantedHour)) : 6,
+          reason: String(reason ?? "").trim() || rollAuctionReason(),
+          status: "open",
+        };
+        const before = (gs.auctions ?? []).length;
+        useGameStore.getState().addAuction(auction);
+        // 挂了没挂上（同日同铺已有一场）便不再多嘴
+        if ((useGameStore.getState().auctions ?? []).length === before) return;
+        // 街口也传开了：传闻面板里看得见，日子一到好去
+        const cityName = getMarker(found.cityId)?.name ?? "";
+        const when = auction.day <= today ? "今日" : `${auction.day - today} 日后`;
+        useGameStore.getState().addRumors([
+          {
+            text: `${cityName ? `${cityName}的` : ""}「${found.shop.name}」${auction.reason}，定在${when}开拍，去晚了便只剩空场。`,
+            source: "街口闲话",
+            auctionId: auction.id,
+          },
+        ]);
+      },
+
+      openAuction: async (id) => {
+        const { settings } = get();
+        const gs = useGameStore.getState();
+        const auc = (gs.auctions ?? []).find((a) => a.id === id);
+        if (!auc) return;
+        const today = daySerial(gs.currentTime);
+        if (auc.status !== "open") {
+          gs.addLog(`「${auc.shopName}」那一场已经散了。`);
+          return;
+        }
+        // 拍卖就开在那家阁子里：人不在那一城，进不去
+        if (gs.currentPlaceId !== auc.cityId) {
+          gs.addLog(`「${auc.shopName}」在${getMarker(auc.cityId)?.name ?? "别处"}，须亲往那一城才进得去。`);
+          return;
+        }
+        if (auc.day > today) {
+          gs.addLog(`「${auc.shopName}」的拍卖定在 ${auc.day - today} 日后，眼下还没开场。`);
+          return;
+        }
+
+        // 先前进来过：拍品与来客都还在，接着拍便是
+        if (auc.lot && (auc.bidders ?? []).length > 0) {
+          set({ auction: { ...INITIAL_AUCTION, active: true, id: auc.id, opening: auc.opening ?? "" } });
+          return;
+        }
+
+        set({ auction: { ...INITIAL_AUCTION, active: true, busy: !!aiReady(settings), id: auc.id } });
+        if (!aiReady(settings)) {
+          set((s) => ({
+            auction: { ...s.auction, busy: false, errorMsg: "尚未配置通灵接口，这一场写不出来；接上接口再来。" },
+          }));
+          return;
+        }
+
+        abortController = new AbortController();
+        const signal = abortController.signal;
+        const brief = buildEventBrief(gs as unknown as GameState, gs.hereLabel());
+        // 来客里可有一位是旧识：把这几位报给模型，由它挑
+        const known = (Array.isArray(gs.relations) ? gs.relations : [])
+          .filter((r) => r?.name)
+          .slice(0, 12)
+          .map((r) => `${r.name}（${r.title || "旧识"}）`);
+        const culture = getMarker(gs.currentPlaceId)?.culture;
+
+        try {
+          const raw = await chatWithModel(
+            settings,
+            settings.proModel,
+            buildAuctionOpenPrompt({
+              brief,
+              shop: auc.shopName,
+              city: getMarker(auc.cityId)?.name,
+              culture,
+              reason: auc.reason,
+              known,
+            }),
+            { timeoutMs: 120000, signal, retries: 1 },
+          );
+          if (signal.aborted) return;
+          const payload = parseJsonPayload(raw) as Record<string, unknown> | null;
+          const lot = normalizeAuctionLot(payload?.lot);
+          if (!lot) throw new Error("这一场的拍品没写出来。");
+          const bidders = normalizeAuctionBidders(payload?.bidders, lot.basePrice);
+          // 一位客人都没写出来，便请一位城里的富户来撑个场面，免得无人抬价
+          if (bidders.length === 0) {
+            bidders.push({
+              id: "bidder-1",
+              name: "城中富户",
+              identity: "过路客商",
+              persona: "看着不声不响，出价倒稳",
+              budget: Math.max(lot.basePrice, Math.round(lot.basePrice * 2)),
+              keen: 0.5,
+            });
+          }
+          const opening = String(payload?.opening ?? "").trim();
+          useGameStore.getState().patchAuction(auc.id, {
+            lot,
+            bidders,
+            highBid: 0,
+            leaderId: "",
+            round: 0,
+            silent: 0,
+            lines: [],
+            opening,
+          });
+          set((s) => ({
+            auction: {
+              ...s.auction,
+              busy: false,
+              opening: opening || "掌槌的清了清嗓子，抬手示意众人安静。",
+              errorMsg: "",
+            },
+          }));
+        } catch (e) {
+          if (signal.aborted) return;
+          set((s) => ({
+            auction: { ...s.auction, busy: false, errorMsg: (e as Error)?.message || "这一场没能开起来。" },
+          }));
+        }
+      },
+
+      bidAuction: async () => {
+        const { auction, settings } = get();
+        if (!auction.active || auction.busy) return;
+        const gs = useGameStore.getState();
+        const auc = (gs.auctions ?? []).find((a) => a.id === auction.id);
+        if (!auc || auc.status !== "open" || !auc.lot) return;
+        if (auctionHammered(auc)) return;
+        // 已经是你执牌，再叫便是替自己抬价，没有这个道理
+        if (auc.leaderId === "player" && (auc.highBid ?? 0) > 0) {
+          set((s) => ({ auction: { ...s.auction, errorMsg: "眼下已是你执牌，等着看还有谁跟。" } }));
+          return;
+        }
+        const next = auctionNextBid(auc);
+        if (lowStonesWorth(gs.spiritStones) < next) {
+          set((s) => ({
+            auction: { ...s.auction, errorMsg: `囊中折尽也不够 ${next} 枚下品灵石，叫不上去了。` },
+          }));
+          return;
+        }
+        const updated = applyPlayerBid(auc);
+        useGameStore.getState().patchAuction(auc.id, updated);
+        set((s) => ({ auction: { ...s.auction, errorMsg: "" } }));
+        if (auctionHammered(updated)) await hammerAuction(updated, settings);
+      },
+
+      passAuction: async () => {
+        const { auction, settings } = get();
+        if (!auction.active || auction.busy) return;
+        const gs = useGameStore.getState();
+        const auc = (gs.auctions ?? []).find((a) => a.id === auction.id);
+        if (!auc || auc.status !== "open" || !auc.lot) return;
+        if (auctionHammered(auc)) return;
+        const updated = applyPlayerPass(auc);
+        useGameStore.getState().patchAuction(auc.id, updated);
+        set((s) => ({ auction: { ...s.auction, errorMsg: "" } }));
+        if (auctionHammered(updated)) await hammerAuction(updated, settings);
+      },
+
+      closeAuction: () => {
+        set({ auction: INITIAL_AUCTION });
       },
 
       generateTaskNpcs: async (args) => {

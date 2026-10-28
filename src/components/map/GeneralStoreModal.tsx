@@ -1,15 +1,17 @@
 import { useState } from "react";
 import { useGameStore } from "@/store/useGameStore";
+import { useAIStore } from "@/store/useAIStore";
 import { lowStonesWorth } from "@/data/spiritStones";
 import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
+import { auctionAtShop, auctionWhen } from "@/data/auction";
 import { HaggleModal } from "@/components/map/HaggleModal";
 import { AppraiseModal } from "@/components/map/AppraiseModal";
 import { manorKey } from "@/data/npcGen";
-import { goodDesc, goodPrice, itemSalePrice, itemSalePriceFor } from "@/data/goods";
-import { formatGameTime } from "@/lib/gameTime";
+import { goodDesc, goodPrice, itemSalePrice, itemSalePriceFor, type SaleCtx } from "@/data/goods";
+import { daySerial, formatGameTime } from "@/lib/gameTime";
 import type { Good, InventoryItem, Shop } from "@/data/types";
-import { Coins, Gem, MessageSquare, Tag, User, X } from "lucide-react";
+import { Coins, Gavel, Gem, MessageSquare, Tag, User, X } from "lucide-react";
 
 /** 议价的标的：买入议的是货，卖出议的是行囊里的一样东西 */
 export interface HaggleSubject {
@@ -50,6 +52,8 @@ export function GeneralStoreModal({
   const priceAdjusts = useGameStore((s) => s.priceAdjusts);
   const stones = useGameStore((s) => lowStonesWorth(s.spiritStones));
   const inventory = useGameStore((s) => s.inventory);
+  const auctions = useGameStore((s) => s.auctions);
+  const openAuction = useAIStore((s) => s.openAuction);
   const buyGood = useGameStore((s) => s.buyGood);
   const sellItem = useGameStore((s) => s.sellItem);
 
@@ -66,6 +70,10 @@ export function GeneralStoreModal({
   const [appraising, setAppraising] = useState(false);
 
   const keeper = live.keeper;
+  // 卖东西看这家铺子对这一类货的行情：同一件东西在别家未必给这个价
+  const saleCtx: SaleCtx = { shopKey: `${key}:${live.id}`, day: daySerial(currentTime) };
+  // 这一家宝物阁眼下挂着的拍卖：到了日子才开得起来
+  const shopAuction = auctionAtShop(auctions, live.id, saleCtx.day ?? 0);
   // 断货的不再摆上货架：数量归零就当没这一样
   const goods: Good[] = (live.goods ?? []).filter((g) => g.stock > 0);
 
@@ -74,7 +82,7 @@ export function GeneralStoreModal({
   const selectedItem: InventoryItem | undefined = inventory.find((i) => i.id === pickedItem);
   /** 这一组要卖出几件：夹在 1 到存货数之间 */
   const sellTake = selectedItem ? Math.max(1, Math.min(Math.trunc(sellCount) || 1, selectedItem.count)) : 0;
-  const sellTotal = selectedItem ? itemSalePriceFor(selectedItem, sellTake) : 0;
+  const sellTotal = selectedItem ? itemSalePriceFor(selectedItem, sellTake, saleCtx) : 0;
 
   /** 按标价直接买下 */
   const buyNow = (g: Good) => {
@@ -89,7 +97,7 @@ export function GeneralStoreModal({
   /** 按掌柜起初的价直接卖，卖几件照选定的数目 */
   const sellNow = (item: InventoryItem) => {
     const count = Math.max(1, Math.min(sellTake, item.count));
-    const total = itemSalePriceFor(item, count);
+    const total = itemSalePriceFor(item, count, saleCtx);
     if (sellItem({ itemId: item.id, totalPrice: total, count })) {
       setNote(`卖出「${item.name}」${count} 件，得 ${total} 下品灵石。`);
       setPickedItem("");
@@ -161,7 +169,7 @@ export function GeneralStoreModal({
                         mode: "sell",
                         name: selectedItem.name,
                         count: selectedItem.count,
-                        basePrice: itemSalePrice(selectedItem),
+                        basePrice: itemSalePrice(selectedItem, saleCtx),
                         itemId: selectedItem.id,
                       }
                     : null,
@@ -194,6 +202,20 @@ export function GeneralStoreModal({
               >
                 <Gem size={12} className="mr-1" />
                 请人鉴宝
+              </SealButton>
+            )}
+
+            {shopAuction && (
+              <SealButton
+                variant={shopAuction.day === saleCtx.day ? "seal" : "ghost"}
+                onClick={() => {
+                  setNote("");
+                  void openAuction(shopAuction.id);
+                }}
+                className="w-full px-2 py-2 text-xs"
+              >
+                <Gavel size={12} className="mr-1" />
+                {auctionWhen(shopAuction, saleCtx.day ?? 0)}
               </SealButton>
             )}
 
@@ -338,7 +360,7 @@ export function GeneralStoreModal({
                             {item.type} · {item.grade}
                           </div>
                           <div className="font-number text-xs text-gold-400 mt-0.5">
-                            {itemSalePrice(item)} 灵石
+                            {itemSalePrice(item, saleCtx)} 灵石
                           </div>
                         </button>
                       );
@@ -478,6 +500,7 @@ export function GeneralStoreModal({
           keeper={keeper}
           mode={haggling.mode}
           subject={haggling.subject}
+          saleCtx={saleCtx}
           onSettle={settle}
           onClose={() => {
             setHaggling(null);

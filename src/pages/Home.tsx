@@ -27,6 +27,7 @@ import { RandomEventModal } from "@/components/ai/RandomEventModal";
 import { NarrativeHaggleModal } from "@/components/map/NarrativeHaggleModal";
 import { NarrativeShopModal } from "@/components/map/NarrativeShopModal";
 import { AdventureModal } from "@/components/adventure/AdventureModal";
+import { AuctionModal } from "@/components/map/AuctionModal";
 import { CraftOrderModal } from "@/components/ai/CraftOrderModal";
 import { CraftingModal } from "@/components/crafting/CraftingModal";
 import { EndingScreen } from "@/components/ending/EndingScreen";
@@ -127,6 +128,8 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
       <RandomEventModal />
       {/* 踏进一处奇遇：可随时抽身，那一处仍留在舆图上 */}
       <AdventureModal />
+      {/* 宝物阁的拍卖：到日子才开，落槌之后方收了这一窗 */}
+      <AuctionModal />
       {/* 叙事里挑起的一场讲价：与商铺里那套同源，谈定即落账 */}
       <NarrativeHaggleModal />
       {/* 叙事把玩家引到某家铺子买卖：铺面界面由玩家自己经手 */}

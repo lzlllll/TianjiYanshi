@@ -1177,6 +1177,8 @@ ${buffCatalogBrief()}
 33. 界面结算与本账单不重复：正文里若写到玩家去铺子买卖、与人交手、或开炉炼丹／画符，这几桩往往另有界面当场结算。本回合已由界面结算过的那一笔——钱财、货物、丹符的成色与数量、胜负伤亡、气血灵力——不要在这里再记一遍，免得一笔账记两回。除此之外，正文里确已发生的其他变化，照分类表一样落账，莫因这段叙事挂在哪个界面上就撂手不记。
 34. 当场买卖：叙事里当场买成了东西（路边摊、行商、拍卖，或铺子里当场付钱拿货），用一条 buy 记下：{"kind":"buy","what":"item","name":"货名","price":单价,"count":1,"type":"材料/丹药/符箓/法宝/灵兽/杂物 之一","grade":"凡品/灵品/玄品/天品/仙品 之一","desc":"一句说明","place":"在哪儿买的"}；买下一处宅地写 {"kind":"buy","what":"manor","name":"宅地名目","price":地价,"place":"所在地"}。price 按下品灵石计，count 为件数，不给便是 1 件。buy 由系统当场兑钱交货，不要另写 modify spiritStones，也不要 add inventory／manorPlots。只写真买成了的：先照摘要里的灵石算，四等按一比一百兑尽了仍不够，就不要写 buy，正文里直接写他钱不够、终究没能买下。同一个回合里若这笔买卖已经由铺面界面、讲价界面或屋舍界面当场结清，就不要再写 buy，免得一笔账记两回；正文里另有当场买成、界面上没经手的，照写不误。
 35. 约定：正文里若玩家与某人当面说定一桩日后要践的事（几日后在何处相见、替人捎话带物、应下去赴的约），用 add pacts 记下，payload 写 {"name":"约定名目","giver":"与谁说定","place":"在哪儿了结","days":几日后,"desc":"一句原委"}。name 不超过 20 字，须说清是什么事；giver 写对面那人的姓名，尘缘里认得便照抄那一字不差的名字；place 写城中真有的去处，说不准可省；days 取 1 到 720 的整数，不写便按三日算；desc 不超过 120 字，交代来龙去脉。同一桩事只立一次，福缘「约定」里已在办的不必再立。只是寒暄、客套、含糊应承的不要立；买卖当场银货两讫的也不要立。
+36. 拍卖：正文里若说到某家宝物阁要开一场拍卖、当众出手一件贵重之物，用 add auctions 记下，payload 写 {"shop":"宝物阁的铺名","reason":"为何开这一场，不超过 20 字","day":开拍的日序,"hour":时辰序号}。shop 须与摘要中「本城铺面」里的宝物阁一字不差；day 从今日（第 ${todaySerial} 日）往后算，不写便定在两日后；hour 取 0 到 11，不写便是午时。拍品与来客不在这条里写，开场时另行现写，故正文里只可提一句「阁里要开拍」，不要写出拍的是什么、叫到多少。同一家阁子同一天只挂一场。
+37. 传闻：正文里玩家若从别人口中听得一桩消息（邻桌议论、行商漏的口风、街口的闲话），用 add rumors 记下，payload 写 {"text":"这话本身，不超过 40 字","source":"听自何处，如 杏花楼·邻桌","city":"在哪座城听来的"}。若要这话牵出一桩事，另在同级带上 "quest"、"adventure"、"auction" 之一，写法与该集合自己那一条相同（见 18、23、36 三条）：系统会先把那桩事立起来，再把它的去处记在这句话上，日后在传闻面板里循着这话便能找去。一条消息只写一条传闻；玩家自己心里想的、本就知道的，不算听来的。
 【宗门修正名录】
 ${sectModifierBrief()}`;
 
@@ -1560,7 +1562,7 @@ export function buildNewsReportPrompt(params: { state: GameState; params: NewsRe
 - 宗门：add sect.tasks / sect.heritage / sect.shop / sect.resources / sect.positions，或 modify sect.reputation 等
 - 宗门关系：两处宗门之间结盟、交好、反目、开战、或一家为另一家所并所臣服，用 add sectRelations 记下，payload 写 {"a":"一方门派名号","b":"另一方门派名号","stance":"附庸／结盟／友好／中立／敌对","relation":-100 到 100,"note":"一句说明"}；a 与 b 须是摘要中「江湖上的门派」里认得出的两处、且不相同
 - 城村易主：某家宗门攻下一座城或一个村，用 add occupations 记下，payload 写 {"kind":"city 或 village","targetName":"城名或村名","ownerName":"占家宗门的名号"}；城名与村名须与摘要中对得上，ownerName 须是摘要中「江湖上的门派」里认得出的一处
-- 世界：add quests（新的委托或线索）、add adventures（新的野外去处）
+- 世界：add quests（新的委托或线索）、add adventures（新的野外去处）、add auctions（宝物阁要开的拍卖，写 {"shop","reason","day"}）
 - 玩家：因世界事件波及，可 add player.buffs（须给全字段）
 - 只写这则消息确实会带来的变化，幅度与叙事相称，不要凭空赠送珍稀之物；没有就不写
 - 不要改动玩家的修为、寿元、灵石等属于自身努力所得的字段
@@ -1573,7 +1575,7 @@ export function buildNewsReportPrompt(params: { state: GameState; params: NewsRe
 
 【ops 规则】
 - modify：path 必须是下方数据摘要中真实存在的路径；op 只能取 "="、"+"、"-" 之一；value 为数字或字符串，字符串直接写内容不要加引号
-- add：collection 只能取 news.items、relations、quests、adventures、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sectRelations、occupations、player.buffs 之一；payload 为该条目的完整字段对象，id 不得与摘要中已有 id 重复
+- add：collection 只能取 news.items、relations、quests、adventures、auctions、sect.tasks、sect.heritage、sect.shop、sect.resources、sect.positions、sectRelations、occupations、player.buffs 之一；payload 为该条目的完整字段对象，id 不得与摘要中已有 id 重复
 - delete 不用；路径与字段名必须与下方摘要中的数据一一对应，不要自造路径`;
 
   const user = `【当前游戏数据】
@@ -2351,10 +2353,12 @@ ${briefLines(args.brief)}
 1. 这一趟的得失由你裁定，但分量须与玩家的修为、手段和所耗的时辰相称：探得久了，得着的可能大些，遇上事的可能也大些。切不可凭空送他一场大机缘，也不可无端写下远超其实力的凶险。
 2. 若有所获，务必写得具体：是何种草木药材、兽皮骨料、矿石器物，还是灵石钱财，都要落在实处，莫写空话。
 3. 用第三人称古风白话，只写这一趟的情景，不要列条目清单，不要复述数值与规则，不要出现「系统」「数据」「玩家」这类出戏的字眼。
-4. 若这一趟探出了需要他当场拿主意的动静（撞见人、兽、异象，或另有去处可探），就在正文之后另起一行写：
+4. 若这一趟探出了需要他当场拿主意的动静（撞见人、撞见兽、异象突起，或另有去处可探），正文写到这动静刚刚露头、他还没及应对为止：见得什么、起于何处，就此收笔。不要往下写他上前问话、动手、退走，也不要写那件事怎么了结、对方是何来历——那一段的经过与结果另有专篇去写，此处先写了，两处必有一处对不上。
+   这般收笔之后，另起一行写：
 ${FOREST_EVENT_MARK}<一句由头，十到二十字><<<END>>>
-若只是平顺的一趟，便不必写这一行。
-5. 除正文与上面那行标记外，不要输出任何别的标记、说明或数据操作。`;
+   若只是平顺的一趟，便不必写这一行。
+5. 除正文与上面那行标记外，不要输出任何别的标记、说明或数据操作。
+6. 有动静的那一趟，仍照规矩 2 写他这一路上已得着的东西；尚未到手的，不在这段里许给他。`;
 
   return [
     { role: "system", content: system },
@@ -2545,6 +2549,91 @@ ${briefLines(brief)}
   return [
     { role: "system", content: system },
     { role: "user", content: "请编这一处。" },
+  ];
+}
+
+/**
+ * 拍卖开场：拍品与来客都由这一趟现写。
+ * 之后逐轮加价交给本地按来客的预算与性子推演，此处只写场面上该有的东西。
+ */
+export function buildAuctionOpenPrompt(args: {
+  brief: EventPlayerBrief;
+  shop: string;
+  city?: string;
+  culture?: string;
+  reason: string;
+  /** 玩家认识的人名，可从中取一两位来客 */
+  known: string[];
+}): ChatMessage[] {
+  const { brief, shop, city, culture, reason, known } = args;
+  const system = `你是这个修真世界的叙事者。玩家走进了${city ? `${city}的` : ""}「${shop}」（${culture ? `${culture}风物` : "城中铺面"}），今日这里有一场拍卖：${reason}。
+
+${briefLines(brief)}
+
+请为这一场定下拍品与来客，只输出一个 JSON 对象，不要解释、注释或代码围栏：
+{
+  "opening": "一百字上下，写场上的光景：阁内陈设、来客落座、拍品抬上来时的动静；写到掌槌的将要开口为止，不要写谁先叫价、叫了多少",
+  "lot": {
+    "name": "拍品的名目，不超过 12 字，如 前朝玄铁令",
+    "kind": "法宝、丹药、符箓、材料、秘籍、灵兽、杂物 之一",
+    "grade": "凡品、灵品、玄品、天品、仙品 之一",
+    "story": "不超过 60 字，说来历",
+    "use": "不超过 40 字，说它能做什么、紧要在哪里",
+    "basePrice": 起拍价，下品灵石，整数
+  },
+  "bidders": [
+    {
+      "name": "姓名",
+      "identity": "身份，不超过 10 字，如 河东盐商",
+      "persona": "一句性子，不超过 20 字",
+      "budget": 最多肯出到多少下品灵石，整数,
+      "keen": 0 到 1 之间的小数，越高越肯往上顶
+    }
+  ]
+}
+规矩：
+1. 拍品须贵重：品阶不低于玄品，用处写得实在，来路与这一带风物相称。起拍价与玩家的境界、身家相称（下品灵石三百到五千之谱），不可写成他倾家也够不着的天价，也不可贱卖。
+2. 来客三到五位，身份各异，各有各的图谋，不要写成一群没面目的人。每人肯出的上限不得低于起拍价，最高不出起拍价的八倍。
+3. ${known.length > 0 ? `【尘缘】里有这几位：${known.join("、")}。若其中有合得来的，可请一位到场，姓名一字不改，身份与性子照旧；至多两位，其余另编。` : "场中没有玩家认得的人，全都另编。"}
+4. 这些来客是临时进场的，散了便各走各路，不是玩家结交的人。
+5. 不要出现「系统」「数据」「玩家」这类字眼。`;
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: "请定下这一场的拍品与来客。" },
+  ];
+}
+
+/** 落槌之后的一段收场：谁得了、场面上是什么光景 */
+export function buildAuctionClosePrompt(args: {
+  brief: EventPlayerBrief;
+  shop: string;
+  lotName: string;
+  lotStory: string;
+  price: number;
+  winner: string;
+  playerWon: boolean;
+  rounds: number;
+}): ChatMessage[] {
+  const { brief, shop, lotName, lotStory, price, winner, playerWon, rounds } = args;
+  const system = `你是这个修真世界的叙事者。「${shop}」这一场拍卖已经落了槌。
+
+${briefLines(brief)}
+
+【拍品】${lotName}${lotStory ? `——${lotStory}` : ""}
+【成交】${price > 0 ? `${price} 枚下品灵石，归了${winner}` : "无人应价，流拍了"}
+【经过】前后叫了 ${rounds} 轮
+
+请写一百二十到二百字，用第三人称古风白话，写这一场怎么收的场：${
+    playerWon
+      ? "写他得手的样子、旁人的神色、掌槌的交割；不要写他付钱与收纳的动作细节，那已另行结算。"
+      : "写那件东西落到别人手里时的场面，以及他在一旁看着的光景；不要替他可惜，也不要写成他动手去抢。"
+  }
+只写情景，不要列条目，不要复述数值与规则，不要输出任何标记或数据操作。`;
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: "请写这一场的收场。" },
   ];
 }
 

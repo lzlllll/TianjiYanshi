@@ -30,7 +30,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["破煞", "引灵", "守护", "封魂", "助运", "灭邪", "惑心", "愈伤", "遁形"],
     ],
     qualifiers: ["三息之内", "半个时辰", "一炷香", "一昼夜", "三日"],
-    price: [12, 60],
+    price: [12, 90],
     desc: "以{p0}为引，专司{p1}，{q}见效。",
     suffix: "符",
   },
@@ -41,7 +41,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["丹", "丸", "散", "膏", "露"],
     ],
     qualifiers: ["温酒送下", "清水送服", "含化", "外敷", "晨起空腹服"],
-    price: [8, 50],
+    price: [8, 70],
     desc: "管{p0}的{p1}，{q}，一服即知。",
   },
   // 灵兽看品相与禀赋
@@ -51,7 +51,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["雪狐", "苍鹰", "青猿", "铁背熊", "赤练蛇", "夜枭", "白鹿", "玄龟", "花豹", "灵猫"],
     ],
     qualifiers: ["通人语", "善寻物", "夜能视物", "不畏寒暑", "识得草药", "能驮重物", "极恋主"],
-    price: [30, 200],
+    price: [40, 500],
     desc: "一头{p0}的{p1}，{q}。",
   },
   // 法器讲材质与器形，附带着什么另说
@@ -61,7 +61,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["长剑", "短刀", "长枪", "软鞭", "护腕", "重甲", "圆盾", "短匕"],
     ],
     qualifiers: ["刻着雷纹", "淬过毒", "镶一枚残玉", "缠着鲛皮", "铸有云纹", "开了血槽"],
-    price: [40, 300],
+    price: [60, 900],
     desc: "{p0}锻的{p1}，{q}。",
   },
   // 宝物讲来历与名目
@@ -71,7 +71,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["残玉", "古镜", "铜铃", "玉印", "石珠", "木匣", "金锁", "旧鼎"],
     ],
     qualifiers: ["夜里自己会响", "见血则亮", "贴身则暖", "遇险先觉", "能照见人心", "入水不沉"],
-    price: [60, 500],
+    price: [100, 1800],
     desc: "一件{p0}的{p1}，{q}。",
   },
   // 书讲内容与卷帙
@@ -81,7 +81,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["残卷", "全本", "手抄", "拓本", "孤本"],
     ],
     qualifiers: ["墨迹如新", "边角虫蛀", "有前人批注", "纸已发黄"],
-    price: [10, 80],
+    price: [10, 100],
     desc: "一册{p0}{p1}，{q}。",
   },
   // 乐器讲材质与形制
@@ -91,7 +91,7 @@ const STOCK_SPECS: Partial<Record<ShopKind, StockSpec>> = {
       ["古琴", "长笛", "琵琶", "胡琴", "编钟", "洞箫", "羯鼓"],
     ],
     qualifiers: ["声清越", "声沉厚", "音色苍凉", "余音悠长", "能引百鸟"],
-    price: [15, 120],
+    price: [15, 160],
     desc: "{p0}制的{p1}，{q}。",
   },
 };
@@ -111,11 +111,11 @@ const ITEM_TYPE: Partial<Record<ShopKind, InventoryItem["type"]>> = {
   灵兽栏: "灵兽",
 };
 
-/** 按价钱定品阶：贵的自然品阶高 */
+/** 按价钱定品阶：贵的自然品阶高，几档之间留出大台阶 */
 export function gradeForPrice(price: number): InventoryItem["grade"] {
-  if (price >= 600) return "仙品";
-  if (price >= 200) return "天品";
-  if (price >= 80) return "玄品";
+  if (price >= 1800) return "仙品";
+  if (price >= 500) return "天品";
+  if (price >= 120) return "玄品";
   if (price >= 20) return "灵品";
   return "凡品";
 }

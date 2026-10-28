@@ -167,28 +167,81 @@ export function rollGoods(culture: string | undefined, count: number): Good[] {
   return items;
 }
 
-/** 各品阶物件的作价，卖出时按这个折算 */
+/**
+ * 各品阶的身价，东西没记买价时照它折算。
+ * 阶与阶之间故意留出大台阶：凡品不过十文上下，仙品已是万余，免得诸品同价。
+ */
 const GRADE_VALUE: Record<ItemGrade, number> = {
-  凡品: 8,
-  灵品: 40,
-  玄品: 150,
-  天品: 600,
-  仙品: 2500,
+  凡品: 10,
+  灵品: 90,
+  玄品: 500,
+  天品: 2400,
+  仙品: 12000,
 };
 
+/** 铺子收东西只肯给六成，余下的是它赚的那一手 */
+export const SELL_RATE = 0.6;
+
 /**
- * 掌柜对某一样东西、某一数量肯出的价钱，按品阶与件数折算。
- * 铺子总要赚一手，故只给七成，再由讲价往上抬。
+ * 一家铺子收某一类货的行情：五成到两倍。
+ * 同一家铺子、同一类货在一日之内定死，隔日再议；故玩家可先探哪家肯出高价。
+ * 六成再乘这两倍，好货遇上识货的铺子仍能赚一口气，低买高卖便有了余地。
  */
-export function itemSalePriceFor(item: Pick<InventoryItem, "grade">, count: number): number {
-  const unit = GRADE_VALUE[item.grade] ?? 8;
+export const SHOP_BUY_SPREAD: [number, number] = [0.5, 2];
+
+/** 卖东西时用到的一点上下文：哪家铺子、哪一日 */
+export interface SaleCtx {
+  /** 铺子的标识；同一家铺子同一类货的行情固定 */
+  shopKey?: string;
+  /** 日序 */
+  day?: number;
+}
+
+/**
+ * 这家铺子收这一类货的行情。
+ * 按「铺子标识 + 品类 + 日序」定出来，故当日内不跳，换个日子才变。
+ */
+export function shopBuyFactor(shopKey: string, type: string, day: number): number {
+  if (!shopKey) return 1;
+  let h = 2166136261 ^ Math.trunc(day);
+  for (const ch of `${shopKey}|${type}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  const span = SHOP_BUY_SPREAD[1] - SHOP_BUY_SPREAD[0];
+  const r = ((h >>> 0) % 10001) / 10000;
+  return SHOP_BUY_SPREAD[0] + r * span;
+}
+
+/** 一件货的作价基准：有买价照买价，没有便按品阶 */
+export function itemBaseValue(item: Pick<InventoryItem, "grade" | "value">): number {
+  const v = Number(item.value);
+  if (Number.isFinite(v) && v > 0) return v;
+  return GRADE_VALUE[item.grade] ?? 10;
+}
+
+/**
+ * 掌柜对某一样东西肯出的单件价钱。
+ * 照买入价六成折算，再乘这家铺子对这一类货的行情，取整、最低一文。
+ */
+export function itemUnitSalePrice(
+  item: Pick<InventoryItem, "grade" | "type" | "value">,
+  ctx?: SaleCtx,
+): number {
+  const factor = ctx?.shopKey ? shopBuyFactor(ctx.shopKey, item.type, ctx.day ?? 0) : 1;
+  return Math.max(1, Math.round(itemBaseValue(item) * SELL_RATE * factor));
+}
+
+/** 某一样东西、某一数量能卖多少 */
+export function itemSalePriceFor(
+  item: Pick<InventoryItem, "grade" | "type" | "value">,
+  count: number,
+  ctx?: SaleCtx,
+): number {
   const n = Math.max(1, Math.trunc(Number(count)) || 1);
-  return Math.max(1, Math.round(unit * n * 0.7));
+  return Math.max(1, itemUnitSalePrice(item, ctx) * n);
 }
 
 /** 一样东西整组肯出的价钱 */
-export function itemSalePrice(item: InventoryItem): number {
-  return itemSalePriceFor(item, item.count);
+export function itemSalePrice(item: InventoryItem, ctx?: SaleCtx): number {
+  return itemSalePriceFor(item, item.count, ctx);
 }
 
 /** 随机一样货的名，供自检与测试用 */

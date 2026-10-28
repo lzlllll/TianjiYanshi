@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { SealButton } from "@/components/ui/SealButton";
-import { itemSalePriceFor } from "@/data/goods";
+import { itemSalePriceFor, type SaleCtx } from "@/data/goods";
 import { migrateRelation } from "@/data/npcGen";
 import type { Relation } from "@/data/types";
 import type { HaggleSubject } from "@/components/map/GeneralStoreModal";
@@ -39,6 +39,7 @@ export function HaggleModal({
   keeper,
   mode,
   subject,
+  saleCtx,
   onSettle,
   onClose,
 }: {
@@ -48,6 +49,8 @@ export function HaggleModal({
   mode: "buy" | "sell";
   /** 议的标的；卖东西时可以先空着，谈起来再挑 */
   subject: HaggleSubject | null;
+  /** 卖东西时按这家铺子的行情折价 */
+  saleCtx?: SaleCtx;
   /** 落账：返回空串表示成了，返回文字表示没成 */
   onSettle: (subject: HaggleSubject, price: number) => string;
   onClose: () => void;
@@ -87,7 +90,7 @@ export function HaggleModal({
       mode: "sell",
       name: item.name,
       count: 1,
-      basePrice: itemSalePriceFor(item, 1),
+      basePrice: itemSalePriceFor(item, 1, saleCtx),
       itemId: item.id,
     });
     setFactor(0);
@@ -101,7 +104,7 @@ export function HaggleModal({
     const item = inventory.find((i) => i.id === picked.itemId);
     if (!item) return;
     const n = Math.max(1, Math.min(Math.trunc(Number(count)) || 1, item.count));
-    setPicked({ ...picked, count: n, basePrice: itemSalePriceFor(item, n) });
+    setPicked({ ...picked, count: n, basePrice: itemSalePriceFor(item, n, saleCtx) });
   };
 
   const send = async () => {
@@ -162,7 +165,7 @@ export function HaggleModal({
     const item = useGameStore.getState().inventory.find((i) => i.id === subject.itemId);
     if (item) {
       const rest = Math.max(1, Math.min(subject.count, item.count));
-      setPicked({ ...subject, count: rest, basePrice: itemSalePriceFor(item, rest) });
+      setPicked({ ...subject, count: rest, basePrice: itemSalePriceFor(item, rest, saleCtx) });
     } else {
       setPicked(null);
     }

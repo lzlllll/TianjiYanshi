@@ -14,6 +14,7 @@ import { MartialHallModal } from "@/components/map/MartialHallModal";
 import { PlayerShopModal } from "@/components/map/PlayerShopModal";
 import { ShopSetupModal } from "@/components/map/ShopSetupModal";
 import { isAroundHere, isPinnedAt, manorKey, relationWhereabout, rollDistrictNpcs } from "@/data/npcGen";
+import { auctionAtShop, auctionWhen } from "@/data/auction";
 import { daySerial } from "@/lib/gameTime";
 import { shopLeaseCost } from "@/data/playerShops";
 import type { BuskResult, Market, Quest, Shop } from "@/data/types";
@@ -52,6 +53,9 @@ export function MarketPanel({
   const relations = useGameStore((s) => s.relations);
   const quests = useGameStore((s) => s.quests);
   const currentTime = useGameStore((s) => s.currentTime);
+  const auctions = useGameStore((s) => s.auctions);
+  /** 这一家铺子眼下挂着的拍卖：只有宝物阁会有 */
+  const auctionOf = (shopId: string) => auctionAtShop(auctions, shopId, today);
 
   const [busyId, setBusyId] = useState("");
   const [note, setNote] = useState("");
@@ -288,6 +292,12 @@ export function MarketPanel({
                   {shop.info && (
                     <p className="mt-2 font-serif text-sm leading-relaxed text-paper-100 whitespace-pre-wrap">
                       {shop.info}
+                    </p>
+                  )}
+
+                  {auctionOf(shop.id) && (
+                    <p className="mt-1.5 font-serif text-[11px] text-gold-400">
+                      {auctionWhen(auctionOf(shop.id)!, today)} · 阁里要开一场拍卖
                     </p>
                   )}
 

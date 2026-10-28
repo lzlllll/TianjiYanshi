@@ -1,5 +1,6 @@
 import type {
   Adventure,
+  Auction,
   DataOp,
   GameState,
   GameTime,
@@ -33,6 +34,7 @@ import { applyQuestLedger, attachQuestCarryItem, holdRewardOutcome, normalizeQue
 import { pinNarrativeQuest } from "@/data/broker";
 import { normalizePact } from "@/data/pacts";
 import { normalizeAdventure } from "@/data/adventures";
+import { findTreasureShop, rollAuctionReason } from "@/data/auction";
 import { CULTIVATION_PER_HOUR, localCultivationFrom } from "@/data/cultivation";
 import { spendLowStones } from "@/data/spiritStones";
 import { emptyPlot, readyBuiltPlot } from "@/data/manors";
@@ -967,6 +969,8 @@ const WRITABLE_COLLECTIONS = new Set([
   "relations",
   "quests",
   "adventures",
+  "auctions",
+  "rumors",
   "pacts",
   "manorPlots",
   "skills",
@@ -1046,6 +1050,7 @@ function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | n
   const stacked = inv.find((i) => i?.name === name && i?.type === type);
   if (stacked) {
     stacked.count = Math.max(0, Math.trunc(Number(stacked.count) || 0)) + count;
+    stacked.value = Math.max(1, Math.round(((Number(stacked.value) || unit) * (stacked.count - count) + unit * count) / stacked.count));
   } else {
     inv.push({
       id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
@@ -1053,6 +1058,7 @@ function applyBuyOp(root: any, op: Extract<DataOp, { kind: "buy" }>): string | n
       type,
       grade,
       count,
+      value: unit,
       icon: name.slice(0, 1),
       desc: String(op.desc ?? "").trim().slice(0, 120) || `在${String(op.place ?? "").trim() || "市上"}买下的。`,
     });
@@ -1693,6 +1699,11 @@ export function normalizeItemElements(item: any): any {
   if (typeof item.name !== "string" || !item.name.trim()) item.name = "无名之物";
   if (typeof item.desc !== "string") item.desc = "";
   if (typeof item.icon !== "string" || !item.icon) item.icon = item.name.charAt(0);
+
+  // 买价只留个正数：卖出时照它折价，写到离谱便不如不记
+  const paid = Math.trunc(Number(item.value));
+  if (Number.isFinite(paid) && paid > 0) item.value = Math.min(9_999_999, paid);
+  else delete item.value;
 
   const cleaned: Record<string, number> = {};
   if (item.elements && typeof item.elements === "object") {
@@ -2505,6 +2516,137 @@ function applyShopGoods(root: any, rawPayload: unknown): void {
   };
 }
 
+/** 叙事里立一桩机缘：去处与接头人一并钉下，点名的去处没有便现开一处 */
+function addQuestFromOp(root: any, payload: any): string | null {
+  const arr = resolveCollection(root, "quests");
+  const quest = normalizeQuest(payload, arr.length);
+  if (!quest) return null;
+  quest.day = quest.day || daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
+
+  // 去处与要见的人一并由它定下：去处对得上本城或别城的街区便钉在那儿，
+  // 人现掷一个钉在目标地块上；认不出去处的，才落在那一座城一处住人的地方。
+  // 模型偶尔会在机缘里自写一个 target，同样不认，去处只从 place 现认
+  const placeId = String(root?.currentPlaceId ?? "");
+  const pinned = pinNarrativeQuest({
+    quest: { ...quest, target: undefined },
+    currentPlaceId: placeId,
+    districtNames: root?.districtNames,
+    culture: getMarker(placeId)?.culture,
+    today: quest.day,
+    adventures: Array.isArray(root?.adventures) ? (root.adventures as Adventure[]) : [],
+    villages: Object.values((root?.villages ?? {}) as Record<string, Village>),
+    sectSites: Array.isArray(root?.sectSites) ? (root.sectSites as SectSite[]) : [],
+    // 叙事点名要找的人若已在尘缘里，便照那一位，不再另立一个同名的人
+    known: Array.isArray(root?.relations) ? root.relations : [],
+  });
+  if (pinned.people.length > 0) {
+    const relArr = resolveCollection(root, "relations");
+    pinned.people.forEach((person) => {
+      if (!relArr.some((r) => r?.id === person.id)) relArr.push(person);
+    });
+  }
+  // 点名的地方舆图上没有、现开了一处：这一处也要一并落进舆图
+  if (pinned.adventure) {
+    const advArr = resolveCollection(root, "adventures");
+    if (!advArr.some((a: any) => a?.id === pinned.adventure!.id)) advArr.push(pinned.adventure);
+  }
+  // 捎信捎物一类的事，托付时得把该带的东西真放进行囊
+  attachQuestCarryItem(pinned.quest, resolveCollection(root, "inventory"));
+  arr.push(pinned.quest);
+  if (arr.length > 40) arr.splice(0, arr.length - 40);
+  return pinned.quest.id;
+}
+
+/** 叙事里立一处奇遇：只落在预设点位上，就近归到一座城的一带 */
+function addAdventureFromOp(root: any, payload: any): string | null {
+  const arr = resolveCollection(root, "adventures");
+  const adv = normalizeAdventure(payload, {
+    state: root,
+    preferCityId: String(root?.currentPlaceId ?? ""),
+    day: daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME)),
+    origin: "story",
+  });
+  if (!adv) return null;
+  // 同一处点位或同一个名目的，不重复挂
+  if (
+    arr.some(
+      (a: any) =>
+        a?.id === adv.id ||
+        (a?.sceneId === adv.sceneId && a?.x === adv.x && a?.y === adv.y && a?.status === "open"),
+    )
+  ) {
+    return null;
+  }
+  arr.push(adv);
+  if (arr.length > 12) arr.splice(0, arr.length - 12);
+  return adv.id;
+}
+
+/** 叙事里定一场拍卖：只挂在已开市的宝物阁上，日子定在今日或往后 */
+function addAuctionFromOp(root: any, payload: any): string | null {
+  const found = findTreasureShop(root?.markets ?? {}, {
+    shopName: String(payload?.shop ?? payload?.shopName ?? "").trim(),
+  });
+  if (!found) return null;
+  const today = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
+  const wantedDay = Math.trunc(Number(payload?.day));
+  const day = Math.max(today, Number.isFinite(wantedDay) && wantedDay > 0 ? wantedDay : today + 2);
+  const wantedHour = Math.trunc(Number(payload?.hour));
+  const arr = resolveCollection(root, "auctions");
+  if (arr.some((a: any) => a?.shopId === found.shop.id && a?.day === day && a?.status === "open")) return null;
+  const auction: Auction = {
+    id: `auction-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+    shopId: found.shop.id,
+    shopName: found.shop.name,
+    cityId: found.cityId,
+    districtId: found.districtId,
+    day,
+    hour: Number.isFinite(wantedHour) ? Math.min(11, Math.max(0, wantedHour)) : 6,
+    reason: String(payload?.reason ?? "").trim().slice(0, 40) || rollAuctionReason(),
+    status: "open",
+  };
+  arr.push(auction);
+  if (arr.length > 8) arr.splice(0, arr.length - 8);
+  return auction.id;
+}
+
+/**
+ * 传闻：一句话，可牵出一桩事。
+ * 话里若带着机缘、去处或拍卖，先把那桩事立起来，再把它的 id 记在这句话上，
+ * 日后在传闻面板里循着这话便能找去。
+ */
+function addRumorFromOp(root: any, payload: any): void {
+  const text = String(payload?.text ?? "").trim();
+  if (!text) return;
+  const links: Record<string, string> = {};
+  if (payload?.quest && typeof payload.quest === "object") {
+    const id = addQuestFromOp(root, payload.quest);
+    if (id) links.questId = id;
+  }
+  if (payload?.adventure && typeof payload.adventure === "object") {
+    const id = addAdventureFromOp(root, payload.adventure);
+    if (id) links.adventureId = id;
+  }
+  if (payload?.auction && typeof payload.auction === "object") {
+    const id = addAuctionFromOp(root, payload.auction);
+    if (id) links.auctionId = id;
+  }
+  const arr = resolveCollection(root, "rumors");
+  const day = daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
+  // 同一天里同一句话不记第二遍
+  if (arr.some((r: any) => r?.text === text && Number(r?.day) === day)) return;
+  const city = String(payload?.city ?? "").trim();
+  arr.push({
+    id: `rumor-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+    text: text.slice(0, 120),
+    source: String(payload?.source ?? "").trim().slice(0, 40) || "道听途说",
+    ...(city ? { city: city.slice(0, 20) } : {}),
+    day,
+    ...links,
+  });
+  if (arr.length > 60) arr.splice(0, arr.length - 60);
+}
+
 function applyOne(root: any, op: DataOp): void {
   if (op.kind === "modify") {
     // 规范化路径和值
@@ -2721,56 +2863,13 @@ function applyOne(root: any, op: DataOp): void {
           root.checks,
         );
       } else if (op.collection === "quests") {
-        const quest = normalizeQuest(payload, arr.length);
-        if (!quest) return;
-        quest.day = quest.day || daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME));
-
-        // 去处与要见的人一并由它定下：去处对得上本城或别城的街区便钉在那儿，
-        // 人现掷一个钉在目标地块上，玩家走到那一处方能寻着、交得了差；认不出去处的，
-        // 才落在那一座城一处住人的地方。切不可先把 target 认好再交进去——
-        // 它会当成去处已定，只记地方不钉人，玩家到了那儿便寻不着接头的人；
-        // 模型偶尔会在机缘里自写一个 target，同样不认，去处只从 place 现认
-        const placeId = String(root?.currentPlaceId ?? "");
-        const pinned = pinNarrativeQuest({
-          quest: { ...quest, target: undefined },
-          currentPlaceId: placeId,
-          districtNames: root?.districtNames,
-          culture: getMarker(placeId)?.culture,
-          today: quest.day,
-          adventures: Array.isArray(root?.adventures) ? (root.adventures as Adventure[]) : [],
-          villages: Object.values((root?.villages ?? {}) as Record<string, Village>),
-          sectSites: Array.isArray(root?.sectSites) ? (root.sectSites as SectSite[]) : [],
-          // 叙事点名要找的人若已在尘缘里，便照那一位，不再另立一个同名的人
-          known: Array.isArray(root?.relations) ? root.relations : [],
-        });
-        if (pinned.people.length > 0) {
-          const relArr = resolveCollection(root, "relations");
-          pinned.people.forEach((person) => {
-            if (!relArr.some((r) => r?.id === person.id)) relArr.push(person);
-          });
-        }
-        // 点名的地方舆图上没有、现开了一处：这一处也要一并落进舆图
-        if (pinned.adventure) {
-          const advArr = resolveCollection(root, "adventures");
-          if (!advArr.some((a: any) => a?.id === pinned.adventure!.id)) advArr.push(pinned.adventure);
-        }
-        // 捎信捎物一类的事，托付时得把该带的东西真放进行囊
-        attachQuestCarryItem(pinned.quest, resolveCollection(root, "inventory"));
-        arr.push(pinned.quest);
-        if (arr.length > 40) arr.splice(0, arr.length - 40);
+        addQuestFromOp(root, payload);
       } else if (op.collection === "adventures") {
-        // 奇遇只落在预设点位上：挑一处空位钉上去，就近归到一座城的一带
-        const adv = normalizeAdventure(payload, {
-          state: root,
-          preferCityId: String(root?.currentPlaceId ?? ""),
-          day: daySerial(normalizeGameTime(root?.currentTime, OPENING_GAME_TIME)),
-          origin: "story",
-        });
-        if (!adv) return;
-        // 同一处点位或同一个名目的，不重复挂
-        if (arr.some((a: any) => a?.id === adv.id || (a?.sceneId === adv.sceneId && a?.x === adv.x && a?.y === adv.y && a?.status === "open"))) return;
-        arr.push(adv);
-        if (arr.length > 12) arr.splice(0, arr.length - 12);
+        addAdventureFromOp(root, payload);
+      } else if (op.collection === "auctions") {
+        addAuctionFromOp(root, payload);
+      } else if (op.collection === "rumors") {
+        addRumorFromOp(root, payload);
       } else if (op.collection === "sectSites") {
         // 本门不必另立：本门由舆图上就近的一处认领，另立一处便成了两处同名。
         // 名号只差末尾一个字（白鹿涧与白鹿院）也算同一处，不必另立

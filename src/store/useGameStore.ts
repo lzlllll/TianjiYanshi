@@ -21,6 +21,7 @@ import type {
   Quest,
   JobTarget,
   Adventure,
+  Auction,
   EscortOffer,
   CraftOffer,
   Pact,
@@ -380,8 +381,10 @@ interface GameStore extends GameState {
   getSnapshot: () => GameSnapshot;
   restoreSnapshot: (snap: GameSnapshot) => void;
   updateNews: (newItems: { category: string; title: string; content: string; source: string }[]) => void;
-  /** 记下刚从别处听来的零碎消息；过了月的自行清掉 */
-  addRumors: (items: { text: string; source: string }[]) => void;
+  /** 记下刚从别处听来的零碎消息；过了月的自行清掉。带上 id 的，循着这话便能找上门去 */
+  addRumors: (
+    items: { text: string; source: string; questId?: string; adventureId?: string; auctionId?: string }[],
+  ) => void;
   /** 承认某一次判定输了；此前悬着的余地就此了结 */
   settleCheck: (id: string, success: boolean) => void;
   /** 掷一次判定：点数加技能等级过难度；没这门本事就按零级算 */
@@ -404,6 +407,14 @@ interface GameStore extends GameState {
   patchAdventure: (id: string, patch: Partial<Adventure>) => void;
   /** 把一处奇遇从舆图上抹去；了结之后玩家自己动的手 */
   removeAdventure: (id: string) => void;
+  /** 定下一场拍卖；同一家铺子同日只留一场 */
+  addAuction: (auction: Auction) => void;
+  /** 给一场拍卖打补丁：开场写下的拍品、叫过的价、落槌的结果 */
+  patchAuction: (id: string, patch: Partial<Auction>) => void;
+  /** 把一场拍卖撤下：散了、错过了，或本就不该有 */
+  removeAuction: (id: string) => void;
+  /** 过了日子的拍卖就此散场，只留一句交代 */
+  expireAuctions: () => void;
   /** 替任务人物立传改名：照 id 打补丁（名、性别、年岁、出身、性情、形貌、修为），
    *  并把机缘里指向旧名的接头人一并改过来 */
   patchRelations: (
@@ -637,6 +648,10 @@ function validateAndFixState(state: any): GameState {
     // 宗门点位是开局现掷的，旧档里没有这一项便空着，进主界面时再补
     sectSites: Array.isArray(state?.sectSites) ? state.sectSites : [],
     adventures: Array.isArray(state?.adventures) ? state.adventures.filter((a: any) => a && a.id && a.name) : [],
+    // 拍卖是后加的；旧档里没有便空着，日后再掷
+    auctions: Array.isArray(state?.auctions)
+      ? state.auctions.filter((a: any) => a && a.id && a.shopId && Number.isFinite(Number(a.day)))
+      : [],
     currentPlaceId: getMarker(state?.currentPlaceId) ? state.currentPlaceId : getDefaultPlaceId(),
     currentSectId: typeof state?.currentSectId === "string" ? state.currentSectId : undefined,
     currentAdventureId: typeof state?.currentAdventureId === "string" ? state.currentAdventureId : undefined,
@@ -735,6 +750,7 @@ const initialState: GameState = {
   pacts: [],
   sectSites: [],
   adventures: [],
+  auctions: [],
 };
 
 /** 门中光景不好时落在弟子头上的那几条，由此标记，好转了便自行撤下 */
@@ -1063,6 +1079,10 @@ export const useGameStore = create<GameStore>()(
               source: String(r.source ?? "").trim().slice(0, 40) || "道听途说",
               city: city || undefined,
               day,
+              // 话里若牵出某事某人，把去处一并记下：日后循着这话便能找去
+              ...(r.questId ? { questId: r.questId } : {}),
+              ...(r.adventureId ? { adventureId: r.adventureId } : {}),
+              ...(r.auctionId ? { auctionId: r.auctionId } : {}),
             }))
             .filter((r) => r.text);
           if (trimmed.length === 0) return st;
@@ -3147,6 +3167,51 @@ EFFECT: [效果描述]`,
         });
       },
 
+      addAuction: (auction) => {
+        const st = get();
+        const list = Array.isArray(st.auctions) ? st.auctions : [];
+        // 同一家铺子同一天只挂一场，免得两个由头各说各的
+        if (list.some((a) => a.shopId === auction.shopId && a.day === auction.day && a.status === "open")) return;
+        set({
+          auctions: [...list, auction],
+          log: [
+            `「${auction.shopName}」放出话来：${auction.reason}，定在${auction.day - daySerial(st.currentTime) <= 0 ? "今日" : `${auction.day - daySerial(st.currentTime)} 日后`}开拍。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+      },
+
+      patchAuction: (id, patch) => {
+        const st = get();
+        const list = Array.isArray(st.auctions) ? st.auctions : [];
+        if (!list.some((a) => a.id === id)) return;
+        set({ auctions: list.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
+      },
+
+      removeAuction: (id) => {
+        const st = get();
+        const list = Array.isArray(st.auctions) ? st.auctions : [];
+        if (!list.some((a) => a.id === id)) return;
+        set({ auctions: list.filter((a) => a.id !== id) });
+      },
+
+      expireAuctions: () => {
+        const st = get();
+        const list = Array.isArray(st.auctions) ? st.auctions : [];
+        const today = daySerial(st.currentTime);
+        // 日子过了还没开场的，就此散了：留个交代，免得一直挂在铺面上
+        const lapsed = list.some((a) => a.status === "open" && a.day < today);
+        if (!lapsed) return;
+        const next = list.map((a) =>
+          a.status === "open" && a.day < today
+            ? { ...a, status: "done" as const, winnerName: a.winnerName ?? "无人", result: a.result ?? "日子过了，那一场已经散了。" }
+            : a,
+        );
+        // 散了的只留最近的十来场，免得越攒越多
+        const done = next.filter((a) => a.status === "done").slice(-12);
+        set({ auctions: [...next.filter((a) => a.status === "open"), ...done] });
+      },
+
       patchRelations: (updates) => {
         const st = get();
         const list = (Array.isArray(updates) ? updates : []).filter(
@@ -4105,6 +4170,7 @@ EFFECT: [效果描述]`,
             pacts: st.pacts,
             sectSites: st.sectSites,
             adventures: st.adventures,
+            auctions: st.auctions ?? [],
           };
           const next = applyOpsToState(dataView, ops, {
             onNote: (text) => settleNotes.push(text),
@@ -4168,6 +4234,8 @@ EFFECT: [效果描述]`,
             currentTime: next.currentTime,
             districtNames: next.districtNames,
             priceAdjusts: next.priceAdjusts,
+            // 叙事里听来的话也落到传闻上：带着去处的，往后能循着找去
+            rumors: next.rumors ?? st.rumors,
             // 判定的掷骰与改口都在结算里做完，这里把结果收回来
             skills: next.skills ?? st.skills,
             checks: next.checks ?? st.checks,
@@ -4191,6 +4259,8 @@ EFFECT: [效果描述]`,
             sectRelations: next.sectRelations ?? st.sectRelations,
             // 城村的归属也照这一笔落库
             occupations: next.occupations ?? st.occupations,
+            // 叙事、传闻与闲谈里定下的拍卖，也照这一笔挂上去
+            auctions: next.auctions ?? st.auctions,
           };
         });
         // 山门有变（拆了某座建筑）就重注册一遍宗门场景，地图上即刻见废墟；山门图不是每回合都动，故先比对再注册
@@ -5338,7 +5408,16 @@ EFFECT: [效果描述]`,
         set({
           spiritStones: paid,
           inventory: stacked
-            ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + 1 } : i))
+            ? st.inventory.map((i) =>
+                i.id === stacked.id
+                  ? {
+                      ...i,
+                      count: i.count + 1,
+                      // 买价随件数摊平，日后卖出照这个底子折
+                      value: Math.max(1, Math.round(((i.value ?? taken) * i.count + taken) / (i.count + 1))),
+                    }
+                  : i,
+              )
             : [
                 ...st.inventory,
                 {
@@ -5348,6 +5427,8 @@ EFFECT: [效果描述]`,
                   // 品阶看底价定，讲价讲下来的便宜不该把东西的品阶也压下去
                   grade: gradeForPrice(good.base),
                   count: 1,
+                  // 花了多少记下来：卖出时照买入价折
+                  value: taken,
                   icon: good.name.charAt(0),
                   desc: good.desc || goodDesc(good.name) || `在「${shop.name}」买的。`,
                   // 收来的旧物：留着这一笔，往后有了鉴宝的门道再细看
@@ -5379,7 +5460,15 @@ EFFECT: [效果描述]`,
         set({
           spiritStones: paid,
           inventory: stacked
-            ? st.inventory.map((i) => (i.id === stacked.id ? { ...i, count: i.count + take } : i))
+            ? st.inventory.map((i) =>
+                i.id === stacked.id
+                  ? {
+                      ...i,
+                      count: i.count + take,
+                      value: Math.max(1, Math.round(((i.value ?? unit) * i.count + unit * take) / (i.count + take))),
+                    }
+                  : i,
+              )
             : [
                 ...st.inventory,
                 {
@@ -5388,6 +5477,7 @@ EFFECT: [效果描述]`,
                   type: kind,
                   grade,
                   count: take,
+                  value: unit,
                   icon: itemName.charAt(0),
                   desc: desc || "经一番讲价买下的。",
                 },
@@ -5470,6 +5560,8 @@ EFFECT: [效果描述]`,
         // 手上若已攒够某样东西或某数灵石，物品、灵石两类机缘就地了结
         get().settleAssetQuests();
         get().expirePawns();
+        // 过了日子的拍卖也算散场，铺面上不再挂着
+        get().expireAuctions();
         get().expireEscorts();
         // 名下房产的完好度也随日子往下掉
         get().settleEstates();
@@ -5499,6 +5591,10 @@ EFFECT: [效果描述]`,
         // 每月至少开一处非任务奇遇：当月还空着，便在走过这一段时补上
         void import("@/store/useAIStore")
           .then(({ useAIStore }) => useAIStore.getState().ensureMonthlyAdventure())
+          .catch(() => {});
+        // 哪家宝物阁又放出拍卖的消息，也照这一趟掷一掷
+        void import("@/store/useAIStore")
+          .then(({ useAIStore }) => useAIStore.getState().maybeSpawnAuction(hours))
           .catch(() => {});
         // 重伤不愈：气血不满两成，每过一个时辰再掉一点；油尽灯枯、寿元耗尽都是终局
         get().tickMortality(Math.max(0, Math.trunc(hours)));

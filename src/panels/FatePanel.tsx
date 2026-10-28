@@ -8,6 +8,7 @@ import { aliveRumors, RUMOR_KEEP_DAYS } from "@/data/rumors";
 import { isRewardHeld, questHasPenalty, questItemGoalLabel, questRank, questRealmGoalLabel, questStoneGoalLabel } from "@/data/quests";
 import { pactDaysLeft, pactKindLabel, pactRank, pactReady } from "@/data/pacts";
 import { adventureWhere, dangerLabel } from "@/data/adventures";
+import { auctionWhen } from "@/data/auction";
 import { daySerial } from "@/lib/gameTime";
 import { findBuffTemplate } from "@/data/buffs";
 import { aiReady } from "@/data/backend";
@@ -67,7 +68,9 @@ export function FatePanel() {
   const openAdventure = useAIStore((s) => s.openAdventure);
   const readAdventure = useAIStore((s) => s.readAdventure);
   const travelToAdventure = useAIStore((s) => s.travelToAdventure);
+  const openAuction = useAIStore((s) => s.openAuction);
   const removeAdventure = useGameStore((s) => s.removeAdventure);
+  const auctions = useGameStore((s) => s.auctions);
 
   const [tab, setTab] = useState<FateTab>("chances");
   const [note, setNote] = useState("");
@@ -507,6 +510,34 @@ export function FatePanel() {
                         {today - r.day === 0 ? "今日" : `${today - r.day} 日前`}
                       </span>
                     </div>
+                    {(r.questId || r.adventureId || r.auctionId) && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (r.questId) {
+                              setTab("tasks");
+                              return;
+                            }
+                            if (r.adventureId) {
+                              setTab("adventures");
+                              return;
+                            }
+                            if (r.auctionId) void openAuction(r.auctionId);
+                          }}
+                          className="rounded border-2 border-gold-500/45 px-2 py-0.5 font-serif text-[11px] text-gold-400 transition hover:border-gold-400 hover:text-gold-300"
+                        >
+                          {r.auctionId
+                            ? `循这话去拍卖${(() => {
+                                const a = (auctions ?? []).find((x) => x.id === r.auctionId);
+                                return a ? `（${auctionWhen(a, today)}）` : "";
+                              })()}`
+                            : r.questId
+                              ? "循这话看这桩事"
+                              : "循这话寻这去处"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </li>
               ))}
