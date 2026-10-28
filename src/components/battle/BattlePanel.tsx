@@ -9,8 +9,9 @@ import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import { effectiveAttributes, movementLimit } from "@/lib/attributes";
-import { computableSkills, isHeartConversion, techniqueLevelOf } from "@/lib/skillCalc";
+import { computableSkills, computeSkillCast, isHeartConversion, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
 import { styleMatchup, techniqueStyleOf } from "@/data/combatStyles";
+import { facingOf } from "@/lib/battleFacing";
 import {
   aliveEnemies,
   enemiesInRange,
@@ -26,8 +27,12 @@ export function BattlePanel() {
   const battle = useAIStore((s) => s.battle);
   const endBattle = useAIStore((s) => s.endBattle);
   const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
+  const runBattleTurn = useAIStore((s) => s.runBattleTurn);
   // 胜负未分，还在交手
   const ongoing = battle.isActive && !battle.aftermath;
+  // 交手期间，招式与敌人另立一栏；分出胜负后那一栏便收起
+  const showSidePanels = ongoing;
+  const sideDisabled = battle.isResolving || battle.turn !== "player";
 
   return (
     // 左侧战事、右侧前情：窗口宽时并排，窄时上下摞着，整页仍可滚动
@@ -72,8 +77,34 @@ export function BattlePanel() {
         )}
       </div>
 
-      {/* 右侧：主游戏叙事，免得不记得这一战是为着什么打起来的 */}
-      <aside className="flex max-h-[38vh] w-full shrink-0 flex-col border-t-2 border-gold-500/20 pt-3 lg:h-full lg:max-h-none lg:w-80 xl:w-96 lg:border-l-2 lg:border-t-0 lg:border-gold-500/20 lg:pl-4 lg:pt-0">
+      {/* 右栏：招式、敌人与前情各自成一块，窄时摞在下方 */}
+      <aside className="flex max-h-[52vh] w-full shrink-0 flex-col gap-2 overflow-y-auto border-t-2 border-gold-500/20 pt-3 lg:h-full lg:max-h-none lg:w-96 xl:w-[26rem] lg:overflow-visible lg:border-l-2 lg:border-t-0 lg:border-gold-500/20 lg:pl-4 lg:pt-0">
+        {showSidePanels && (
+          <>
+            <ScrollCard
+              title="招式"
+              subtitle="点一招，再点一位够得着的对手"
+              className="shrink-0"
+              contentClassName="max-h-[26vh] overflow-y-auto pr-1 book-scrollbar"
+            >
+              <BattleQuickActions
+                onAct={(text) => {
+                  if (sideDisabled) return;
+                  runBattleTurn(text);
+                }}
+                disabled={sideDisabled}
+              />
+            </ScrollCard>
+            <ScrollCard
+              title="敌人"
+              subtitle={`台上 ${battle.map.entities.filter((e) => e.type === "enemy" && !e.isDead).length} 位`}
+              className="shrink-0"
+              contentClassName="max-h-[22vh] overflow-y-auto pr-1 book-scrollbar"
+            >
+              <EnemyPanel />
+            </ScrollCard>
+          </>
+        )}
         <StoryPeek />
       </aside>
     </div>
@@ -129,6 +160,7 @@ function StoryPeek() {
 function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void; disabled: boolean }) {
   const techniques = useGameStore((s) => s.techniques);
   const inventory = useGameStore((s) => s.inventory);
+  const player = useGameStore((s) => s.player);
   const battle = useAIStore((s) => s.battle);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; name: string; range: SkillRange } | null>(null);
@@ -140,6 +172,27 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
   );
 
   const playerEntity = battle.map.entities.find((e) => e.type === "player");
+  // 招式上的伤害照战斗中同一把尺算：境界、根基、熟练、品阶、心性与经脉，取整不随机
+  const actor = useMemo<CombatActor>(() => {
+    const attrs = effectiveAttributes(player);
+    const maxHp = Math.max(1, Math.trunc(Number(playerEntity?.maxHp) || effectiveHpMax(player)));
+    return {
+      realmIndex: Number(player.realmIndex) || 0,
+      cultivation: Number(player.cultivation) || 0,
+      hp: Math.min(Number(player.hp) || 0, maxHp),
+      maxHp,
+      mp: Number(player.mp) || 0,
+      maxMp: Number(player.mpMax) || 0,
+      stats: {
+        vitality: attrs.vitality,
+        soul: attrs.soul,
+        wisdom: attrs.wisdom,
+        agility: attrs.agility,
+      },
+      heartScores: player.stats?.heartScores,
+      meridians: player.meridians,
+    };
+  }, [player, playerEntity?.maxHp]);
   const alive = aliveEnemies(battle.map.entities);
   // 可用的物件：法宝是兵器，不列在这里
   const usableItems = (Array.isArray(inventory) ? inventory : [])
@@ -148,6 +201,8 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
   const picked = available.find(({ technique, skill }) => `${technique.id}:${skill.id}` === pickedKey) ?? null;
   const pickedRange = picked ? skillRange(picked.skill, picked.technique.category) : null;
   const pickedStyle = picked ? techniqueStyleOf(picked.technique) : null;
+  // 这一手算出来的伤害：对上不同对手时再照样式相克折一道，标在对手那一栏
+  const pickedCast = picked ? computeSkillCast({ actor, technique: picked.technique, skill: picked.skill }) : null;
   const convert = picked ? isHeartConversion(picked.technique, picked.skill) : false;
   const guardValue = picked ? Math.max(0, Math.round(Number(picked.skill.guard) || 0)) : 0;
   // 只对自己使的功夫不挑对手，与战斗推进时的判法一致：伤害、负面效果与挂敌状态都算冲人去的
@@ -187,7 +242,6 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-serif text-xs text-paper-300/80">快捷出手</span>
         <span className="font-serif text-[10px] text-paper-400/50">悬停招式可看范围</span>
       </div>
 
@@ -199,11 +253,15 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
           const isPicked = key === pickedKey;
           const isConvert = isHeartConversion(technique, skill);
           const guard = Math.max(0, Math.round(Number(skill.guard) || 0));
+          // 实际伤害：与推演里那一手用的是同一套算法，灵力不够便算作施展不出
+          const cast = computeSkillCast({ actor, technique, skill });
+          const damage = cast.damage;
+          const short = !cast.usable && !isConvert && guard <= 0;
           const cost =
             guard > 0
               ? `守 ${guard} · 耗灵 ${skill.mpCost}`
               : isConvert
-                ? `耗气血 ${skill.hpCost ?? 0}`
+                ? `耗气血 ${skill.hpCost ?? 0} · 回灵 ${cast.mpRestore}`
                 : `耗灵 ${skill.mpCost}`;
           return (
             <button
@@ -233,7 +291,8 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
                 {technique.name}·{skill.name}
               </span>
               <span className="block text-[10px] text-paper-400/60">
-                {cost} · {rangeLabel(range)} · {styleLabel}
+                {cost}
+                {short ? " · 灵力不足" : damage > 0 ? ` · 伤 ${damage}` : ""} · {rangeLabel(range)} · {styleLabel}
               </span>
             </button>
           );
@@ -265,6 +324,10 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
               {alive.map((e) => {
                 const hit = reachable.some((x) => x.id === e.id);
                 const vs = styleMatchup(pickedStyle, e.style);
+                const hurt =
+                  pickedCast && pickedCast.damage > 0
+                    ? Math.max(1, Math.round(pickedCast.damage * vs.factor))
+                    : 0;
                 return (
                   <button
                     key={e.id}
@@ -280,6 +343,7 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
                   >
                     {e.name}
                     {vs.kind === "advantage" ? " · 克" : vs.kind === "disadvantage" ? " · 被克" : ""}
+                    {hurt > 0 ? ` · 伤 ${hurt}` : ""}
                     {typeof e.hp === "number" ? ` ${e.hp}/${e.maxHp ?? "?"}` : ""}
                     {hit ? "" : " · 范围外"}
                   </button>
@@ -316,6 +380,56 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
       )}
 
       {tip && <RangeTip {...tip} />}
+    </div>
+  );
+}
+
+/**
+ * 敌人一栏：台上还站着的诸位，气血、样式、朝向与身上的余效一并摆出来。
+ * 出手仍在上面的招式栏点，这里只管看清对面还剩几分气力。
+ */
+function EnemyPanel() {
+  const battle = useAIStore((s) => s.battle);
+  const alive = aliveEnemies(battle.map.entities);
+
+  if (alive.length === 0) {
+    return <p className="font-serif text-[11px] text-paper-400/50">台上已无敌手。</p>;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {alive.map((e) => {
+        const buffs = Array.isArray(e.buffs) ? e.buffs : [];
+        const hp = typeof e.hp === "number" ? e.hp : 0;
+        const maxHp = typeof e.maxHp === "number" ? e.maxHp : 0;
+        return (
+          <div key={e.id} className="rounded border border-paper-400/15 bg-ink-900/20 px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-serif text-[12px] text-paper-200">{e.name}</span>
+              <span className="shrink-0 font-number text-[11px] text-paper-300/80">
+                {typeof e.hp === "number" ? `${hp}/${e.maxHp ?? "?"}` : "伤情不明"}
+              </span>
+            </div>
+            {maxHp > 0 && (
+              <div className="mt-1 h-1 overflow-hidden rounded bg-ink-900">
+                <div
+                  className="h-full bg-gradient-to-r from-cinnabar-600 to-cinnabar-400 transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }}
+                />
+              </div>
+            )}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-serif text-[10px] text-paper-400/60">
+              <span>{e.style ?? "样式未明"}</span>
+              <span>朝向 {facingOf(e)}</span>
+              {buffs.length > 0 && (
+                <span className="text-gold-400/70">
+                  {buffs.map((b) => `${b.name}·余 ${Math.max(0, Math.round(Number(b.duration) || 0))} 柱`).join("、")}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -506,7 +620,7 @@ function SectWarAftermathView() {
   );
 }
 
-/** 交手阶段：原有的战斗界面，原样保留 */
+/** 交手阶段：战阵、叙事与行动指令留在左侧，招式与敌人另在右栏 */
 function BattleOngoingView() {
   const battle = useAIStore((s) => s.battle);
   const runBattleTurn = useAIStore((s) => s.runBattleTurn);
@@ -514,14 +628,8 @@ function BattleOngoingView() {
 
   const [action, setAction] = useState("");
   const isResolving = battle.isResolving;
-  // 内伤一类状态压低了气血上限，界面上照实时的上限报
-  const hpMax = effectiveHpMax(player);
-  // 四条根基过一道临时状态；身法定这一回合能挪几步
-  const attrs = effectiveAttributes(player);
-  const moveLimit = movementLimit(attrs.agility);
-  const incenseBuffs = (Array.isArray(player.buffs) ? player.buffs : []).filter(
-    (b) => b.durationType === "incense",
-  );
+  // 气血、灵力、神识看屏幕底栏；体力只管战斗，这里单起一行报一句
+  const moveLimit = movementLimit(effectiveAttributes(player).agility);
 
   const handleSubmit = () => {
     const text = action.trim();
@@ -583,84 +691,13 @@ function BattleOngoingView() {
       </ScrollCard>
 
       <ScrollCard
-        title="我方状态"
-        className="shrink-0"
-      >
-        <div className="grid grid-cols-5 gap-2 sm:gap-3">
-          <div className="text-center">
-            <div className="font-brush text-lg text-cinnabar-400 text-glow-formation">{Math.min(player.hp, hpMax)}</div>
-            <div className="font-serif text-xs text-paper-400/50">气血 / {hpMax}</div>
-            <div className="h-1 bg-ink-900 rounded mt-1 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-cinnabar-600 to-cinnabar-400 transition-all shadow-inner-glow"
-                style={{ width: `${(Math.min(player.hp, hpMax) / hpMax) * 100}%` }}
-              />
-            </div>
-          </div>
-          <div className="text-center">
-            <div className="font-brush text-lg text-aura-cyan text-glow-spiritual">{player.mp}</div>
-            <div className="font-serif text-xs text-paper-400/50">灵力 / {player.mpMax}</div>
-            <div className="h-1 bg-ink-900 rounded mt-1 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-aura-cyan to-aura-purple transition-all shadow-spiritual-glow"
-                style={{ width: `${(player.mp / player.mpMax) * 100}%` }}
-              />
-            </div>
-          </div>
-          <div className="text-center">
-            <div className="font-brush text-lg text-gold-300">{Math.round(battle.stamina)}</div>
-            <div className="font-serif text-xs text-paper-400/50">体力 / {battle.staminaMax}</div>
-            <div className="h-1 bg-ink-900 rounded mt-1 overflow-hidden">
-              <div
-                className={cn(
-                  "h-full transition-all",
-                  battle.stamina > 0
-                    ? "bg-gradient-to-r from-gold-600 to-gold-400 shadow-glow"
-                    : "bg-cinnabar-500",
-                )}
-                style={{
-                  width: `${Math.max(0, Math.min(100, (battle.stamina / Math.max(1, battle.staminaMax)) * 100))}%`,
-                }}
-              />
-            </div>
-            <div className="mt-0.5 font-serif text-[10px] text-paper-400/40">可挪 {moveLimit} 格</div>
-          </div>
-          <div className="text-center">
-            <div className="font-brush text-lg text-gold-400">{attrs.vitality}</div>
-            <div className="font-serif text-xs text-paper-400/50">体魄</div>
-          </div>
-          <div className="text-center">
-            <div className="font-brush text-lg text-jade-400">{attrs.soul}</div>
-            <div className="font-serif text-xs text-paper-400/50">神魂</div>
-          </div>
-        </div>
-
-        {/* 战斗里落下的持续状态按柱香计，这里报一报各还剩几柱 */}
-        {incenseBuffs.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-paper-400/10 flex items-center gap-2 flex-wrap">
-            <span className="font-serif text-[11px] text-paper-400/50">香上余效</span>
-            {incenseBuffs.map((b) => (
-              <span
-                key={b.id}
-                className={cn(
-                  "font-serif text-[11px] px-1.5 py-0.5 rounded border",
-                  b.isDebuff
-                    ? "border-cinnabar-500 bg-cinnabar-500 text-cinnabar-300"
-                    : "border-jade-500 bg-jade-500 text-jade-400",
-                )}
-              >
-                {b.icon} {b.name} · 余 {b.duration ?? 0} 柱
-              </span>
-            ))}
-          </div>
-        )}
-      </ScrollCard>
-
-      <ScrollCard
         title="行动指令"
-        subtitle="可点招式快捷出手，也可自由输入（Ctrl/Cmd + Enter 发送）"
+        subtitle="可自由输入（Ctrl/Cmd + Enter 发送）；招式与敌人都在右侧"
         className="shrink-0"
       >
+        <p className="mb-2 font-serif text-[11px] text-paper-400/60">
+          体力 {Math.round(battle.stamina)}/{battle.staminaMax} · 这一回合可挪 {moveLimit} 格
+        </p>
         {/* 模型照这一合的战况备下的几条出手：与问道里的快捷决断同一用法，点一条填进输入栏 */}
         {(Array.isArray(battle.options) ? battle.options : []).length > 0 && (
           <div className="mb-3 flex flex-wrap gap-1.5">
@@ -678,13 +715,6 @@ function BattleOngoingView() {
             ))}
           </div>
         )}
-        <BattleQuickActions
-          onAct={(text) => {
-            if (isResolving || battle.turn !== "player") return;
-            runBattleTurn(text);
-          }}
-          disabled={isResolving || battle.turn !== "player"}
-        />
         <div className="my-3 border-t border-paper-400/10" />
         <textarea
           value={action}
