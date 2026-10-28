@@ -2207,7 +2207,7 @@ export interface EventPlayerBrief {
   realm: string;
   position?: string;
   sect?: string;
-  /** 身上的要紧物事、伤病、状态 */
+  /** 身上的要紧物事、钱物、状态 */
   condition: string;
   /** 同行的人 */
   companions: string;
@@ -2215,6 +2215,14 @@ export interface EventPlayerBrief {
   place: string;
   /** 眼下的时辰 */
   time: string;
+  /** 伤势与身上的不妥：内伤、中毒、气血亏空 */
+  injury?: string;
+  /** 随身带着的几件要紧物件：法宝、符箓、丹药 */
+  belongings?: string;
+  /** 所修功法里最得力的几门 */
+  arts?: string;
+  /** 江湖上的名声，只报有分量的那几条 */
+  renown?: string;
 }
 
 function briefLines(brief: EventPlayerBrief): string {
@@ -2225,8 +2233,14 @@ function briefLines(brief: EventPlayerBrief): string {
       brief.position ? `，门中${brief.position}` : ""
     }${brief.sect ? `，属${brief.sect}` : ""}`,
     `【身上】${brief.condition}`,
+    brief.injury ? `【伤势】${brief.injury}` : "",
+    brief.belongings ? `【物件】${brief.belongings}` : "",
+    brief.arts ? `【所修】${brief.arts}` : "",
+    brief.renown ? `【名声】${brief.renown}` : "",
     `【同行】${brief.companions}`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** 一桩变故的开头 */

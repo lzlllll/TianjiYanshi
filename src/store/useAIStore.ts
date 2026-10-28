@@ -340,23 +340,85 @@ function restoreAdventureState(adv: Adventure, reading: boolean): AdventureState
   };
 }
 
+/** 物件按要紧程度排：法宝、符箓、丹药在前，材料与杂物殿后 */
+const ITEM_TYPE_RANK: Record<string, number> = { 法宝: 0, 符箓: 1, 丹药: 2, 灵兽: 3, 材料: 4, 杂物: 5 };
+/** 同样的物件里，品阶高的先说 */
+const ITEM_GRADE_RANK: Record<string, number> = { 仙品: 0, 天品: 1, 玄品: 2, 灵品: 3, 凡品: 4 };
+
 /**
  * 变故提示词里的「玩家简要状况」。
- * 只报与拿捏分寸有关的几样：境界、身份、气血、身上的钱与物、同行的人。
+ * 只报与拿捏分寸有关的几样：境界、身份、气血、伤势、身上的钱物与物件、
+ * 所修功法、江湖上的名声、同行的人——写得粗，但够模型掂量这一趟的分量。
  */
 function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
   const p = gs.player;
-  const buffs = (Array.isArray(p.buffs) ? p.buffs : []).map((b) => b?.name).filter(Boolean);
-  const stones =
-    (Number(gs.spiritStones?.low) || 0) +
-    (Number(gs.spiritStones?.mid) || 0) +
-    (Number(gs.spiritStones?.high) || 0);
+  const buffs = (Array.isArray(p.buffs) ? p.buffs : [])
+    .filter((b) => b?.name)
+    .map((b) => `${b.name}${Number(b.stacks) > 1 ? `·${b.stacks}重` : ""}`);
   const mates = (Array.isArray(gs.relations) ? gs.relations : [])
     .filter((r) => r?.traveling)
     .map((r) => r.name);
 
   // 内伤一类状态压低了此刻的气血上限，照实时报出去
   const hpMax = effectiveHpMax(p);
+
+  // 灵石按品阶分开报：中品与下品不是一回事，混成一堆，模型落笔的数目便会失准
+  const stones = gs.spiritStones ?? { low: 0, mid: 0, high: 0, supreme: 0 };
+  const stoneText =
+    [
+      Number(stones.low) > 0 ? `下品 ${stones.low} 枚` : "",
+      Number(stones.mid) > 0 ? `中品 ${stones.mid} 枚` : "",
+      Number(stones.high) > 0 ? `上品 ${stones.high} 枚` : "",
+      Number(stones.supreme) > 0 ? `极品 ${stones.supreme} 枚` : "",
+    ]
+      .filter(Boolean)
+      .join("、") || "囊中无灵石";
+
+  // 随身物件只取要紧的几件：材料与杂物往后排，能不列就不列
+  const belongings = (Array.isArray(gs.inventory) ? gs.inventory : [])
+    .filter((it) => it && it.name)
+    .sort(
+      (a, b) =>
+        (ITEM_TYPE_RANK[a.type] ?? 9) - (ITEM_TYPE_RANK[b.type] ?? 9) ||
+        (ITEM_GRADE_RANK[a.grade] ?? 9) - (ITEM_GRADE_RANK[b.grade] ?? 9),
+    )
+    .slice(0, 4)
+    .map((it) => `${it.name}${Number(it.count) > 1 ? `×${it.count}` : ""}（${it.grade}${it.type}）`)
+    .join("、");
+
+  // 所修功法取最得力的三门，另点出眼下正催运的那一部心法
+  const techniques = Array.isArray(gs.techniques) ? gs.techniques : [];
+  const heart = techniques.find((t) => t && t.id === p.activeHeartTechnique);
+  const arts = [
+    heart ? `${heart.name}（心法·正在催运）` : "",
+    ...techniques
+      .filter((t) => t && t.name && t.id !== p.activeHeartTechnique)
+      .sort((a, b) => (Number(b.proficiency) || 0) - (Number(a.proficiency) || 0))
+      .slice(0, 3)
+      .map((t) => `${t.name}（${t.category}）`),
+  ]
+    .filter(Boolean)
+    .join("、");
+
+  const rep = gs.reputation ?? { righteous: 0, demonic: 0, folk: 0, official: 0 };
+  const renown =
+    [
+      Number(rep.righteous) > 0 ? `正道 ${rep.righteous}` : "",
+      Number(rep.demonic) > 0 ? `魔道 ${rep.demonic}` : "",
+      Number(rep.folk) > 0 ? `民间 ${rep.folk}` : "",
+      Number(rep.official) > 0 ? `官府 ${rep.official}` : "",
+    ]
+      .filter(Boolean)
+      .join("、") || "无名之辈";
+
+  const hpRatio = hpMax > 0 ? Math.min(p.hp, hpMax) / hpMax : 1;
+  const injury =
+    [
+      buffs.length > 0 ? buffs.join("、") : "",
+      hpRatio < 0.9 ? `气血只余${Math.max(1, Math.round(hpRatio * 10))}成` : "",
+    ]
+      .filter(Boolean)
+      .join("；") || "身上无碍";
 
   return {
     name: p.name || "无名",
@@ -367,12 +429,15 @@ function buildEventBrief(gs: GameState, place: string): EventPlayerBrief {
     condition: [
       `气血 ${Math.min(p.hp, hpMax)}/${hpMax}`,
       `灵力 ${p.mp}/${p.mpMax}`,
-      `身上约 ${stones} 枚灵石`,
+      `灵石 ${stoneText}`,
       gs.beast ? `随身灵兽「${gs.beast.name}」` : "",
-      buffs.length > 0 ? `身有${buffs.join("、")}` : "",
     ]
       .filter(Boolean)
       .join("；"),
+    injury,
+    belongings: belongings || "身无长物",
+    arts: arts || undefined,
+    renown,
     companions: mates.length > 0 ? mates.join("、") : "无人同行",
     place: place || "途中",
     time: formatGameTime(gs.currentTime),
