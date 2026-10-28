@@ -17,8 +17,12 @@ import type {
   ShopBrief,
   Skill,
   SkillCheck,
+  TechniqueCategory,
   Village,
 } from "@/data/types";
+import { defaultRangeOf, RANGE_PATTERN_MAX, RANGE_SIZE_MAX, SKILL_RANGE_SHAPES } from "@/data/battleRange";
+import { defaultStatGainOf } from "@/lib/attributes";
+import { defaultStyleOf, normalizeCombatStyle } from "@/data/combatStyles";
 import { REALM_NAMES } from "@/data/mockData";
 import { assignManorCell, getCityMarkers, getDistricts, getMarker, getScene, registerSectScenes, resolveMarker, sectSceneId } from "@/data/map";
 import { sectBuildingRoster } from "@/data/map/sectBuildings";
@@ -91,6 +95,8 @@ export interface ParsedTurn {
   battleEntities: BattleEntity[] | null;
   /** 战斗里这一柱香烧到的进度；没报就是 null */
   battleIncense: number | null;
+  /** 这一合敌人正面来攻，守势可否被动触发 */
+  battleGuard: boolean;
   quickDecisions: string[];
   /** 这一轮由叙事挑起的宗门战；没挑起便是 null */
   sectWar: SectWarBrief | null;
@@ -132,11 +138,13 @@ function normalizeBattleFoes(raw: unknown): BattleFoeBrief[] {
     const count = Math.trunc(Number(src.count ?? src.amount));
     const realm = String(src.realm ?? src.grade ?? "").trim().slice(0, 20);
     const desc = String(src.desc ?? src.description ?? "").trim().slice(0, 60);
+    const style = normalizeCombatStyle(src.style ?? src.combatStyle);
     out.push({
       name,
       count: Number.isFinite(count) && count > 0 ? Math.min(4, count) : undefined,
       realm: realm || undefined,
       desc: desc || undefined,
+      style: style || undefined,
     });
     if (out.length >= 6) break;
   }
@@ -169,6 +177,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
 
   let battleEntities: BattleEntity[] | null = null;
   let battleIncense: number | null = null;
+  let battleGuard = false;
   let battleNarrative = "";
   const battleStartIdx = text.indexOf(BATTLE_START);
   if (battleStartIdx !== -1) {
@@ -178,6 +187,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
       const battleContent = afterBattleStart.slice(0, battleEndIdx);
       battleEntities = parseBattleEntities(battleContent);
       battleIncense = parseBattleIncense(battleContent);
+      battleGuard = parseBattleGuard(battleContent);
       battleNarrative = parseBattleNarrative(battleContent);
       text = text.slice(0, battleStartIdx) + afterBattleStart.slice(battleEndIdx + END_MARKER.length);
     }
@@ -268,7 +278,7 @@ export function parseModelOutput(raw: string): ParsedTurn {
   if (battleNarrative) narrative = battleNarrative;
   const ops = parseOpLines(opsRaw);
   _debugOps(ops);
-  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleFoes, battleEntities, battleIncense, quickDecisions, sectWar, haggle, shop, converse };
+  return { narrative, ops, opsRaw: opsRaw.trim(), mode, battleFoes, battleEntities, battleIncense, battleGuard, quickDecisions, sectWar, haggle, shop, converse };
 }
 
 /**
@@ -363,6 +373,14 @@ function parseBattleIncense(content: string): number | null {
   return Math.max(0, Math.round(n));
 }
 
+/** 从战斗块里认出这一合守势可否被动触发：-- guard: true */
+function parseBattleGuard(content: string): boolean {
+  const m = content.match(/--\s*guard:\s*(.*)/);
+  if (!m) return false;
+  const v = m[1].trim().toLowerCase();
+  return v === "true" || v === "1" || v === "是" || v === "可";
+}
+
 function parseBattleEntities(content: string): BattleEntity[] {
   const entities: BattleEntity[] = [];
   const lines = content.split("\n");
@@ -376,6 +394,12 @@ function parseBattleEntities(content: string): BattleEntity[] {
       try {
         const parsed = JSON.parse(jsonStr);
         if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (!item || typeof item !== "object") continue;
+            const style = normalizeCombatStyle((item as any).style);
+            if (style) (item as any).style = style;
+            else delete (item as any).style;
+          }
           entities.push(...parsed);
         }
       } catch {
@@ -1395,6 +1419,24 @@ function normalizeTechnique(item: any): any {
     item.daoPath = daoMap[item.category as string] || "内功心法";
   }
 
+  // 出手样式：认十式与常见别名，认不出便按功法门类补一个
+  item.style = normalizeCombatStyle(item.style) ?? defaultStyleOf(item.category as string);
+
+  // 每修成一重长哪一条根基：只认四条，每重 1 到 3；没写便照门类给一个常例
+  const rawGain = item.statGain && typeof item.statGain === "object" ? item.statGain : null;
+  const gainStat = ["vitality", "soul", "wisdom", "agility"].includes(rawGain?.stat)
+    ? (rawGain.stat as "vitality" | "soul" | "wisdom" | "agility")
+    : undefined;
+  if (gainStat) {
+    const rawPer = Number(rawGain?.perLevel);
+    item.statGain = {
+      stat: gainStat,
+      perLevel: Math.min(3, Math.max(1, Math.round(Number.isFinite(rawPer) && rawPer > 0 ? rawPer : 1))),
+    };
+  } else {
+    item.statGain = defaultStatGainOf(item.category as string);
+  }
+
   if (!item.insight) {
     item.insight = `${item.name || "无名功法"}，${item.grade || ""}${item.category || ""}，修至深处可通天地玄妙。`;
   }
@@ -1439,6 +1481,49 @@ function normalizeTechnique(item: any): any {
       const convert = item.category === "心法" && rawHp > 0 && rawRestore > 0;
       const hpCost = convert ? Math.min(999, Math.max(1, Math.round(rawHp))) : 0;
       const mpRestore = convert ? Math.min(999, Math.max(1, Math.round(rawRestore))) : 0;
+      // 守势：减免固定伤害，0 到 200 之间
+      const rawGuard = Number(s.guard);
+      const guard =
+        Number.isFinite(rawGuard) && rawGuard > 0 ? Math.min(200, Math.round(rawGuard)) : 0;
+      // 招式范围：只认这几种形制，认不出便照功法门类给一个常例
+      const fallbackRange = defaultRangeOf(item.category as TechniqueCategory);
+      const rangeShape = SKILL_RANGE_SHAPES.includes(s.rangeShape) ? s.rangeShape : fallbackRange.shape;
+      const rawRangeSize = Number(s.rangeSize);
+      const rangeSize =
+        rangeShape === "近身"
+          ? 1
+          : Math.min(
+              RANGE_SIZE_MAX,
+              Math.max(
+                1,
+                Number.isFinite(rawRangeSize) && rawRangeSize > 0
+                  ? Math.round(rawRangeSize)
+                  : fallbackRange.size,
+              ),
+            );
+      // 自拟阵图：最多 5×5，每行只留 0 与 1；一个 1 也没有便不算
+      const rawPattern = Array.isArray(s.rangePattern) ? s.rangePattern : [];
+      const rangePattern = rawPattern
+        .map((r: any) => String(r ?? "").replace(/[^01]/g, "").slice(0, RANGE_PATTERN_MAX))
+        .filter((r: string) => r.length > 0)
+        .slice(0, RANGE_PATTERN_MAX);
+      const hasPattern = rangePattern.some((r: string) => r.includes("1"));
+      // 施展后落在谁身上的状态：只认名录里的，且增益落在自己、减益落在对手
+      const seenBuffs = new Set<string>();
+      const skillBuffs = (Array.isArray(s.buffs) ? s.buffs : [])
+        .map((b: any) => {
+          const tpl = findBuffTemplate(b?.id ?? b?.name);
+          const target = b?.target === "self" ? "self" : b?.target === "enemy" ? "enemy" : null;
+          if (!tpl || !target) return null;
+          if (target === "enemy" && !tpl.isDebuff) return null;
+          if (target === "self" && tpl.isDebuff) return null;
+          const key = `${target}:${tpl.id}`;
+          if (seenBuffs.has(key)) return null;
+          seenBuffs.add(key);
+          return { id: tpl.id, target };
+        })
+        .filter((b: { id: string; target: "self" | "enemy" } | null): b is { id: string; target: "self" | "enemy" } => Boolean(b))
+        .slice(0, 2);
       return {
         id: s.id || `sk_${item.id}_${idx}`,
         name: s.name || `技能${idx + 1}`,
@@ -1450,14 +1535,39 @@ function normalizeTechnique(item: any): any {
         cooldown: typeof s.cooldown === "number" ? s.cooldown : 3 + idx,
         effects: s.effects || [],
         debuffDuration,
+        rangeShape,
+        rangeSize,
+        ...(hasPattern ? { rangePattern } : {}),
+        ...(skillBuffs.length > 0 ? { buffs: skillBuffs } : {}),
+        ...(guard > 0 ? { guard } : {}),
         ...(convert ? { hpCost, mpRestore } : {}),
       };
     });
   }
 
-  if (!item.prerequisites || !Array.isArray(item.prerequisites)) {
-    item.prerequisites = [];
-  }
+  // 修炼条件：只认这四类，条目不齐的丢掉；中文写法也顺带认下
+  const PREREQ_TYPES: Record<string, string> = {
+    realm: "realm",
+    境界: "realm",
+    technique: "technique",
+    功法: "technique",
+    spiritRoot: "spiritRoot",
+    灵根: "spiritRoot",
+    heartTrait: "heartTrait",
+    心性: "heartTrait",
+  };
+  item.prerequisites = (Array.isArray(item.prerequisites) ? item.prerequisites : [])
+    .map((r: any) => {
+      const type = PREREQ_TYPES[String(r?.type ?? "").trim()];
+      const value = String(r?.value ?? "").trim().slice(0, 24);
+      if (!type || !value) return null;
+      const rawMin = Number(r?.minLevel);
+      const minLevel =
+        Number.isFinite(rawMin) && rawMin > 0 ? Math.min(10, Math.round(rawMin)) : undefined;
+      return { type, value, ...(minLevel ? { minLevel } : {}) };
+    })
+    .filter((r: { type: string; value: string } | null): r is { type: string; value: string } => Boolean(r))
+    .slice(0, 3);
 
   if (!item.attributes || typeof item.attributes !== "object") {
     item.attributes = {};

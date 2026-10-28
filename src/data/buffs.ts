@@ -117,6 +117,14 @@ export function buffFromTemplate(
 }
 
 /**
+ * 只报 id 与名目的简报，供生成功法与招式时点选状态。
+ * 效力另在【状态名录】里，那一份长，留给叙事与战斗用。
+ */
+export function buffCatalogIdsBrief(): string {
+  return BUFF_TEMPLATES.map((x) => `${x.id} ${x.name}（${x.isDebuff ? "减益" : "增益"}）`).join("；");
+}
+
+/**
  * 名录的简报，供提示词里下发。
  * 模型据此挑名目，不再自己编状态。
  */

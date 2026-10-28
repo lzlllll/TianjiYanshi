@@ -523,12 +523,21 @@ export interface Meridian {
   zone: MeridianZone;
 }
 
-export interface PlayerStats {
+/** 四条根基：体力、神魂、悟性、身法 */
+export interface AttributeSet {
   vitality: number;
   soul: number;
   wisdom: number;
   agility: number;
+}
+
+export interface PlayerStats extends AttributeSet {
   heartScores: HeartScore[];
+  /**
+   * 潜力：四条根基各能练到哪儿。
+   * 当前数值靠修炼一截截往上挪，挪到潜力为止；旧档没有这一项，载入时照当前值补一份。
+   */
+  potential?: AttributeSet;
 }
 
 export interface TimelineEvent {
@@ -585,6 +594,32 @@ export interface TechniqueLevel {
   skillUnlocked?: string;
 }
 
+/** 招式能及到的范围形制：以自身为心，按阵图上的格子算 */
+export type SkillRangeShape = "近身" | "十字" | "叉状" | "矩形" | "环绕";
+
+/** 功法出手样式：十种打法，分外功五式与奇门五式 */
+export type CombatStyle =
+  | "长兵"
+  | "挥砍短兵"
+  | "刺击短兵"
+  | "软兵"
+  | "拳脚"
+  | "射术"
+  | "音律"
+  | "御兽"
+  | "符阵"
+  | "术法";
+
+/**
+ * 一招施展之后落在谁身上的状态。
+ * id 只能取自增益名录（buffs.ts），名录之外的一概不认。
+ */
+export interface SkillBuffRef {
+  id: string;
+  /** self 落在自己身上，enemy 落在对手身上 */
+  target: "self" | "enemy";
+}
+
 export interface TechniqueSkill {
   id: string;
   name: string;
@@ -596,6 +631,22 @@ export interface TechniqueSkill {
   effects: BuffEffect[];
   /** 命中后负面效果维持几柱香；缺省按 3 柱算 */
   debuffDuration?: number;
+  /** 这一招能及到的范围；缺省按功法门类推一个 */
+  rangeShape?: SkillRangeShape;
+  /** 范围伸出去几格：十字、叉状为臂长，矩形为半边，环绕为半径；近身恒为一格 */
+  rangeSize?: number;
+  /**
+   * 自拟范围：最多 5×5 的阵图，每行一串 0 与 1，1 为可及、0 为不及。
+   * 写了这一项，便不再看 rangeShape 与 rangeSize；中心以自身所在那一格算。
+   */
+  rangePattern?: string[];
+  /** 施展之后落在己方或对手身上的状态；至多两条 */
+  buffs?: SkillBuffRef[];
+  /**
+   * 守势：这一招不伤人，护住周身，减免固定数值的伤害。
+   * 主动施展（灵力足够）得全额；敌人正面来攻时也可被动触发，只抵一半。
+   */
+  guard?: number;
   /**
    * 心法催运：不耗灵力，改为耗气血，并把灵力补回来。
    * 两项皆为正数才算数；只有 category 为 心法 的功法能用这一路。
@@ -616,11 +667,20 @@ export interface HeartCompatibility {
   bonus: number;
 }
 
+/** 一门功法每修成一重，四条根基里长哪一条、长多少 */
+export interface TechniqueStatGain {
+  stat: keyof AttributeSet;
+  /** 每重长多少，微量即可 */
+  perLevel: number;
+}
+
 export interface Technique {
   id: string;
   name: string;
   grade: ItemGrade;
   category: TechniqueCategory;
+  /** 出手样式：长兵、刺击短兵、音律之类；旧档没有便按门类补 */
+  style?: CombatStyle;
   daoPath: DaoPath;
   element: ElementType;
   nature: TechniqueNature;
@@ -635,6 +695,8 @@ export interface Technique {
   prerequisites: TechniquePrerequisite[];
   attributes: Record<string, number>;
   basePracticeSpeed: number;
+  /** 每修成一重长哪一条根基；旧档没有这一项，按门类补一个常例 */
+  statGain?: TechniqueStatGain;
 }
 
 export interface InventoryItem {
@@ -2468,6 +2530,18 @@ export interface BattlePosition {
 
 export type BattleEntityType = "player" | "ally" | "enemy" | "obstacle";
 
+/** 阵上朝向：东为右、西为左、南为下、北为上 */
+export type BattleFacing = "东" | "南" | "西" | "北";
+
+/** 战斗里压在某个实体身上的一条状态：只记还剩几柱，效力照名录 */
+export interface BattleEntityBuff {
+  id: string;
+  name: string;
+  /** 还能顶几柱香 */
+  duration: number;
+  isDebuff: boolean;
+}
+
 export interface BattleEntity {
   id: string;
   name: string;
@@ -2479,6 +2553,12 @@ export interface BattleEntity {
   maxMp?: number;
   icon?: string;
   isDead?: boolean;
+  /** 落在这一位身上的状态，按柱香递减 */
+  buffs?: BattleEntityBuff[];
+  /** 面朝哪一方；没写便按敌我相对站定 */
+  facing?: BattleFacing;
+  /** 这一位惯用的出手样式；没写便不吃样式相克 */
+  style?: CombatStyle;
 }
 
 export interface BattleMap {
@@ -2525,10 +2605,15 @@ export interface BattleState {
   context: string[];
   /** 战斗里的临时状态按柱香计时，这里记香烧到哪儿了 */
   incense: BattleIncense;
+  /** 体力：挪步要耗，耗尽便挪不动；上限按体力（vitality）算 */
+  stamina: number;
+  staminaMax: number;
   /** 分出胜负后的收尾（逃/追、战利品、败者对话）；战斗未结束时为空 */
   aftermath?: BattleAftermath | null;
   /** 这一战若是宗门战，记下对手是谁、我方攻守；寻常厮杀没有这一项 */
   sectWar?: BattleSectWar | null;
+  /** 模型照这一合的战况备下的几条出手；点一条填进输入栏，可再改 */
+  options: string[];
 }
 
 /** 叙事挑起的宗门战：对手是谁、打的是什么，以及我方是攻是守 */
@@ -2585,6 +2670,8 @@ export interface BattleFoeBrief {
   count?: number;
   /** 一句长相或来路，可省 */
   desc?: string;
+  /** 这一位惯用的出手样式，如「刺击短兵」；写不出便不吃相克 */
+  style?: CombatStyle;
 }
 
 /** 已落到实处的宗门战：对手点位编号、名号与所打的路数 */

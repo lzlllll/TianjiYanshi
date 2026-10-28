@@ -7,6 +7,7 @@ import { CloudDivider } from "@/components/ui/CloudDivider";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
+import { ATTRIBUTE_KEYS, potentialOf } from "@/lib/attributes";
 
 const ELEMENT_COLORS: Record<string, string> = {
   金: "from-paper-300 to-paper-400",
@@ -357,11 +358,10 @@ export function ProfilePanel() {
 
                 <ScrollCard title="潜能" subtitle="四大根基，定修行上限">
                   <div className="space-y-4">
-                    {Object.entries(typeof player.stats === "object" && player.stats !== null ? player.stats : {}).map(([key, val]) => {
-                      if (key === "heartScores") return null;
-                      const stat = STAT_LABELS[key as keyof typeof STAT_LABELS];
-                      if (!stat) return null;
-                      const value = val as number;
+                    {ATTRIBUTE_KEYS.map((key) => {
+                      const stat = STAT_LABELS[key];
+                      const value = Math.round(Number(player.stats?.[key]) || 0);
+                      const cap = potentialOf(player.stats)[key];
                       return (
                         <div key={key} className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded bg-ink-700/60 flex items-center justify-center font-brush text-lg text-gold-400/80 border border-paper-400/10">
@@ -370,11 +370,14 @@ export function ProfilePanel() {
                           <div className="flex-1">
                             <div className="flex items-center justify-between mb-1.5">
                               <span className="font-serif text-base text-paper-300">{stat.name}</span>
-                              <span className="font-number text-lg text-gold-400">{value}</span>
+                              <span className="font-number text-lg text-gold-400">
+                                {value}
+                                <span className="ml-1 font-serif text-xs text-paper-400/50">潜力 {cap}</span>
+                              </span>
                             </div>
                             <ProgressBar
                               value={value}
-                              max={100}
+                              max={Math.max(1, cap)}
                               height={10}
                             />
                           </div>

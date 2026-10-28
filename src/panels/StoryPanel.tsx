@@ -74,6 +74,7 @@ function buildBattleFoes(foes: BattleFoeBrief[] | undefined, playerRealm: number
         mp: maxMp,
         maxMp,
         icon: foe.name.slice(0, 1),
+        ...(foe.style ? { style: foe.style } : {}),
       });
     }
   }

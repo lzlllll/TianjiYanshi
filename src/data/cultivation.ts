@@ -97,6 +97,12 @@ export function cultivationRecovery(args: {
   mpMax: number;
   spirit: number;
   spiritMax: number;
+  /** 回灵快慢的乘数：心法品阶与经脉贯通程度说了算 */
+  mpFactor?: number;
+  /** 气血回复的快慢：体魄越厚回得越快 */
+  hpFactor?: number;
+  /** 神识回复的快慢：神魂越定回得越快 */
+  spiritFactor?: number;
 }): CultivateRecovery {
   const h = Math.max(0, Number(args.hours) || 0);
   const cap = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
@@ -106,10 +112,24 @@ export function cultivationRecovery(args: {
   const hp = Math.min(hpMax, cap(args.hp));
   const mp = Math.min(mpMax, cap(args.mp));
   const spirit = Math.min(spiritMax, cap(args.spirit));
-  const grow = (cur: number, max: number, rate: number) => Math.max(0, Math.min(max - cur, Math.round(max * rate * h)));
-  const hpGain = grow(hp, hpMax, CULTIVATE_RECOVER_PER_HOUR.hp);
-  const mpGain = grow(mp, mpMax, CULTIVATE_RECOVER_PER_HOUR.mp);
-  const spiritGain = grow(spirit, spiritMax, CULTIVATE_RECOVER_PER_HOUR.spirit);
+  const mpFactor = Math.max(0.1, Number(args.mpFactor) || 1);
+  const hpFactor = Math.max(0.1, Number(args.hpFactor) || 1);
+  const spiritFactor = Math.max(0.1, Number(args.spiritFactor) || 1);
+  const hpGain = Math.max(
+    0,
+    Math.min(hpMax - hp, Math.round(hpMax * CULTIVATE_RECOVER_PER_HOUR.hp * h * hpFactor)),
+  );
+  const mpGain = Math.max(
+    0,
+    Math.min(mpMax - mp, Math.round(mpMax * CULTIVATE_RECOVER_PER_HOUR.mp * h * mpFactor)),
+  );
+  const spiritGain = Math.max(
+    0,
+    Math.min(
+      spiritMax - spirit,
+      Math.round(spiritMax * CULTIVATE_RECOVER_PER_HOUR.spirit * h * spiritFactor),
+    ),
+  );
   return {
     hp: hp + hpGain,
     mp: mp + mpGain,

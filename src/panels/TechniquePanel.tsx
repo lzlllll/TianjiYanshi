@@ -6,6 +6,10 @@ import { GradeTag } from "@/components/ui/GradeTag";
 import { ProficiencyRing } from "@/components/ui/ProficiencyRing";
 import { cn } from "@/lib/utils";
 import { techniqueLevelOf } from "@/lib/skillCalc";
+import { ATTRIBUTE_LABELS } from "@/lib/attributes";
+import { techniqueStatGainOf } from "@/lib/techniqueGrowth";
+import { findBuffTemplate } from "@/data/buffs";
+import { styleBrief, techniqueStyleOf } from "@/data/combatStyles";
 import type { Technique, TechniqueCategory, ElementType } from "@/data/types";
 import { REALM_NAMES } from "@/data/mockData";
 
@@ -45,7 +49,7 @@ export function TechniquePanel() {
         if (reqStart >= 0 && currentRealm < reqStart) return false;
       }
       if (req.type === "technique") {
-        const requiredTech = techniques.find((t) => t.id === req.value);
+        const requiredTech = techniques.find((t) => t.id === req.value || t.name === req.value);
         if (!requiredTech) return false;
         const reqLevel = req.minLevel || 1;
         if (techniqueLevelOf(requiredTech) < reqLevel) return false;
@@ -224,6 +228,7 @@ export function TechniquePanel() {
           const info = CATEGORY_INFO[tech.category];
           const hasLevels = tech.levels && tech.levels.length > 0;
           const currentLevel = techniqueLevelOf(tech);
+          const style = techniqueStyleOf(tech);
           const nextLevel = hasLevels ? tech.levels[currentLevel] : undefined;
           const matchScore = getMatchScore(tech);
           const isActiveHeart = tech.category === "心法" && player.activeHeartTechnique === tech.id;
@@ -286,6 +291,12 @@ export function TechniquePanel() {
                         <span className="font-brush text-xs text-paper-400/60 px-1.5 py-0.5 border border-paper-400/20 rounded">
                           {tech.nature}性
                         </span>
+                        <span
+                          title={styleBrief(style)}
+                          className="font-brush text-xs text-jade-400/80 px-1.5 py-0.5 border border-jade-500/30 rounded"
+                        >
+                          {style}
+                        </span>
                       </div>
                       <p className="font-serif text-xs text-paper-400/60 mt-2 leading-relaxed">
                         {tech.description}
@@ -295,6 +306,12 @@ export function TechniquePanel() {
                           「{tech.insight}」
                         </p>
                       </div>
+                      {/* 这一门每修成一重长哪条根基 */}
+                      <p className="mt-2 font-serif text-[11px] text-jade-400/70">
+                        每修成一重：{ATTRIBUTE_LABELS[techniqueStatGainOf(tech).stat]} +
+                        {techniqueStatGainOf(tech).perLevel}
+                      </p>
+                      <p className="mt-1 font-serif text-[11px] text-paper-400/60">{styleBrief(style)}</p>
                     </div>
                   </div>
 
@@ -479,10 +496,34 @@ export function TechniquePanel() {
                           {skill.damage > 0 && (
                             <span className="font-number text-xs text-cinnabar-400/80">伤害:{skill.damage}</span>
                           )}
+                          {(skill.guard || 0) > 0 && (
+                            <span className="font-number text-xs text-jade-400/90">守:{skill.guard}</span>
+                          )}
                           {skill.cooldown > 0 && (
                             <span className="font-number text-xs text-paper-400/50">冷却:{skill.cooldown}</span>
                           )}
                         </div>
+                        {(Array.isArray(skill.buffs) ? skill.buffs : []).length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {(Array.isArray(skill.buffs) ? skill.buffs : []).map((b) => {
+                              const tpl = findBuffTemplate(b.id);
+                              if (!tpl) return null;
+                              return (
+                                <span
+                                  key={`${b.target}:${b.id}`}
+                                  className={cn(
+                                    "font-serif text-[10px] px-1.5 py-0.5 rounded border",
+                                    tpl.isDebuff
+                                      ? "border-cinnabar-500/40 text-cinnabar-300/90"
+                                      : "border-jade-500/40 text-jade-400/90",
+                                  )}
+                                >
+                                  {b.target === "self" ? "自身" : "敌方"}·{tpl.name}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     ))}
                     {(Array.isArray(lockedSkills) ? lockedSkills : []).map((skill) => (
@@ -520,8 +561,10 @@ export function TechniquePanel() {
                         >
                           <span>{met ? "✓" : "✗"}</span>
                           <span className="font-serif">
-                            {req.type === "realm" && `${req.value}期`}
-                            {req.type === "technique" && `掌握${techniques.find((t) => t.id === req.value)?.name}`}
+                            {req.type === "realm" &&
+                              `${req.value}${String(req.value).includes("期") ? "" : "期"}`}
+                            {req.type === "technique" &&
+                              `掌握${techniques.find((t) => t.id === req.value || t.name === req.value)?.name ?? req.value}`}
                             {req.type === "spiritRoot" && `${req.value}灵根${req.minLevel ? `≥${req.minLevel}` : ""}`}
                             {req.type === "heartTrait" && `心性「${req.value}」`}
                             {req.minLevel && req.type !== "spiritRoot" && `达到第${req.minLevel}重`}

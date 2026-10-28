@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import { BattleMap } from "./BattleMap";
@@ -7,6 +8,18 @@ import { PanelTitle } from "@/components/ui/PanelTitle";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import { effectiveHpMax } from "@/lib/buffUtils";
+import { effectiveAttributes, movementLimit } from "@/lib/attributes";
+import { computableSkills, isHeartConversion, techniqueLevelOf } from "@/lib/skillCalc";
+import { styleMatchup, techniqueStyleOf } from "@/data/combatStyles";
+import {
+  aliveEnemies,
+  enemiesInRange,
+  rangeLabel,
+  rangeOffsets,
+  rangeSpan,
+  skillRange,
+  type SkillRange,
+} from "@/data/battleRange";
 import { Swords, X, Loader2, Flame, Footprints, Package, Coins, Skull, Flag } from "lucide-react";
 
 export function BattlePanel() {
@@ -68,17 +81,22 @@ export function BattlePanel() {
 }
 
 /**
- * 右栏的前情：问道里近几回的正文。
- * 战斗一开就把叙事挡在后面了，此处留一份，省得打到一半忘了前因。
+ * 右栏的前情：只摆最近一回。
+ * 战斗一开就把叙事挡在后面了，此处留一份，省得打到一半忘了这一手是接着哪儿来的。
  */
 function StoryPeek() {
   const turns = useAIStore((s) => s.conversation.turns);
   const streaming = useAIStore((s) => s.conversation.streamingNarrative);
-  const recent = (Array.isArray(turns) ? turns : []).slice(-4);
+  const recent = (Array.isArray(turns) ? turns : []).slice(-1);
 
   return (
-    <ScrollCard title="前情" subtitle="问道里的近几回" className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+    <ScrollCard
+      title="前情"
+      subtitle="最近一回"
+      className="flex min-h-0 flex-1 flex-col"
+      contentClassName="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {recent.length === 0 && !streaming ? (
           <p className="font-serif text-xs leading-relaxed text-paper-400/50 py-2">
             还没有可回看的叙事。这一战的来由，可收起战斗界面到问道里翻看。
@@ -100,6 +118,246 @@ function StoryPeek() {
         )}
       </div>
     </ScrollCard>
+  );
+}
+
+/**
+ * 快捷出手：先点一招，再点一位够得着的对手，凑成一句话交给推演。
+ * 自由输入仍在，这里只是把常走的那一手少打几个字。
+ * 招式一悬停便弹出一张缩略阵图，照这一招的形制把能及到的格子染出来。
+ */
+function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void; disabled: boolean }) {
+  const techniques = useGameStore((s) => s.techniques);
+  const inventory = useGameStore((s) => s.inventory);
+  const battle = useAIStore((s) => s.battle);
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  const [tip, setTip] = useState<{ x: number; y: number; name: string; range: SkillRange } | null>(null);
+
+  // 已解锁的招式：与战斗解析、招式面板同一套算法
+  const available = useMemo(
+    () => computableSkills(Array.isArray(techniques) ? techniques : [], techniqueLevelOf),
+    [techniques],
+  );
+
+  const playerEntity = battle.map.entities.find((e) => e.type === "player");
+  const alive = aliveEnemies(battle.map.entities);
+  // 可用的物件：法宝是兵器，不列在这里
+  const usableItems = (Array.isArray(inventory) ? inventory : [])
+    .filter((i) => i.type !== "法宝" && Number(i.count) > 0)
+    .slice(0, 12);
+  const picked = available.find(({ technique, skill }) => `${technique.id}:${skill.id}` === pickedKey) ?? null;
+  const pickedRange = picked ? skillRange(picked.skill, picked.technique.category) : null;
+  const pickedStyle = picked ? techniqueStyleOf(picked.technique) : null;
+  const convert = picked ? isHeartConversion(picked.technique, picked.skill) : false;
+  const guardValue = picked ? Math.max(0, Math.round(Number(picked.skill.guard) || 0)) : 0;
+  // 只对自己使的功夫不挑对手，与战斗推进时的判法一致：伤害、负面效果与挂敌状态都算冲人去的
+  const aimsAtFoe = picked
+    ? !convert &&
+      guardValue <= 0 &&
+      ((picked.skill.damage || 0) > 0 ||
+        (picked.skill.effects || []).length > 0 ||
+        (Array.isArray(picked.skill.buffs) ? picked.skill.buffs : []).some((b) => b.target === "enemy"))
+    : false;
+  // 够得着谁，与战斗推进时用的是同一判法
+  const reachable =
+    picked && pickedRange && playerEntity
+      ? enemiesInRange(
+          battle.map.entities,
+          playerEntity.position,
+          pickedRange,
+          battle.map.width,
+          battle.map.height,
+        )
+      : [];
+
+  const act = (targetName?: string) => {
+    if (!picked || disabled) return;
+    const name = `${picked.technique.name}·${picked.skill.name}`;
+    onAct(targetName ? `施展「${name}」，攻向「${targetName}」` : `施展「${name}」`);
+  };
+
+  if (available.length === 0) {
+    return (
+      <p className="font-serif text-[11px] text-paper-400/50">
+        此刻还没有能使的招式，照旧写一句话出手便是。
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-serif text-xs text-paper-300/80">快捷出手</span>
+        <span className="font-serif text-[10px] text-paper-400/50">悬停招式可看范围</span>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {available.map(({ technique, skill }) => {
+          const key = `${technique.id}:${skill.id}`;
+          const range = skillRange(skill, technique.category);
+          const styleLabel = techniqueStyleOf(technique);
+          const isPicked = key === pickedKey;
+          const isConvert = isHeartConversion(technique, skill);
+          const guard = Math.max(0, Math.round(Number(skill.guard) || 0));
+          const cost =
+            guard > 0
+              ? `守 ${guard} · 耗灵 ${skill.mpCost}`
+              : isConvert
+                ? `耗气血 ${skill.hpCost ?? 0}`
+                : `耗灵 ${skill.mpCost}`;
+          return (
+            <button
+              key={key}
+              type="button"
+              disabled={disabled}
+              onMouseEnter={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setTip({
+                  x: rect.left,
+                  y: rect.bottom + 6,
+                  name: `${technique.name}·${skill.name}`,
+                  range,
+                });
+              }}
+              onMouseLeave={() => setTip(null)}
+              onClick={() => setPickedKey(isPicked ? null : key)}
+              className={cn(
+                "rounded border px-2 py-1 text-left font-serif text-[11px] transition",
+                isPicked
+                  ? "border-gold-400 bg-gold-500/20 text-gold-200"
+                  : "border-paper-400/20 bg-ink-900/20 text-paper-200 hover:border-gold-400/50",
+                disabled && "opacity-50",
+              )}
+            >
+              <span className="block">
+                {technique.name}·{skill.name}
+              </span>
+              <span className="block text-[10px] text-paper-400/60">
+                {cost} · {rangeLabel(range)} · {styleLabel}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {picked && pickedRange && (
+        <div className="mt-2 rounded border border-paper-400/15 bg-ink-900/20 px-2.5 py-2">
+          <p className="mb-1.5 font-serif text-[11px] text-paper-400/70">
+            {guardValue > 0
+              ? `守势：这一回合减免 ${guardValue} 点伤害，不冲人去`
+              : !aimsAtFoe
+                ? `这一招不冲人去，施展便可（${rangeLabel(pickedRange)}）`
+                : `范围：${rangeLabel(pickedRange)}｜点一位够得着的对手出手`}
+          </p>
+          {!aimsAtFoe ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => act()}
+              className="rounded border border-gold-400/50 px-2.5 py-1 font-serif text-[11px] text-gold-200 transition hover:bg-gold-500/20 disabled:opacity-50"
+            >
+              {convert ? "运功施展" : guardValue > 0 ? "施展守势" : "施展"}
+            </button>
+          ) : alive.length === 0 ? (
+            <p className="font-serif text-[11px] text-paper-400/50">台上已无敌手。</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {alive.map((e) => {
+                const hit = reachable.some((x) => x.id === e.id);
+                const vs = styleMatchup(pickedStyle, e.style);
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    disabled={!hit || disabled}
+                    onClick={() => act(e.name)}
+                    className={cn(
+                      "rounded border px-2 py-1 font-serif text-[11px] transition",
+                      hit
+                        ? "border-cinnabar-400/50 text-paper-100 hover:bg-cinnabar-500/20"
+                        : "border-paper-400/15 text-paper-400/40 cursor-not-allowed",
+                    )}
+                  >
+                    {e.name}
+                    {vs.kind === "advantage" ? " · 克" : vs.kind === "disadvantage" ? " · 被克" : ""}
+                    {typeof e.hp === "number" ? ` ${e.hp}/${e.maxHp ?? "?"}` : ""}
+                    {hit ? "" : " · 范围外"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {aimsAtFoe && reachable.length === 0 && alive.length > 0 && (
+            <p className="mt-1.5 font-serif text-[10px] text-paper-400/50">
+              此刻没有够得着的对手，可先走位，或换一招。
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* 随身物件：兵器不算在内，点一件便算用出去，仍走推演那一套 */}
+      {usableItems.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1 font-serif text-[10px] text-paper-400/50">随身物件（法宝不算）</p>
+          <div className="flex flex-wrap gap-1.5">
+            {usableItems.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => onAct(`用「${it.name}」`)}
+                className="rounded border border-paper-400/20 bg-ink-900/20 px-2 py-0.5 font-serif text-[11px] text-paper-200 transition hover:border-gold-400/50 disabled:opacity-50"
+              >
+                {it.name} ×{it.count}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tip && <RangeTip {...tip} />}
+    </div>
+  );
+}
+
+/** 悬停弹出的范围缩略图：摆在指针下头，浮在纸页之外，免得被卡片裁掉 */
+function RangeTip({ x, y, name, range }: { x: number; y: number; name: string; range: SkillRange }) {
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[80] rounded border border-gold-400/40 bg-ink-900/95 px-3 py-2 shadow-lg"
+      style={{ left: Math.min(x, Math.max(0, window.innerWidth - 160)), top: y }}
+    >
+      <p className="mb-1.5 font-serif text-[11px] text-gold-300">{name}</p>
+      <RangePreview range={range} />
+      <p className="mt-1.5 font-serif text-[10px] text-paper-400/70">{rangeLabel(range)}</p>
+    </div>,
+    document.body,
+  );
+}
+
+/** 一张小阵图：当中是自己，染红的是这一招能及的格子 */
+function RangePreview({ range }: { range: SkillRange }) {
+  const span = rangeSpan(range);
+  const offsets = new Set(rangeOffsets(range).map(({ dx, dy }) => `${dx},${dy}`));
+  const center = Math.floor(span / 2);
+
+  return (
+    <div className="grid gap-[2px]" style={{ gridTemplateColumns: `repeat(${span}, 12px)` }}>
+      {Array.from({ length: span * span }, (_, i) => {
+        const dx = (i % span) - center;
+        const dy = Math.floor(i / span) - center;
+        const self = dx === 0 && dy === 0;
+        return (
+          <span
+            key={i}
+            className={cn(
+              "h-3 w-3 rounded-[1px]",
+              self ? "bg-gold-400" : offsets.has(`${dx},${dy}`) ? "bg-cinnabar-400/80" : "bg-paper-400/15",
+            )}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -258,6 +516,9 @@ function BattleOngoingView() {
   const isResolving = battle.isResolving;
   // 内伤一类状态压低了气血上限，界面上照实时的上限报
   const hpMax = effectiveHpMax(player);
+  // 四条根基过一道临时状态；身法定这一回合能挪几步
+  const attrs = effectiveAttributes(player);
+  const moveLimit = movementLimit(attrs.agility);
   const incenseBuffs = (Array.isArray(player.buffs) ? player.buffs : []).filter(
     (b) => b.durationType === "incense",
   );
@@ -314,8 +575,9 @@ function BattleOngoingView() {
         title="战斗叙事"
         subtitle="实时战况"
         className="flex max-h-[38vh] min-h-[120px] shrink-0 flex-col"
+        contentClassName="flex min-h-0 flex-1 flex-col"
       >
-        <div className="flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-serif text-sm leading-relaxed text-paper-200">
+        <div className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap pr-2 font-serif text-sm leading-relaxed text-paper-200">
           {battle.narrative || "战斗开始，准备行动..."}
         </div>
       </ScrollCard>
@@ -324,7 +586,7 @@ function BattleOngoingView() {
         title="我方状态"
         className="shrink-0"
       >
-        <div className="grid grid-cols-4 gap-2 sm:gap-4">
+        <div className="grid grid-cols-5 gap-2 sm:gap-3">
           <div className="text-center">
             <div className="font-brush text-lg text-cinnabar-400 text-glow-formation">{Math.min(player.hp, hpMax)}</div>
             <div className="font-serif text-xs text-paper-400/50">气血 / {hpMax}</div>
@@ -346,11 +608,29 @@ function BattleOngoingView() {
             </div>
           </div>
           <div className="text-center">
-            <div className="font-brush text-lg text-gold-400">{player.stats.vitality}</div>
+            <div className="font-brush text-lg text-gold-300">{Math.round(battle.stamina)}</div>
+            <div className="font-serif text-xs text-paper-400/50">体力 / {battle.staminaMax}</div>
+            <div className="h-1 bg-ink-900 rounded mt-1 overflow-hidden">
+              <div
+                className={cn(
+                  "h-full transition-all",
+                  battle.stamina > 0
+                    ? "bg-gradient-to-r from-gold-600 to-gold-400 shadow-glow"
+                    : "bg-cinnabar-500",
+                )}
+                style={{
+                  width: `${Math.max(0, Math.min(100, (battle.stamina / Math.max(1, battle.staminaMax)) * 100))}%`,
+                }}
+              />
+            </div>
+            <div className="mt-0.5 font-serif text-[10px] text-paper-400/40">可挪 {moveLimit} 格</div>
+          </div>
+          <div className="text-center">
+            <div className="font-brush text-lg text-gold-400">{attrs.vitality}</div>
             <div className="font-serif text-xs text-paper-400/50">体魄</div>
           </div>
           <div className="text-center">
-            <div className="font-brush text-lg text-jade-400">{player.stats.soul}</div>
+            <div className="font-brush text-lg text-jade-400">{attrs.soul}</div>
             <div className="font-serif text-xs text-paper-400/50">神魂</div>
           </div>
         </div>
@@ -378,9 +658,34 @@ function BattleOngoingView() {
 
       <ScrollCard
         title="行动指令"
-        subtitle="输入你的战斗行动（Ctrl/Cmd + Enter 发送）"
+        subtitle="可点招式快捷出手，也可自由输入（Ctrl/Cmd + Enter 发送）"
         className="shrink-0"
       >
+        {/* 模型照这一合的战况备下的几条出手：与问道里的快捷决断同一用法，点一条填进输入栏 */}
+        {(Array.isArray(battle.options) ? battle.options : []).length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {(Array.isArray(battle.options) ? battle.options : []).map((o) => (
+              <button
+                key={o}
+                type="button"
+                onClick={() => setAction(o)}
+                disabled={isResolving || battle.turn !== "player"}
+                title="填入输入栏，可再修改后出手"
+                className="px-2.5 py-1 rounded text-xs font-serif border-2 border-paper-400 bg-ink-900 text-paper-200 hover:border-gold-500 hover:text-gold-400 hover:bg-gold-500 transition disabled:opacity-40"
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+        )}
+        <BattleQuickActions
+          onAct={(text) => {
+            if (isResolving || battle.turn !== "player") return;
+            runBattleTurn(text);
+          }}
+          disabled={isResolving || battle.turn !== "player"}
+        />
+        <div className="my-3 border-t border-paper-400/10" />
         <textarea
           value={action}
           onChange={(e) => setAction(e.target.value)}

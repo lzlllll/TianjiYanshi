@@ -1,4 +1,5 @@
 import type { BattleEntity, Technique, TechniqueCategory, TechniqueSkill } from "@/data/types";
+import { heartRecoveryFactor, isSpiritTechnique, soulDamageFactor } from "@/lib/attributes";
 
 /**
  * 战斗结算里的出招者。AI 只负责照写，数值一律由这里确定性算定，不得随机。
@@ -46,6 +47,8 @@ export interface SkillCast {
   breakdown: string[];
   /** 一行中文结算说明，供喂给模型照写 */
   summary: string;
+  /** 这一招是否真的使了出来：灵力不足、气血不足或不必运功时为 false */
+  usable: boolean;
 }
 
 /** 品阶系数：品阶越高，同一招威能越大 */
@@ -290,6 +293,7 @@ export function computeSkillCast(args: {
     debuffs: [],
     breakdown,
     summary: "",
+    usable: false,
   };
 
   // 心法催运那一路：不看灵力够不够，只看气血撑不撑得住、灵力是不是已经满了
@@ -301,12 +305,18 @@ export function computeSkillCast(args: {
     if (actor.hp <= wantHp) {
       return { ...base, summary: `你欲运转「${skill.name}」，然气血不足，这一门运不起来。` };
     }
-    const restored = Math.min(wantRestore, Math.max(0, actor.maxMp - actor.mp));
+    // 这门心法的品阶与本人经脉的贯通程度，定这一手补回来多少灵力
+    const recoveryFactor = heartRecoveryFactor(technique.grade, actor.meridians);
+    const restored = Math.min(
+      Math.max(1, Math.round(wantRestore * recoveryFactor)),
+      Math.max(0, actor.maxMp - actor.mp),
+    );
     return {
       ...base,
+      usable: true,
       hpCost: wantHp,
       mpRestore: restored,
-      breakdown: [...breakdown, `心法催运 气血 -${wantHp} → 灵力 +${restored}`],
+      breakdown: [...breakdown, `心法回灵 ×${recoveryFactor.toFixed(2)}`, `心法催运 气血 -${wantHp} → 灵力 +${restored}`],
       summary: `你运转「${skill.name}」，耗气血 ${wantHp}，回复灵力 ${restored}。`,
     };
   }
@@ -322,6 +332,10 @@ export function computeSkillCast(args: {
     };
   }
 
+  // 精神类功法（神通、秘术）另受神魂加持：神魂愈凝，催出去的力愈沉
+  const spiritFactor = isSpiritTechnique(technique.category)
+    ? soulDamageFactor(actor.stats?.soul ?? 0)
+    : 1;
   const damage = Math.max(
     0,
     Math.round(
@@ -331,9 +345,11 @@ export function computeSkillCast(args: {
         profFactor *
         gradeFactor *
         heartFactor *
-        meridianFactor,
+        meridianFactor *
+        spiritFactor,
     ),
   );
+  if (spiritFactor !== 1) breakdown.push(`神魂加持 ×${spiritFactor.toFixed(2)}`);
 
   const rawDuration =
     typeof skill.debuffDuration === "number" && Number.isFinite(skill.debuffDuration)
@@ -353,7 +369,7 @@ export function computeSkillCast(args: {
 
   const summary = buildSummary(base.skillName, base.mpCost, damage, debuffs);
 
-  return { ...base, damage, debuffs, summary };
+  return { ...base, usable: true, damage, debuffs, summary };
 }
 
 /** 拼一行中文结算说明 */

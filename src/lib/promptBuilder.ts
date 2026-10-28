@@ -12,7 +12,7 @@ import { ALL_GOOD_NAMES } from "@/data/goods";
 import { aliveRumors } from "@/data/rumors";
 import { isRewardHeld } from "@/data/quests";
 import { DC_HINT, SKILL_LEVEL_MAX } from "@/data/skills";
-import { buffCatalogBrief } from "@/data/buffs";
+import { buffCatalogBrief, buffCatalogIdsBrief } from "@/data/buffs";
 import { sectModifierBrief } from "@/data/sectModifiers";
 import { climateAggression } from "@/data/sects";
 import { PLAYER_SHOP_KINDS } from "@/data/playerShops";
@@ -926,8 +926,8 @@ export function buildProPrompt(params: {
 交付行只在正文当真写到下面某一种情形时才给，写在正文之后另起一行；五种至多取其一，①与②互斥，③④⑤彼此互斥。一种都没走到，正文之外一字不加。
 
 ① 本轮转为需要你来我往、逐回合厮杀的正面交锋：
-<<<MODE>>>{"mode":"battle","enemies":[{"name":"对手名号","realm":"炼气中期","count":1,"desc":"一句长相或来路"}]}<<<END>>>
-enemies 写清这一场都有谁：name 写名号或称谓（如「黑风寨三当家」「灰袍道人」），不要写「敌人」「对手」这类泛称；realm 写其境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘，再加初期、中期、后期、圆满），拿不准便照与玩家相仿写；count 是同一模样的人数，1 到 4；desc 一句长相或来路，可省。人数与强弱须与正文所写相合：正文写三五人围上来，enemies 便要有三五个；正文写对方是筑基修士，realm 便写筑基某期；若与尘缘里认得的人交手，name 须与其中的人名一字不差。玩家没有主动招惹（不曾挑衅、挑斗、闯入他人门户、行凶夺物）时，单个对手的境界不得高过玩家一个大境界——玩家炼气，对手至多筑基；enemies 的总人数也不得成倍压过玩家，寻常拦路寻衅的不过一两人，须留出能打、能退的余地，不可动辄摆出必败之局。玩家自己上门挑衅、以卵击石时，才可照剧情写出更强的对手。玩家有同行或灵兽在侧时，对手的人数与强弱照这一伙人的合力斟酌。整场交锋的强弱须与玩家的境界、功法与法宝相称，赏罚与战利品也照这个分寸给，不可为求惊险而失衡。
+<<<MODE>>>{"mode":"battle","enemies":[{"name":"对手名号","realm":"炼气中期","count":1,"desc":"一句长相或来路","style":"刺击短兵"}]}<<<END>>>
+enemies 写清这一场都有谁：name 写名号或称谓（如「黑风寨三当家」「灰袍道人」），不要写「敌人」「对手」这类泛称；realm 写其境界全称（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘，再加初期、中期、后期、圆满），拿不准便照与玩家相仿写；count 是同一模样的人数，1 到 4；desc 一句长相或来路，可省；style 写这一位惯用的出手样式，只取 长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法 之一，照他使的兵器与路数写，拿不准便省去。人数与强弱须与正文所写相合：正文写三五人围上来，enemies 便要有三五个；正文写对方是筑基修士，realm 便写筑基某期；若与尘缘里认得的人交手，name 须与其中的人名一字不差。玩家没有主动招惹（不曾挑衅、挑斗、闯入他人门户、行凶夺物）时，单个对手的境界不得高过玩家一个大境界——玩家炼气，对手至多筑基；enemies 的总人数也不得成倍压过玩家，寻常拦路寻衅的不过一两人，须留出能打、能退的余地，不可动辄摆出必败之局。玩家自己上门挑衅、以卵击石时，才可照剧情写出更强的对手。玩家有同行或灵兽在侧时，对手的人数与强弱照这一伙人的合力斟酌。整场交锋的强弱须与玩家的境界、功法与法宝相称，赏罚与战利品也照这个分寸给，不可为求惊险而失衡。
 
 ② 玩家率众去攻打某一处宗门、城池或村庄，或某一处宗门来犯本门：
 <<<SECTWAR>>>{"opponentName":"对手名号","targetKind":"sect 或 city 或 village","role":"attacker 或 defender"}<<<END>>>
@@ -1128,9 +1128,9 @@ ${buildWritableHint(writable)}
 2. 数值幅度必须与叙事相符，不要夸大，也不要凭空赠送珍稀物品。
 3. 时间：每轮都要回传最新日期。正文里时间若确实走动，用 modify currentTime.year / currentTime.month / currentTime.day / currentTime.hour 把它写足：正文写「三日后」「过了半月」「闭关一月」这类跨度，须照上面给的今日日期折算成新的年月日一并写上，不能只改时辰；时辰字段只写十二时辰的名字，取 ${SHICHEN_NAMES.join("、")} 之一；时间没动就照原值再写一遍。当前时间：${formatGameTime(now)}。
 4. 新增物品、功法、人物必须给出完整字段，id 不得与摘要中已有 id 重复——id 是条目唯一的标记：add 时自拟一个摘要里从未出现过的新号，delete 与 modify 里引用旧条目则须照摘要一字不差地抄，不许自拟；上面示例里的号只是占位，照抄便与旧条目撞车，会被当作重复条目丢掉。物品的 type 只取 材料、丹药、符箓、法宝、灵兽、杂物 之一——叙事里收服、买下一头活物，就用 add inventory 记下，type 写「灵兽」、name 写兽的名目，玩家往后可在灵兽栏把它收作随身；新增 材料 或 丹药 时必须给出 elements，形如 {"木":80,"土":20}，取值 -100 到 100；新增人物时一并补上 gender（男／女）、age、origin（出身来历）、personality（性情）、appearance（形貌）、affiliation（所属门派帮口，散修写「无」）这几项人设，使尘缘里的人物立得住。新增人物须是活人：已经身死、已故的人不得列为 relations，也不得替他新立一条。
-5. 玩家自身：凡叙事里改动了玩家自身的数——名号、修为、气血、灵力、神念、寿元、资质、经脉、心性、履历、随身状态——照【可改数据分类表】里「玩家本体」那一域写，不必逐项报备，也不必因为某个字段没被点到就跳过。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。player.gender 是例外：性别是开局既定之数，摘要里写着什么便是什么，纵是叙事笔误写成另一种，也不得改写它。
+5. 玩家自身：凡叙事里改动了玩家自身的数——名号、修为、气血、灵力、神念、寿元、资质、经脉、心性、履历、随身状态——照【可改数据分类表】里「玩家本体」那一域写，不必逐项报备，也不必因为某个字段没被点到就跳过。若叙事中突破了大境界，必须同时调整 player.realmIndex 与 player.cultivation，使修为与新境界相称，不要只改境界而让修为悬空。player.gender 是例外：性别是开局既定之数，摘要里写着什么便是什么，纵是叙事笔误写成另一种，也不得改写它。四条根基的潜力（player.stats.potential.vitality / soul / wisdom / agility）也可因洗髓、顿悟、伤残、奇遇而增减：正文里说「根骨比先前厚了」「神魂受损，再难寸进」，便照改潜力；潜力不得低于当前值。
 6. 新闻 news.items 仅在跨天时新增，同一天内不要重复生成；每条需含 category（官府公告/宗门布告/市井传言）、title、content、source 四个字段。
-7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。心法类可在 skills 里留一招以气血换灵力的招式，写明 hpCost 与 mpRestore；其余门类不写这两项。
+7. 功法条目需含 id、name、category（心法/炼体/神通/身法/秘术）、grade（凡品/灵品/玄品/天品/仙品）、proficiency、proficiencyMax、element、description。心法类可在 skills 里留一招以气血换灵力的招式，写明 hpCost 与 mpRestore；其余门类不写这两项。每一招要写明 rangeShape（近身、十字、叉状、矩形、环绕 之一）与 rangeSize（1 到 4 的整数）：近身是贴身八格，十字是上下左右四条臂，叉状是四条斜线，矩形是方阵，环绕是整圈，rangeSize 即臂长、半边或半径；拳脚炼体多用近身，剑招刀法多用十字、叉状，神通术法多用矩形、环绕。也可另写 rangePattern 自拟一张阵图：3 到 5 行、每行 3 到 5 个 0 与 1 的字符串，1 为可及、0 为不及，最多 5×5，如 ["010","111","010"]；写了阵图便不再看 rangeShape 与 rangeSize。每门功法另写 statGain：{"stat":"vitality、soul、wisdom、agility 之一","perLevel":1 到 2 的整数}，说明每修成一重长哪一条根基；炼体多长 vitality，身法多长 agility，神通多长 wisdom，心法、秘术多长 soul。每一招还可写 buffs，数组，至多两条，每条 {"id":"【状态名录】里的 id","target":"self 或 enemy"}：target 为 self 只能挑增益，为 enemy 只能挑减益，名录之外的一概不认。也可留一招守势：{"id","name","description","levelRequired","mpCost","damage":0,"cooldown","effects":[],"guard":10 到 80 的整数}，guard 为主动施展时减免的固定伤害；守势不冲人，也不必写范围。每门功法另写 style：出手样式只取 长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法 之一，须与本门招式路数相合——炼体多拳脚或长兵，身法多刺击短兵或射术，神通多术法或符阵，秘术多符阵、音律或御兽，心法多术法或音律。每门功法另写 prerequisites：数组，0 到 2 条，每条 {"type":"realm、technique、spiritRoot、heartTrait 之一","value":"...","minLevel":整数可省"}——realm 写大境界名（引气、炼气、筑基、金丹、元婴、化神、合体、渡劫、大乘），technique 写已习功法的名号，spiritRoot 写五行之一，heartTrait 写一个心性词；无可写的条件便给空数组。
 8. "服用丹药""使用符箓"只是消耗已有物品，如叙事中确有消耗，用 modify 扣减对应 inventory 条目的 count，不要用 add。
 9. quickDecisions：给出 3-4 条玩家下一轮可以采取的具体行动建议，每条 8-20 字，紧扣当前剧情与处境。
 10. player.timeline 是修炼历程，只记录足以载入生平的重大节点（如拜师、突破、结丹、结仇、得宝），寻常时日不要新增条目，以免流水账化。
@@ -1247,7 +1247,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
   {
     id: "technique",
     label: "功法",
-    spec: `只产出功法，逐门 add techniques，每条 {"id","name","category","grade","proficiency","proficiencyMax","element","description","skills"}：
+    spec: `只产出功法，逐门 add techniques，每条 {"id","name","category","grade","proficiency","proficiencyMax","element","description","style","statGain","prerequisites","skills"}：
 - category 只取 心法、炼体、神通、身法、秘术
 - grade 只取 凡品、灵品、玄品、天品、仙品
 - element 只取 金木水火土风雷冰暗
@@ -1255,14 +1255,21 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - description 不少于 40 字，写明来历、运功方式、施展时的形态与威力
 - 按角色的境界与宗门身份，产出 3 至 5 门；其中恰有一门 category 为 心法，作为其主修功法
 - 门下弟子不该持有天品以上功法，除非叙事中有明确交代
-- 每门功法须附 skills，产出 2 至 4 招，依次在熟练度提升时解锁；每招 {"id","name","description","levelRequired","mpCost","damage","cooldown","effects","debuffDuration"}
+- 每门功法须附 skills，产出 2 至 4 招，依次在熟练度提升时解锁；每招 {"id","name","description","levelRequired","mpCost","damage","cooldown","effects","debuffDuration","rangeShape","rangeSize","rangePattern","buffs","guard"}
+- statGain 写 {"stat","perLevel"}：stat 只取 vitality、soul、wisdom、agility 之一，perLevel 为 1 到 2 的整数，表示每修成一重长哪一条根基；炼体多长 vitality，身法多长 agility，神通多长 wisdom，心法、秘术多长 soul
+- style 只取 长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法 之一：炼体多拳脚或长兵，身法多刺击短兵或射术，神通多术法或符阵，秘术多符阵、音律或御兽，心法多术法或音律
+- prerequisites 写 0 到 2 条修炼条件，每条 {"type","value","minLevel"}：type 只取 realm、technique、spiritRoot、heartTrait；realm 的 value 写大境界名，technique 的 value 写功法名，spiritRoot 的 value 写五行之一，heartTrait 的 value 写一个心性词；minLevel 可省，表示须修到第几重。没有条件便给空数组
 - levelRequired 为 1 到 10 的整数，随招式列序递增（如第 1 招 1 级、第 2 招 3 级、第 3 招 6 级、第 4 招 9 级）
 - mpCost 为 0 到 60 的整数，威力越大越贵
 - damage 为 0 到 120 的整数基本伤害；纯辅助招式可给 0
 - cooldown 为 0 到 6 的整数
 - debuffDuration 为 1 到 12 的整数，表示命中后负面效果维持几柱香
+- rangeShape 只取 近身、十字、叉状、矩形、环绕 之一，rangeSize 为 1 到 4 的整数：近身是贴身八格，十字是上下左右四条臂，叉状是四条斜线，矩形是方阵，环绕是整圈；rangeSize 即臂长、半边或半径。近身类 rangeSize 写 1 即可
+- rangePattern 可选：写 3 到 5 行、每行 3 到 5 个 0 与 1 的字符串，1 为可及，最多 5×5，如 ["010","111","010"]；写了便不看 rangeShape 与 rangeSize，可照这一招的路数自拟一张阵图
+- buffs 为数组，至多两条，每条 {"id","target"}：id 只能从下面这几条里挑，target 为 self 时只能挑增益、为 enemy 时只能挑减益；没有合宜的便给空数组。名录：${buffCatalogIdsBrief()}
 - effects 为数组，写这一招打在对手身上的负面效果，每条 {"stat","valueType","value","description"}；stat 只取 defense、dodge、speed、attack、damage、vitality、soul、agility、hp 之一；valueType 只取 percentage、fixed、multiplier；value 为数字；description 一句中文说明。伤其性命的写法：stat 取 hp、valueType 取 fixed、value 为正整数，表示每柱香额外损这么多气血。纯增益、无负面效果的招式，effects 给空数组
-- 心法那一门可留一招「催运回灵」的招式：以气血换灵力，不伤敌。写法为 {"id","name","description","levelRequired","mpCost":0,"damage":0,"cooldown","effects":[],"hpCost","mpRestore"}，其中 hpCost 为耗掉的气血、mpRestore 为补回的灵力，各取 10 到 80 之间的整数，mpRestore 不得超过 hpCost 的两倍。其余心法招式与别门功法一概不写这两项`,
+- 心法那一门可留一招「催运回灵」的招式：以气血换灵力，不伤敌。写法为 {"id","name","description","levelRequired","mpCost":0,"damage":0,"cooldown","effects":[],"hpCost","mpRestore"}，其中 hpCost 为耗掉的气血、mpRestore 为补回的灵力，各取 10 到 80 之间的整数，mpRestore 不得超过 hpCost 的两倍。其余心法招式与别门功法一概不写这两项
+- 也可留一招守势：damage 写 0、guard 取 10 到 80 的整数（主动施展时减免的固定伤害），mpCost 照常；守势不冲人，rangeShape 可省`,
   },
   {
     id: "treasure",
@@ -1598,7 +1605,7 @@ export function buildMartialArtsPrompt(params: { state: GameState; culture?: str
   const system = `你是修仙文字游戏里武馆的教习。此地武馆要挂出一份「低阶武学名录」，供来客花钱拜师学艺。
 
 【名录要求】产出 3 至 4 门，只出低阶、好上手的武学：
-- 每门须含：name、category、grade、element、proficiency、proficiencyMax、description、insight、skills
+- 每门须含：name、category、grade、element、proficiency、proficiencyMax、description、insight、style、statGain、prerequisites、skills
 - category 只取 心法、炼体、神通、身法、秘术
 - grade 只取 凡品 或 灵品，不得出玄品及以上
 - element 只取 金木水火土风雷冰暗
@@ -1606,16 +1613,23 @@ export function buildMartialArtsPrompt(params: { state: GameState; culture?: str
 - description 不少于 40 字，写明招式路数与练成之后长于何处
 - insight 为一句要言，八字上下
 - 名号与招式要有${culture ? culture + "一带的" : ""}江湖气，彼此不重样
-- 每门须附 skills，产出 2 至 3 招，依次在熟练度提升时解锁；每招 {"id","name","description","levelRequired","mpCost","damage","cooldown","effects","debuffDuration"}
+- 每门须附 skills，产出 2 至 3 招，依次在熟练度提升时解锁；每招 {"id","name","description","levelRequired","mpCost","damage","cooldown","effects","debuffDuration","rangeShape","rangeSize","rangePattern","buffs","guard"}
+- statGain 写 {"stat","perLevel"}：stat 只取 vitality、soul、wisdom、agility 之一，perLevel 为 1 到 2 的整数；炼体多长 vitality，身法多长 agility，神通多长 wisdom，心法、秘术多长 soul
+- style 只取 长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法 之一，须与本门招式相合
+- prerequisites 写 0 到 2 条修炼条件，每条 {"type","value","minLevel"}：type 只取 realm、technique、spiritRoot、heartTrait；realm 写大境界名，technique 写功法名，spiritRoot 写五行之一，heartTrait 写一个心性词；minLevel 可省。没有条件便给空数组
+- rangePattern 可选：写 3 到 5 行、每行 3 到 5 个 0 与 1 的字符串，1 为可及，最多 5×5，如 ["010","111","010"]；写了便不看 rangeShape 与 rangeSize
 - levelRequired 为 1 到 10 的整数，随招式列序递增
 - mpCost 为 0 到 40 的整数，威力越大越贵
 - damage 为 0 到 60 的整数基本伤害；纯辅助招式可给 0
 - cooldown 为 0 到 6 的整数
 - debuffDuration 为 1 到 12 的整数，表示命中后负面效果维持几柱香
+- rangeShape 只取 近身、十字、叉状、矩形、环绕 之一，rangeSize 为 1 到 4 的整数：近身是贴身八格，十字是上下左右四条臂，叉状是四条斜线，矩形是方阵，环绕是整圈；rangeSize 即臂长、半边或半径
+- buffs 为数组，至多两条，每条 {"id","target"}：id 只能从下面这几条里挑，target 为 self 时只能挑增益、为 enemy 时只能挑减益；没有合宜的便给空数组。名录：${buffCatalogIdsBrief()}
+- 也可留一招守势：damage 写 0、guard 取 10 到 60 的整数（主动施展时减免的固定伤害），mpCost 照常；守势不冲人，rangeShape 可省
 - effects 为数组，写这一招打在对手身上的负面效果，每条 {"stat","valueType","value","description"}；stat 只取 defense、dodge、speed、attack、damage、vitality、soul、agility、hp 之一；valueType 只取 percentage、fixed、multiplier；value 为数字；description 一句中文说明。伤其性命的写法：stat 取 hp、valueType 取 fixed、value 为正整数，表示每柱香额外损这么多气血。纯增益、无负面效果的招式，effects 给空数组
 
 【输出格式】只输出一个 JSON 对象，不要解释、注释或代码围栏：
-{ "techniques": [ { "name": "……", "category": "身法", "grade": "凡品", "element": "风", "proficiency": 0, "proficiencyMax": 80, "description": "……", "insight": "……", "skills": [ { "id": "sk_1", "name": "……", "description": "……", "levelRequired": 1, "mpCost": 8, "damage": 30, "cooldown": 0, "effects": [], "debuffDuration": 3 } ] } ] }`;
+{ "techniques": [ { "name": "……", "category": "身法", "grade": "凡品", "element": "风", "proficiency": 0, "proficiencyMax": 80, "description": "……", "insight": "……", "skills": [ { "id": "sk_1", "name": "……", "description": "……", "levelRequired": 1, "mpCost": 8, "damage": 30, "cooldown": 0, "effects": [], "debuffDuration": 3, "rangeShape": "十字", "rangeSize": 2 } ] } ] }`;
 
   const user = `【当前游戏数据】
 ${buildDataSchema(state)}
@@ -2012,7 +2026,15 @@ export interface BattleIntentBrief {
     mpRestore?: number;
     damage: number;
     cooldown: number;
+    /** 守势：不伤人，减免固定伤害 */
+    guard?: number;
+    /** 这一门的出手样式，如「刺击短兵」 */
+    style?: string;
     effect: string;
+    /** 这一招能及到的范围，如「十字（2 格）」 */
+    range?: string;
+    /** 施展后落在己方或对手身上的状态，如「中毒（敌方）、身轻（自身）」 */
+    buffs?: string;
   }[];
   player: {
     name: string;
@@ -2032,9 +2054,22 @@ export interface BattleIntentBrief {
     hp?: number;
     maxHp?: number;
     isDead?: boolean;
+    /** 这一位面朝哪一方：东、南、西、北 */
+    facing?: string;
+    /** 这一位惯用的出手样式 */
+    style?: string;
+    /** 这一位身上还顶着的状态，如「中毒（余 2 柱）」 */
+    buffs?: string;
   }[];
   width: number;
   height: number;
+  /** 这一回合最多能挪几格，照身法算 */
+  moveLimit: number;
+  /** 眼下还剩多少体力、上限多少：挪步要耗，见底便挪不动 */
+  stamina: number;
+  staminaMax: number;
+  /** 随身物件：丹药、符箓、材料之类；法宝是兵器，不在此列 */
+  items?: { name: string; type: string; count: number; desc?: string }[];
   recent?: string[];
   /** 这一战之前最近几回的叙事：读懂玩家这句话要做什么，也要知道前因 */
   story?: string;
@@ -2054,9 +2089,13 @@ export function buildBattleIntentPrompt(brief: BattleIntentBrief): ChatMessage[]
             const cost = convert
               ? `耗气血 ${s.hpCost}，回灵力 ${s.mpRestore}`
               : `耗灵 ${s.mpCost}`;
-            return `- ${convert ? "【催运回灵】" : ""}${s.techniqueName}·${s.skillName}（${cost}，威力 ${s.damage}${
+            return `- ${convert ? "【催运回灵】" : ""}${
+              (s.guard ?? 0) > 0 ? "【守势】" : ""
+            }${s.techniqueName}·${s.skillName}（${cost}，威力 ${s.damage}${
               s.cooldown ? `，冷却 ${s.cooldown}` : ""
-            }${s.effect ? `，效果：${s.effect}` : ""}）`;
+            }${(s.guard ?? 0) > 0 ? `，减伤 ${s.guard}` : ""}${s.style ? `，样式 ${s.style}` : ""}${
+              s.effect ? `，效果：${s.effect}` : ""
+            }${s.range ? `，范围：${s.range}` : ""}${s.buffs ? `，状态：${s.buffs}` : ""}）`;
           })
           .join("\n")
       : "（此刻没有可使的招式）";
@@ -2068,20 +2107,35 @@ export function buildBattleIntentPrompt(brief: BattleIntentBrief): ChatMessage[]
         typeof e.hp === "number"
           ? `，气血 ${e.hp}${typeof e.maxHp === "number" ? `/${e.maxHp}` : ""}`
           : "";
-      return `- ${e.id}｜${e.name}（${kind}）位于 (${e.x}, ${e.y})${hp}${e.isDead ? "，已倒下" : ""}`;
+      // 相距几格照横竖斜里最远的那一向算，与范围判定的算法一致
+      const gap =
+        e.type === "player"
+          ? ""
+          : `，距你 ${Math.max(Math.abs(e.x - brief.player.x), Math.abs(e.y - brief.player.y))} 格`;
+      return `- ${e.id}｜${e.name}（${kind}）位于 (${e.x}, ${e.y})${e.facing ? `，朝${e.facing}` : ""}${e.style ? `，样式 ${e.style}` : ""}${gap}${hp}${e.buffs ? `，身上：${e.buffs}` : ""}${e.isDead ? "，已倒下" : ""}`;
     })
     .join("\n");
+
+  const itemLines =
+    brief.items && brief.items.length > 0
+      ? brief.items
+          .map((i) => `- ${i.name}（${i.type}，${i.count} 件）${i.desc ? `：${i.desc}` : ""}`)
+          .join("\n")
+      : "（随身没有可使的物件）";
 
   const system = `你是修仙战斗里的判定助手。玩家写下这一回合的行动，你只负责把话读懂，认清他要使哪一招、冲着谁、挪到哪一格。
 数值一概不用你算，也绝不要编造伤害、气血或灵力的增减。
 
-【玩家】${brief.player.name} 在 (${brief.player.x}, ${brief.player.y})，气血 ${brief.player.hp}/${brief.player.maxHp}，灵力 ${brief.player.mp}/${brief.player.maxMp}
+【玩家】${brief.player.name} 在 (${brief.player.x}, ${brief.player.y})，气血 ${brief.player.hp}/${brief.player.maxHp}，灵力 ${brief.player.mp}/${brief.player.maxMp}，体力 ${brief.stamina}/${brief.staminaMax}（这一回合至多挪 ${brief.moveLimit} 格）
 
 【他可以用的招式】
 ${skillLines}
 
 【场上的人】（战场 ${brief.width}×${brief.height} 格，坐标从 0 起算）
 ${entityLines}
+
+【随身物件】（丹药、符箓、材料之类；法宝是兵器，不能当消耗品使）
+${itemLines}
 ${brief.recent && brief.recent.length > 0 ? `\n【近几回的经过】\n${brief.recent.join("\n")}\n` : ""}${
     brief.story ? `\n【这一战之前的近几回】\n${brief.story}\n` : ""
   }
@@ -2092,11 +2146,15 @@ ${brief.recent && brief.recent.length > 0 ? `\n【近几回的经过】\n${brief
 {"skill": "招式名", "technique": "所属功法名", "target": "台上某人的 id", "move": {"x": 数字, "y": 数字}, "item": "所用的丹药或符箓名", "note": "这一手的其余要点，20 字以内"}
 - skill 必须原样照抄【他可以用的招式】里的招式名；若这一手不是出招（只是走位、防守、用物、喊话、拖延），skill 写空字符串
 - 标着【催运回灵】的招式是以气血换灵力的一路，不伤敌：玩家说运功、调息、吐纳、行功、回气、补灵力、恢复灵力、压住翻腾的真气，便选这一招；此类招式不必挑 target，target 写空字符串
+- 标着【守势】的招式不伤人：玩家说守、护、挡、退守、结阵自保，便选这一招，target 写空字符串
+- 招式与场上诸位各标着样式（长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法）；克与被克由系统算定，你只照实挑招、点 target，不必自己报倍率
 - 玩家只把意思说出来、没有点招名时，你也要照意思挑最贴的那一招，把 skill 写成那一招的原名；确实没有可用的招式才写空字符串
 - technique 写该招式所属功法名；skill 为空时也写空字符串
 - target 必须照抄【场上的人】里的 id，且只能挑敌人；认不准是谁便写空字符串
-- move 只在确实要挪窝时给，写出要去的那一格；不挪窝写 null。格子须在战场之内，并且不要写别人正占着的格
-- item 只在明确要用丹药或符箓时写名目，否则写空字符串
+- 每一招只能及于其范围之内的敌人：挑 target 须照招式后面写的范围，从够得着的人里挑；玩家点名的对手若在范围之外，target 仍照写他，并在 note 里点明「够不着」
+- 场上诸位都面朝一方（东、南、西、北）；玩家说要绕到背后、从侧方下手，target 照写，note 里点明「自背后」或「自侧方」，方位与伤害由系统照站位算定
+- move 只在确实要挪窝时给，写出要去的那一格；不挪窝写 null。格子须在战场之内，并且不要写别人正占着的格；这一步与眼下所在相距（横竖斜里最远的那一向）不得超过 ${brief.moveLimit} 格，体力不足 ${brief.stamina} 也挪不动
+- item 只在明确要用某一物时写名目，且须从【随身物件】里照抄，否则写空字符串；法宝是兵器，不算可用的物件
 - note 用一句话点出这一手的用意（如「侧身绕到敌后」「护住伤处」），没有便写空字符串`;
 
   const user = `请解析这一回合的行动：${brief.action}`;

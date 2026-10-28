@@ -141,6 +141,9 @@ import { PACT_KEPT_AFFINITY, PACT_OVERDUE_AFFINITY, pactLapsed, pactReady } from
 import { showsToday } from "@/data/theatre";
 import { pruneBuffs, shortenDebuffs } from "@/lib/buffTime";
 import { effectiveHpMax } from "@/lib/buffUtils";
+import { effectiveAttributes, recoveryFactors, wisdomTrainFactor, withPotential } from "@/lib/attributes";
+import { applyTechniqueGrowth } from "@/lib/techniqueGrowth";
+import { applyRealmGrowth } from "@/data/realms";
 import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
 import { BATH_RELIEF_PER_HOUR, bathCost, clampHours } from "@/data/bath";
 import { goodDesc, itemBaseValue } from "@/data/goods";
@@ -519,7 +522,7 @@ function validateAndFixPlayer(player: any): Player {
     return {
       ...initialPlayer,
       spiritRoots: [],
-      stats: { vitality: 50, soul: 50, wisdom: 50, agility: 50, heartScores: [] },
+      stats: withPotential({ vitality: 50, soul: 50, wisdom: 50, agility: 50, heartScores: [] }),
       meridians: [],
       timeline: [],
       buffs: [],
@@ -553,13 +556,14 @@ function validateAndFixPlayer(player: any): Player {
     description: typeof player.description === "string" ? player.description : "",
     personality: typeof player.personality === "string" ? player.personality : "",
     background: typeof player.background === "string" ? player.background : "",
-    stats: {
+    stats: withPotential({
       vitality: typeof stats.vitality === "number" ? stats.vitality : 50,
       soul: typeof stats.soul === "number" ? stats.soul : 50,
       wisdom: typeof stats.wisdom === "number" ? stats.wisdom : 50,
       agility: typeof stats.agility === "number" ? stats.agility : 50,
       heartScores: Array.isArray(stats.heartScores) ? stats.heartScores : [],
-    },
+      potential: typeof stats.potential === "object" && stats.potential !== null ? stats.potential : undefined,
+    }),
     spiritRoots: Array.isArray(player.spiritRoots) ? player.spiritRoots : [],
     meridians: Array.isArray(player.meridians) ? player.meridians : [],
     timeline: Array.isArray(player.timeline) ? player.timeline : [],
@@ -678,6 +682,7 @@ const initialState: GameState = {
       wisdom: 50,
       agility: 50,
       heartScores: [],
+      potential: { vitality: 90, soul: 90, wisdom: 90, agility: 90 },
     },
     meridians: [],
     timeline: [],
@@ -1026,7 +1031,13 @@ export const useGameStore = create<GameStore>()(
           log: [`切换心法为「${st.techniques.find((t) => t.id === id)?.name || "无"}」。`, ...st.log].slice(0, 30),
         })),
 
-      setPlayer: (player) => set({ player }),
+      setPlayer: (player) =>
+        set((st) => {
+          // 换境（开局选定高境界、或别处直接改 realmIndex）时，身量照境界倍率一并抬
+          const prev = Number(st.player?.realmIndex) || 0;
+          const next = Number(player?.realmIndex) || 0;
+          return { player: next > prev ? applyRealmGrowth(player, prev, next) : player };
+        }),
 
       addLog: (msg) =>
         set((s) => ({ log: [msg, ...s.log].slice(0, 30) })),
@@ -1153,26 +1164,26 @@ export const useGameStore = create<GameStore>()(
         const success = Math.random() < Math.min(0.95, Math.max(0.1, baseSuccess));
 
         if (success) {
-          const realmBonus = 100 + s.player.realmIndex * 50;
-          set((st) => ({
-            player: {
-              ...st.player,
-              realmIndex: st.player.realmIndex + 1,
-              // 冲关要耗去积攒的修为，修为才不会变成一个只看不用的数字
-              cultivation: Math.max(0, st.player.cultivation - nextRealm.cultivationNeeded),
-              lifespanMax: st.player.lifespanMax + 80,
-              hpMax: st.player.hpMax + 150 + realmBonus,
-              mpMax: st.player.mpMax + 100 + realmBonus,
-              spiritMax: st.player.spiritMax + 50 + realmBonus,
-              hp: st.player.hpMax + 150 + realmBonus,
-              mp: st.player.mpMax + 100 + realmBonus,
-              spirit: st.player.spiritMax + 50 + realmBonus,
-            },
-            log: [
-              `天降甘霖，灵台清明，破入 ${nextRealm.name}${nextRealm.stage}！`,
-              ...st.log,
-            ].slice(0, 30),
-          }));
+          set((st) => {
+            // 破境之后连身量一并抬：气血、灵力、神识与四条根基照境界倍率见长
+            const grown = applyRealmGrowth(st.player, st.player.realmIndex, st.player.realmIndex + 1);
+            return {
+              player: {
+                ...grown,
+                realmIndex: st.player.realmIndex + 1,
+                // 冲关要耗去积攒的修为，修为才不会变成一个只看不用的数字
+                cultivation: Math.max(0, st.player.cultivation - nextRealm.cultivationNeeded),
+                lifespanMax: st.player.lifespanMax + 80,
+                hp: grown.hpMax,
+                mp: grown.mpMax,
+                spirit: grown.spiritMax,
+              },
+              log: [
+                `天降甘霖，灵台清明，破入 ${nextRealm.name}${nextRealm.stage}！`,
+                ...st.log,
+              ].slice(0, 30),
+            };
+          });
           // 修为类机缘若正指着这一层，破关之后便算办到
           get().settleRealmQuests();
         } else {
@@ -2468,7 +2479,9 @@ EFFECT: [效果描述]`,
           });
           // 自家宅邸里的「聚灵」之屋，把这一处的修炼效率再抬一抬
           const manorSpirit = manorBonusOf(st.manorPlots, "聚灵");
-          const gain = cultivationGain(hours, eff.mul * (1 + manorSpirit));
+          // 悟性高的人一点就透，同样坐这几个时辰，进度走得快些
+          const wisdomFactor = wisdomTrainFactor(effectiveAttributes(player).wisdom);
+          const gain = cultivationGain(hours, eff.mul * (1 + manorSpirit) * wisdomFactor);
           if (gain <= 0) return { gain: 0, name: "", eff };
           // 有主修心法便修心法，没有就修最先习得的那一门
           const list = Array.isArray(techniques) ? techniques : [];
@@ -2485,6 +2498,8 @@ EFFECT: [效果描述]`,
           const after = Math.min(max, before + gain);
           const real = after - before;
           techniques = list.map((t, i) => (i === at ? { ...t, proficiency: after } : t));
+          // 功法又修深了一重，四条根基里该长的那一条跟着挪一截
+          player = { ...player, stats: applyTechniqueGrowth(list, techniques, player.stats) };
           gainCultivation(real);
           return { gain: real, name: target.name || "", eff };
         };
@@ -4184,7 +4199,7 @@ EFFECT: [效果描述]`,
             writable: opts?.writable,
           });
           // 首次获得心法时自动生效，否则玩家不打开功法面板手动切换就一直是「未定心法」
-          const nextPlayer = { ...next.player };
+          let nextPlayer = { ...next.player };
           // 叙事若把时辰推过去了，到点的状态同一笔账里就散去，别等到下一轮
           nextPlayer.buffs = pruneBuffs(nextPlayer.buffs, next.currentTime ?? st.currentTime);
           if (!nextPlayer.activeHeartTechnique) {
@@ -4207,6 +4222,18 @@ EFFECT: [效果描述]`,
           if (profGain > 0) {
             nextPlayer.cultivation = (Number(nextPlayer.cultivation) || 0) + profGain;
           }
+          // 叙事里写到破境，身量也照境界倍率一并抬：气血、灵力、神识与四条根基
+          const prevRealmIndex = Number(st.player.realmIndex) || 0;
+          const nextRealmIndex = Number(nextPlayer.realmIndex) || 0;
+          if (nextRealmIndex > prevRealmIndex) {
+            nextPlayer = applyRealmGrowth(nextPlayer, prevRealmIndex, nextRealmIndex);
+          }
+          // 功法修深了重数，根基跟着长一截；潜力一并补齐，免得旧档没有这一项
+          nextPlayer.stats = applyTechniqueGrowth(
+            st.techniques,
+            next.techniques,
+            withPotential(nextPlayer.stats),
+          );
           // 叙事可以写"你启程去了金陵"，但只有落在标点表里的 id 才认，免得光标飘到地图外
           const nextPlace = getMarker(next.currentPlaceId) ? next.currentPlaceId : st.currentPlaceId;
           const moved = nextPlace !== st.currentPlaceId;
@@ -4348,8 +4375,11 @@ EFFECT: [效果描述]`,
         }),
 
       trainAt: (techniqueId, hours, mul) => {
-        // 宅邸里的「演武」之屋，练功进益也照它加成
-        const gain = cultivationGain(hours, mul * (1 + manorBonusOf(get().manorPlots, "演武")));
+        // 宅邸里的「演武」之屋，练功进益也照它加成；悟性高的，同样的时辰走得更远
+        const gain = cultivationGain(
+          hours,
+          mul * (1 + manorBonusOf(get().manorPlots, "演武")) * wisdomTrainFactor(effectiveAttributes(get().player).wisdom),
+        );
         if (gain <= 0) return 0;
         let real = 0;
         set((st) => {
@@ -4365,9 +4395,15 @@ EFFECT: [效果描述]`,
           const before = Number(target.proficiency) || 0;
           const after = Math.min(max, before + gain);
           real = after - before;
+          const nextList = list.map((t, i) => (i === at ? { ...t, proficiency: after } : t));
           return {
-            techniques: list.map((t, i) => (i === at ? { ...t, proficiency: after } : t)),
-            player: { ...st.player, cultivation: cultivation + real },
+            techniques: nextList,
+            player: {
+              ...st.player,
+              cultivation: cultivation + real,
+              // 修过一重，根基跟着长一截
+              stats: applyTechniqueGrowth(list, nextList, st.player.stats),
+            },
           };
         });
         return real;
@@ -4689,13 +4725,14 @@ EFFECT: [效果描述]`,
         if (action === "打坐" || action === "参悟" || action === "演练") {
           const h = Math.min(12, Math.max(1, Math.trunc(Number(hours) || 1)));
           const bonus = manorBonusOf(st.manorPlots, need[action]);
-          const gain = cultivationGain(h, 1 + bonus);
+          const player = { ...st.player };
+          // 悟性高的，同样的时辰进度走得快些
+          const gain = cultivationGain(h, (1 + bonus) * wisdomTrainFactor(effectiveAttributes(player).wisdom));
           const list = Array.isArray(st.techniques) ? st.techniques : [];
           const target =
             list.find((t) => t.id === techniqueId) ??
             list.find((t) => t.id === st.player.activeHeartTechnique) ??
             list[0];
-          const player = { ...st.player };
           let techniques = list;
           let real = gain;
           let label = "修为";
@@ -4708,7 +4745,10 @@ EFFECT: [效果描述]`,
             label = `「${target.name}」`;
           }
           player.cultivation = (Number(player.cultivation) || 0) + real;
+          // 这一坐又修深了几重，根基跟着长一截
+          player.stats = applyTechniqueGrowth(list, techniques, player.stats);
           // 打坐是吐纳周天，坐久了气血、灵力、神识都慢慢回上来；参悟与演练不动这一笔
+          const rec = recoveryFactors(player, techniques);
           const rest =
             action === "打坐"
               ? cultivationRecovery({
@@ -4719,6 +4759,10 @@ EFFECT: [效果描述]`,
                   mpMax: player.mpMax,
                   spirit: player.spirit,
                   spiritMax: player.spiritMax,
+                  // 体魄定气血、神魂定神识；灵力看当前心法的品阶与经脉贯通
+                  hpFactor: rec.hp,
+                  mpFactor: rec.mp,
+                  spiritFactor: rec.spirit,
                 })
               : null;
           if (rest) {
@@ -5888,7 +5932,7 @@ EFFECT: [效果描述]`,
           }
         };
         set({
-          player: clone(snap.player),
+          player: validateAndFixPlayer(clone(snap.player)),
           techniques: Array.isArray(snap.techniques) ? clone(snap.techniques) : [],
           inventory: Array.isArray(snap.inventory) ? clone(snap.inventory) : [],
           spiritStones: clone(snap.spiritStones),

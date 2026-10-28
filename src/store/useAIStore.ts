@@ -13,6 +13,7 @@ import type {
   BattleState,
   BattleMap,
   BattleEntity,
+  BattleEntityBuff,
   BattleAftermath,
   BattleLootItem,
   CraftingResult,
@@ -51,8 +52,15 @@ import type {
 import { useGameStore } from "@/store/useGameStore";
 import { dishBuff, randomDish } from "@/data/dishes";
 import { attachQuestCarryItem, normalizeQuest, parseQuestKind, parseQuestOutcome, questItemGoalLabel, questRealmGoalLabel, questStoneGoalLabel } from "@/data/quests";
-import { buffCatalogBrief } from "@/data/buffs";
+import { buffCatalogBrief, buffFromTemplate, findBuffTemplate } from "@/data/buffs";
 import { effectiveHpMax } from "@/lib/buffUtils";
+import {
+  battleStaminaMax,
+  effectiveAttributes,
+  movementLimit,
+  MOVE_STAMINA_COST,
+  staminaRegen,
+} from "@/lib/attributes";
 import { LOCATIONS } from "@/data/locations";
 import { findFirstMarkerInText, getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { ESCORT_DAYS_RANGE, ESCORT_FEE_RANGE, clampEscort } from "@/data/escort";
@@ -115,7 +123,10 @@ import {
 } from "@/lib/promptBuilder";
 import { parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
 import { buildCatalogText } from "@/data/dataCatalog";
-import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
+import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, isHeartConversion, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
+import { enemiesInRange, rangeLabel, skillRange } from "@/data/battleRange";
+import { facingOf, strikeAngle } from "@/lib/battleFacing";
+import { styleMatchup, techniqueStyleOf } from "@/data/combatStyles";
 import { isNpcAround, isNpcLocationKnown, migrateRelation, relationTags } from "@/data/npcGen";
 import { REALMS, REALM_NAMES, canTalkTo } from "@/data/mockData";
 import {
@@ -1056,8 +1067,11 @@ const INITIAL_BATTLE: BattleState = {
   errorMsg: "",
   context: [],
   incense: { stick: 1, progress: 0 },
+  stamina: 80,
+  staminaMax: 80,
   aftermath: null,
   sectWar: null,
+  options: [],
 };
 
 /**
@@ -1540,11 +1554,23 @@ function mergeBattleEntities(
   if (!Array.isArray(fromModel) || fromModel.length === 0) return local;
   const ownedSet = new Set(owned);
   const merged = fromModel.map((e) => {
-    if (!ownedSet.has(e.id)) return e;
     const mine = local.find((l) => l.id === e.id);
-    return mine
-      ? { ...e, hp: mine.hp, maxHp: mine.maxHp, isDead: mine.isDead, position: mine.position }
-      : e;
+    if (!mine) return e;
+    // 本地判定的状态不随模型的回报丢掉：0 伤害的纯负面招式也靠这一笔留下
+    const base: BattleEntity = {
+      ...e,
+      facing: e.facing ?? mine.facing,
+      style: e.style ?? mine.style,
+      buffs: Array.isArray(mine.buffs) ? mine.buffs : e.buffs,
+    };
+    if (!ownedSet.has(e.id)) return base;
+    return {
+      ...base,
+      hp: mine.hp,
+      maxHp: mine.maxHp,
+      isDead: mine.isDead,
+      position: mine.position,
+    };
   });
   // 模型漏报的人照旧留在场上，免得凭空少了一位
   for (const l of local) {
@@ -1574,6 +1600,34 @@ function withoutDuplicateVitals(
     if (hpSpent > 0 && op.op === "-" && path === "player.hp" && amount === hpSpent) return false;
     return true;
   });
+}
+
+/**
+ * 守势抵掉的固定伤害：先从 OPS 里减 player.hp 的那几笔里扣，扣完为止。
+ * 只抵正面来的伤，方位由叙事那一步判过，这里只管照数减。
+ */
+function applyGuardToOps(ops: DataOp[], guard: number): DataOp[] {
+  const total = Math.max(0, Math.round(Number(guard) || 0));
+  if (total <= 0) return ops;
+  let left = total;
+  const out: DataOp[] = [];
+  for (const op of ops) {
+    if (op.kind !== "modify") {
+      out.push(op);
+      continue;
+    }
+    const path = String(op.path || "").replace(/\s+/g, "");
+    if (path !== "player.hp" || op.op !== "-") {
+      out.push(op);
+      continue;
+    }
+    const amount = Math.abs(Number(op.value) || 0);
+    const cut = Math.min(left, amount);
+    left -= cut;
+    const rest = amount - cut;
+    if (rest > 0) out.push({ ...op, value: String(rest) });
+  }
+  return out;
 }
 
 /**
@@ -6308,6 +6362,11 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
       },
 
       startBattle: (map) => {
+        // 体力上限照开战这一刻的体力（vitality）算，buff 压过的也算在内
+        const staminaMax = battleStaminaMax(effectiveAttributes(useGameStore.getState().player).vitality);
+        // 阵上诸位先各站定朝向：自己人朝南，敌人朝北
+        const seedFacing = (list: BattleEntity[]) =>
+          list.map((e) => ({ ...e, facing: e.facing ?? (e.type === "enemy" ? "北" : "南") }));
         set((st) => ({
           // 战斗面板就在问道窗口里，窗口没开着便先把它叫开，
           // 不然从宗门建筑里挑起的这一场非刷新看不见
@@ -6315,11 +6374,13 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           battle: {
             ...st.battle,
             isActive: true,
-            map: map || {
-              width: 10,
-              height: 10,
-              entities: [],
-            },
+            map: map
+              ? { ...map, entities: seedFacing(map.entities) }
+              : {
+                  width: 10,
+                  height: 10,
+                  entities: [],
+                },
             round: 1,
             turn: "player",
             narrative: "",
@@ -6327,6 +6388,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             errorMsg: "",
             context: [],
             incense: { stick: 1, progress: 0 },
+            stamina: staminaMax,
+            staminaMax,
             // 新起的一场，不带着上一场的收尾与宗门战的影子
             aftermath: null,
             sectWar: null,
@@ -6424,13 +6487,21 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           role === "attacker"
             ? [...ourSide, ...foe.units]
             : [...ourSide, ...(ourArray ? [ourArray] : []), ...foe.units];
+        const staminaMax = battleStaminaMax(effectiveAttributes(player).vitality);
 
         set((st) => ({
           isStoryOpen: true,
           battle: {
             ...st.battle,
             isActive: true,
-            map: { width: 10, height: 10, entities },
+            map: {
+              width: 10,
+              height: 10,
+              entities: entities.map((e) => ({
+                ...e,
+                facing: e.facing ?? (e.type === "enemy" ? "北" : "南"),
+              })),
+            },
             round: 1,
             turn: "player",
             narrative: "",
@@ -6438,7 +6509,10 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             errorMsg: "",
             context: [],
             incense: { stick: 1, progress: 0 },
+            stamina: staminaMax,
+            staminaMax,
             aftermath: null,
+            options: [],
             // 认得出对手才记这一战是要发落的宗门战；认不出便只当寻常厮杀
             sectWar: opponentId
               ? { opponentId, opponentName: foeName, targetKind: kind, role }
@@ -6529,13 +6603,23 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         const skillPalette = unlockedSkills.map(({ technique, skill }) => ({
           techniqueName: technique.name,
           skillName: skill.name,
+          style: techniqueStyleOf(technique),
           mpCost: Math.max(0, Math.round(skill.mpCost || 0)),
           hpCost: Math.max(0, Math.round(skill.hpCost || 0)),
           mpRestore: Math.max(0, Math.round(skill.mpRestore || 0)),
           damage: Math.max(0, Math.round(skill.damage || 0)),
           cooldown: Math.max(0, Math.round(skill.cooldown || 0)),
+          guard: Math.max(0, Math.round(Number(skill.guard) || 0)),
           effect: (skill.effects || [])
             .map((e) => e.description || `${e.stat || "属性"}${e.value ?? ""}`)
+            .join("、"),
+          range: rangeLabel(skillRange(skill, technique.category)),
+          buffs: (Array.isArray(skill.buffs) ? skill.buffs : [])
+            .map((b) => {
+              const tpl = findBuffTemplate(b.id);
+              return tpl ? `${tpl.name}（${b.target === "self" ? "自身" : "敌方"}）` : "";
+            })
+            .filter(Boolean)
             .join("、"),
         }));
         const skillBrief =
@@ -6550,6 +6634,19 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             })
             .join("；") || "无";
 
+        // 守势招式单列一份：被动触发时照最高那一招的一半减伤
+        const guardBrief =
+          unlockedSkills
+            .filter(({ skill }) => Number(skill.guard) > 0)
+            .map(
+              ({ technique, skill }) =>
+                `${technique.name}·${skill.name}（减伤 ${Math.round(Number(skill.guard) || 0)}，耗灵 ${Math.max(
+                  0,
+                  Math.round(Number(skill.mpCost) || 0),
+                )}）`,
+            )
+            .join("；") || "无";
+
         const playerId =
           battleState.map.entities.find((e) => e.type === "player")?.id ?? "player";
         const playerEntity = battleState.map.entities.find((e) => e.id === playerId);
@@ -6558,6 +6655,10 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           1,
           Math.trunc(Number(playerEntity?.maxHp) || effectiveHpMax(player)),
         );
+
+        // 四条根基先过一道临时状态：buff 压过的那一截也算数，且不受潜力所限
+        const attrs = effectiveAttributes(player);
+        const moveLimit = movementLimit(attrs.agility);
 
         // 第一步：请模型把这一句行动读懂——使哪一招、打谁、往哪儿挪。只解析参数，不碰数值
         let intent: BattleIntent = {
@@ -6593,9 +6694,22 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
                 hp: e.hp,
                 maxHp: e.maxHp,
                 isDead: e.isDead,
+                facing: facingOf(e),
+                style: e.style,
+                buffs: (Array.isArray(e.buffs) ? e.buffs : [])
+                  .map((b) => `${b.name}（余 ${b.duration} 柱）`)
+                  .join("、"),
               })),
               width: battleState.map.width,
               height: battleState.map.height,
+              moveLimit,
+              stamina: battleState.stamina,
+              staminaMax: battleState.staminaMax,
+              // 随身物件也报一份：丹药、符箓、材料都算，法宝是兵器不在此列
+              items: inventory
+                .filter((i) => i.type !== "法宝" && Number(i.count) > 0)
+                .slice(0, 30)
+                .map((i) => ({ name: i.name, type: i.type, count: Number(i.count) || 0, desc: i.desc })),
               recent: battleState.context.slice(-4),
               story: storyBrief,
             }),
@@ -6622,10 +6736,10 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           mp: player.mp,
           maxMp: player.mpMax,
           stats: {
-            vitality: player.stats.vitality,
-            soul: player.stats.soul,
-            wisdom: player.stats.wisdom,
-            agility: player.stats.agility,
+            vitality: attrs.vitality,
+            soul: attrs.soul,
+            wisdom: attrs.wisdom,
+            agility: attrs.agility,
           },
           heartScores: player.stats.heartScores,
           meridians: player.meridians,
@@ -6638,18 +6752,207 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             })
           : null;
 
-        // 这一招落在谁头上：模型写的是名字也认，认不出便就近取一个活着的敌人
-        const targetId = cast
-          ? resolveBattleTarget(battleState.map.entities, playerId, intent.target)
-          : null;
+        // 守势：主动施展且灵力够，便得全额减免；这一回合力有不逮，攻击一概忽略
+        const guardSkillValue = matchedSkill
+          ? Math.max(0, Math.round(Number(matchedSkill.skill.guard) || 0))
+          : 0;
+        const activeGuard = guardSkillValue > 0 && cast?.usable ? guardSkillValue : 0;
+
+        // 这一回合能挪多远，先由身法定一个上限，再看体力够不够付这一步
+        const myPos = {
+          x: playerEntity?.position.x ?? 0,
+          y: playerEntity?.position.y ?? 0,
+        };
+        let moveTo =
+          intent.move && Number.isFinite(intent.move.x) && Number.isFinite(intent.move.y)
+            ? intent.move
+            : null;
+        let moveNote = "";
+        let staminaLeft = Math.max(0, Number(battleState.stamina) || 0);
+        if (moveTo) {
+          const dist = Math.max(Math.abs(moveTo.x - myPos.x), Math.abs(moveTo.y - myPos.y));
+          const occupied = battleState.map.entities.some(
+            (o) =>
+              o.id !== playerId &&
+              !o.isDead &&
+              o.position.x === moveTo!.x &&
+              o.position.y === moveTo!.y,
+          );
+          if (dist <= 0) {
+            moveTo = null;
+          } else if (dist > moveLimit) {
+            moveNote = `身法只够一回合挪 ${moveLimit} 格，这一步要挪 ${dist} 格，挪不到，仍站在原地。`;
+            moveTo = null;
+          } else if (occupied) {
+            moveNote = "那一格已经有人站着，挪不过去，仍站在原地。";
+            moveTo = null;
+          } else if (staminaLeft < dist * MOVE_STAMINA_COST) {
+            moveNote = `体力只剩 ${staminaLeft}，挪这 ${dist} 格不够，仍站在原地。`;
+            moveTo = null;
+          } else {
+            staminaLeft -= dist * MOVE_STAMINA_COST;
+          }
+        }
+
+        // 招式范围：以出手那一刻脚下为心，先把谁在范围之内判清楚。
+        // 说了要挪窝的，若那一格空着、也还挪得动，便照挪过去之后的位置算。
+        const origin = moveTo ?? myPos;
+        const convertCast = matchedSkill
+          ? isHeartConversion(matchedSkill.technique, matchedSkill.skill)
+          : false;
+        // 只对自己使的功夫（护体、聚气之类）不冲人去，也就不必论远近；
+        // 伤害、负面效果与挂在敌方身上的状态，都算冲人去的
+        const hasFoeBuff = matchedSkill
+          ? (Array.isArray(matchedSkill.skill.buffs) ? matchedSkill.skill.buffs : []).some(
+              (b) => b.target === "enemy",
+            )
+          : false;
+        const aimsAtFoe =
+          !activeGuard && cast !== null && (cast.damage > 0 || cast.debuffs.length > 0 || hasFoeBuff);
+        const castRange =
+          matchedSkill && !convertCast && aimsAtFoe
+            ? skillRange(matchedSkill.skill, matchedSkill.technique.category)
+            : null;
+        const reachable = castRange
+          ? enemiesInRange(
+              battleState.map.entities,
+              origin,
+              castRange,
+              battleState.map.width,
+              battleState.map.height,
+            )
+          : [];
+        // 这一招落在谁头上：点名的人够得着便打他；够不着便落空，不自动改打旁人
+        let targetId: string | null = null;
+        let rangeNote = "";
+        if (cast && castRange) {
+          const asked = (intent.target || "").trim();
+          const foe = asked
+            ? battleState.map.entities.find(
+                (e) =>
+                  e.type === "enemy" &&
+                  !e.isDead &&
+                  (e.id === asked || e.name === asked || asked.includes(e.name) || e.name.includes(asked)),
+              )
+            : undefined;
+          if (foe) {
+            if (reachable.some((e) => e.id === foe.id)) {
+              targetId = foe.id;
+            } else {
+              rangeNote = `范围：这一招及于${rangeLabel(castRange)}，${foe.name}却在范围之外，够不着，这一招落了空。`;
+            }
+          } else if (reachable.length > 0) {
+            targetId = resolveBattleTarget(reachable, playerId, "");
+          } else {
+            rangeNote = `范围：这一招及于${rangeLabel(castRange)}，此刻范围之内没有敌人，这一招无处可落。`;
+          }
+        }
+
+        // 从哪一侧攻入、两式如何相克：背后与侧方更见便宜，样式相克另给一倍率，皆由本地算定
+        const targetEntity = targetId
+          ? battleState.map.entities.find((e) => e.id === targetId)
+          : undefined;
+        const angle =
+          cast && targetEntity && cast.damage > 0 ? strikeAngle(origin, targetEntity) : null;
+        const styleMatch =
+          cast && targetEntity && cast.damage > 0
+            ? styleMatchup(
+                matchedSkill ? techniqueStyleOf(matchedSkill.technique) : null,
+                targetEntity.style,
+              )
+            : null;
+        let appliedCast = cast;
+        if (appliedCast && cast && cast.damage > 0) {
+          const angleFactor = angle?.factor ?? 1;
+          const styleFactor = styleMatch?.factor ?? 1;
+          if (angleFactor !== 1 || styleFactor !== 1) {
+            const damage = Math.max(1, Math.round(cast.damage * angleFactor * styleFactor));
+            appliedCast = {
+              ...cast,
+              damage,
+              breakdown: [
+                ...cast.breakdown,
+                ...(angle && angleFactor !== 1 ? [`${angle.label}出手 ×${angleFactor}`] : []),
+                ...(styleMatch && styleFactor !== 1
+                  ? [`样式：${styleMatch.label} ×${styleFactor}`]
+                  : []),
+              ],
+              summary: cast.summary.replace(/造成 \d+ 点伤害/, `造成 ${damage} 点伤害`),
+            };
+          }
+        }
 
         const local = applyBattleCast({
           entities: battleState.map.entities,
           playerId,
-          cast,
+          cast: appliedCast,
           targetId,
-          moveTo: intent.move,
+          moveTo,
         });
+
+        // 招式使成之后，照招式上写定的那几条状态落到己方或对手头上
+        const skillBuffDuration = matchedSkill
+          ? Math.min(12, Math.max(1, Math.round(Number(matchedSkill.skill.debuffDuration) || 3)))
+          : 3;
+        const skillBuffSource = matchedSkill ? `招式「${matchedSkill.skill.name}」` : "招式";
+        const selfBuffLines: string[] = [];
+        const enemyBuffs: BattleEntityBuff[] = [];
+        if (cast?.usable && matchedSkill) {
+          for (const ref of Array.isArray(matchedSkill.skill.buffs) ? matchedSkill.skill.buffs : []) {
+            const tpl = findBuffTemplate(ref.id);
+            if (!tpl) continue;
+            if (ref.target === "self") {
+              if (tpl.isDebuff) continue;
+              // 同名状态已在身上便续上柱数，不另添一条重样的
+              const gs = useGameStore.getState();
+              const current = Array.isArray(gs.player.buffs) ? gs.player.buffs : [];
+              const existing = current.find((b) => b.id === tpl.id && b.durationType === "incense");
+              if (existing) {
+                gs.setPlayer({
+                  ...gs.player,
+                  buffs: current.map((b) =>
+                    b.id === tpl.id
+                      ? {
+                          ...b,
+                          duration: Math.max(Number(b.duration) || 0, skillBuffDuration),
+                          stacks: Math.min(b.maxStacks, (Number(b.stacks) || 1) + 1),
+                        }
+                      : b,
+                  ),
+                });
+              } else {
+                gs.setPlayer({
+                  ...gs.player,
+                  buffs: [
+                    ...current,
+                    buffFromTemplate(tpl, {
+                      durationType: "incense",
+                      duration: skillBuffDuration,
+                      source: skillBuffSource,
+                    }),
+                  ],
+                });
+              }
+              selfBuffLines.push(`${tpl.name}（余 ${skillBuffDuration} 柱）`);
+            } else if (tpl.isDebuff && targetId) {
+              enemyBuffs.push({
+                id: tpl.id,
+                name: tpl.name,
+                duration: skillBuffDuration,
+                isDebuff: true,
+              });
+            }
+          }
+        }
+        // 这一招落在对手身上的状态，记在那一位名下，随香递减
+        let battleEntities = local.entities;
+        if (enemyBuffs.length > 0 && targetId) {
+          battleEntities = battleEntities.map((e) =>
+            e.id === targetId
+              ? { ...e, buffs: [...(Array.isArray(e.buffs) ? e.buffs : []), ...enemyBuffs] }
+              : e,
+          );
+        }
 
         // 灵力照判定的数当场扣掉，不让模型再算一遍
         if (local.mpSpent > 0) {
@@ -6674,19 +6977,35 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           ? local.entities.find((e) => e.id === targetId)
           : undefined;
         const settleLines: string[] = [];
-        if (cast) {
-          settleLines.push(`招式：《${cast.techniqueName}》·${cast.skillName}`);
-          settleLines.push(`判定依据：${cast.breakdown.join("、")}`);
-          settleLines.push(`结算：${cast.summary}`);
+        if (appliedCast) {
+          settleLines.push(`招式：《${appliedCast.techniqueName}》·${appliedCast.skillName}`);
+          settleLines.push(`判定依据：${appliedCast.breakdown.join("、")}`);
+          settleLines.push(`结算：${appliedCast.summary}`);
+          if (angle) settleLines.push(`出手方位：自${angle.label}攻入（伤害 ×${angle.factor}）`);
+          if (styleMatch) settleLines.push(`样式：${styleMatch.label}（伤害 ×${styleMatch.factor}）`);
           // 心法催运不冲着谁去，便不报目标
-          if (targetId && cast.hpCost <= 0) settleLines.push(`目标：${settledTarget?.name ?? targetId}`);
-          if (cast.damage > 0 && settledTarget && typeof settledTarget.hp === "number") {
+          if (targetId && appliedCast.hpCost <= 0) settleLines.push(`目标：${settledTarget?.name ?? targetId}`);
+          if (appliedCast.damage > 0 && settledTarget && typeof settledTarget.hp === "number") {
             settleLines.push(
               `目标气血：已由系统扣至 ${settledTarget.hp}${
                 typeof settledTarget.maxHp === "number" ? `/${settledTarget.maxHp}` : ""
               }${settledTarget.isDead ? "，气绝倒地" : ""}`,
             );
           }
+        }
+        if (castRange) {
+          settleLines.push(`招式范围：${rangeLabel(castRange)}`);
+          if (rangeNote) {
+            settleLines.push(`${rangeNote}叙事须写成落空，不得写成打中，也不要再扣目标气血。`);
+          } else {
+            settleLines.push(`范围内敌人：${reachable.map((e) => e.name).join("、") || "无"}`);
+          }
+        }
+        if (activeGuard > 0) {
+          settleLines.push(
+            `守势：你以「${matchedSkill?.skill.name ?? "守势"}」护住周身，这一合可抵 ${activeGuard} 点伤害（已由系统算定）。`,
+          );
+          settleLines.push("这一回合你全力守御，力有不逮，任何攻击都无从谈起——叙事里不得写成你打中敌人。");
         }
         if (local.mpSpent > 0) {
           settleLines.push(`你的灵力：已由系统扣至 ${Math.max(0, player.mp - local.mpSpent)}`);
@@ -6701,9 +7020,21 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             `你的灵力：因这一门心法已由系统回至 ${Math.min(player.mpMax, player.mp + local.mpRestored)}（这一笔不要再写进 OPS）`,
           );
         }
-        if (intent.move && local.owned.includes(playerId)) {
-          settleLines.push(`走位：你已移步至 (${intent.move.x}, ${intent.move.y})`);
+        if (moveTo && local.owned.includes(playerId)) {
+          settleLines.push(`走位：你已移步至 (${moveTo.x}, ${moveTo.y})`);
         }
+        if (moveNote) settleLines.push(`走位未能成行：${moveNote}`);
+        if (selfBuffLines.length > 0) {
+          settleLines.push(`己方状态：已由系统落下 ${selfBuffLines.join("、")}（不要重复写进 OPS）`);
+        }
+        if (enemyBuffs.length > 0 && settledTarget) {
+          settleLines.push(
+            `敌方状态：${settledTarget.name} 身上落下 ${enemyBuffs.map((b) => `「${b.name}」`).join("、")}，各余 ${skillBuffDuration} 柱`,
+          );
+        }
+        settleLines.push(
+          `体力：这一合用去 ${Math.max(0, battleState.stamina - staminaLeft)}，尚余 ${staminaLeft}/${battleState.staminaMax}（一回合至多挪 ${moveLimit} 格，每格耗 ${MOVE_STAMINA_COST}）。`,
+        );
         if (intent.item) settleLines.push(`用物：${intent.item}`);
         if (intent.note) settleLines.push(`其余要点：${intent.note}`);
 
@@ -6725,16 +7056,19 @@ ${PROSE_STYLE}
 - 回合：${battleState.round}
 - 当前行动方：${battleState.turn}
 - 玩家状态：气血=${Math.min(player.hp, battleMaxHp)}/${battleMaxHp}，灵力=${player.mp}/${player.mpMax}
-- 玩家属性：体魄=${player.stats.vitality}，神魂=${player.stats.soul}，悟性=${player.stats.wisdom}，身法=${player.stats.agility}
+- 玩家属性：体魄=${attrs.vitality}，神魂=${attrs.soul}，悟性=${attrs.wisdom}，身法=${attrs.agility}
+- 体力：${staminaLeft}/${battleState.staminaMax}（挪一格耗 ${MOVE_STAMINA_COST} 点，一回合至多挪 ${moveLimit} 格；体力不够便挪不动）
 - 玩家境界：${player.cultivation}
 - 玩家法宝：${playerWeapons.map((w) => `${w.name}(${w.grade})`).join(", ") || "无"}
 - 当前功法：${techniques.map((t) => `${t.name}(${t.grade})：${t.description}`).join("；") || "无"}
 - 已解锁的招式：${skillBrief}
+- 守势招式：${guardBrief}
 - 当前心法：${player.activeHeartTechnique ? techniques.find((t) => t.id === player.activeHeartTechnique)?.name || player.activeHeartTechnique : "无"}
 - 玩家符箓：${playerTalismans.map((t) => `${t.name}(${t.count}张)`).join(", ") || "无"}
 - 玩家丹药：${playerPills.map((p) => `${p.name}(${p.count}颗)`).join(", ") || "无"}
+- 随身物件（法宝为兵器，不当消耗品用）：${inventory.filter((i) => Number(i.count) > 0).map((i) => `${i.name}×${i.count}(${i.type})`).join("，") || "无"}
 - 香：第 ${battleState.incense.stick} 柱，已烧到 ${battleState.incense.progress}%
-${beast ? `- 随身灵兽：${beastBrief(beast)}（图上 id 为 beast，type 为 ally，是你这一边的）\n` : ""}${allyBrief ? `- 同行队友（图上 type 为 ally，是你这一边的人）：${allyBrief}\n` : ""}- 地图实体：${JSON.stringify(local.entities)}
+${beast ? `- 随身灵兽：${beastBrief(beast)}（图上 id 为 beast，type 为 ally，是你这一边的）\n` : ""}${allyBrief ? `- 同行队友（图上 type 为 ally，是你这一边的人）：${allyBrief}\n` : ""}- 地图实体：${JSON.stringify(battleEntities)}
 ${storyBrief ? `\n【这一战之前的近几回】（前因、对手的来历与所在之处都在这几段里，叙事须与之相合）\n${storyBrief}\n` : ""}
 战斗上下文：
 ${battleState.context.join("\n")}
@@ -6751,6 +7085,9 @@ ${battleState.context.join("\n")}
 倾力对拼、施放大术、久战缠斗，一柱香烧得快。你每回合都要报出这一柱香烧到了多少：
 比上一回合多烧三到六成是常情，一招定生死时可以一次烧满。烧满 100% 即换下一柱，
 换柱时照实报 100（或更高的数），不要直接写下一柱的小数字。
+【朝向】entities 里每位都带 facing（东、南、西、北），写明面朝哪一方，你照叙事把它更新；从背后攻入伤害更重（×1.3）、侧方 ×1.15、正面不增。这一笔由系统照站位算定，你只照实写「绕到背后」「侧身递剑」这类经过，不必自己报倍数。
+【样式】entities 的 style 是这一位的出手样式（长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法）；两式相克由系统算定，你只照实写「一寸长一寸强」「横刀封住直刺」这类经过，不必自己报倍率，也不要改写 style 掩人耳目。
+【守势】若敌方这一合从正面攻在你身上，且【守势招式】里有你使得出的，可在 BATTLE 块里报 -- guard: true：系统照最高那一招的一半减伤。背后、侧方来的伤不算；这一合没被打中、或没有守势招式，报 false。玩家主动施展守势的那一回合由系统全额减伤，此处不必再报。
 ${beast ? `【随身灵兽】图上的 beast 是你随身带着的${beast.name}，也是你这一边的。它${beast.temper || "自有性子"}，这一场里你每一段叙事都要写出它做了什么——扑咬、示警、绕到敌后、护在你身前、被打退，都行；招式要像一头兽，别让它说人话。它只受敌人所伤，你的招式不要伤及它，照实更新它的位置与气血，倒下了标 isDead 即可。亲疏越厚，它越肯为你搏命；亲疏还浅，就许它畏缩、走神、抢食。\n` : ""}${allies.length > 0 ? `【同行队友】图上的 ally 是同行的自己人，与你并肩，不是敌人。你的每一条叙事里都要写出他们这一回合做了什么（出招、护你、喝骂、吃亏都行），并照实更新他们的位置与气血；他们若是倒下，标 isDead 即可，不要写成敌人。他们只受敌人所伤，你的招式不要伤及他们。\n` : ""}【战斗中的持续状态】战斗里留下的临时状态一律按柱香计：用 ADD player.buffs 写入，
 payload 写 {"id":"名录里的id","durationType":"incense","duration":柱数}，柱数取 1 到 12；
 名目、类别、图标与效力都照下面这张名录来，不许自编。它由烧过的柱数自行递减，
@@ -6758,18 +7095,28 @@ payload 写 {"id":"名录里的id","durationType":"incense","duration":柱数}�
 【状态名录】
 ${buffCatalogBrief()}
 
+【这一合的进言】叙事的末尾另备三条下一回合可取的出手，各 8 至 20 字，写清使哪一招、冲着谁，或往哪儿挪一步；
+三条各走一路（抢攻、守势、走位调息之类），不要三条都是一个意思。这几条只填进玩家的输入栏，成不成仍由下一回合照规矩走。
+
 输出格式：
 <<<BATTLE>>>
 -- narrative: 战斗叙事文本
 -- incense: 45
--- entities: [{"id":"player","name":"玩家","type":"player","position":{"x":5,"y":5},"hp":100,"maxHp":100},{"id":"enemy1","name":"妖兽","type":"enemy","position":{"x":7,"y":5},"hp":80,"maxHp":100}]
+-- guard: false
+-- entities: [{"id":"player","name":"玩家","type":"player","position":{"x":5,"y":5},"hp":100,"maxHp":100,"facing":"南","style":"拳脚"},{"id":"enemy1","name":"妖兽","type":"enemy","position":{"x":7,"y":5},"hp":80,"maxHp":100,"facing":"北","style":"刺击短兵"}]
 <<<END>>>
 <<<OPS>>>
 MODIFY player.hp - 20
 MODIFY player.mp - 10
 <<<END>>>
+<<<QUICK>>>
+欺身半步，以「……」直取那使刀的
+敛势护住左肋，退开两步，再运功回气
+挺剑斜刺，逼他让开中路，再顺势挪到左翼
+<<<END>>>
 
-注意：OPS 块必须写在 BATTLE 块的 <<<END>>> 之后，不要嵌在 BATTLE 块内部。`,
+注意：OPS 块必须写在 BATTLE 块的 <<<END>>> 之后，不要嵌在 BATTLE 块内部；
+进言另起一块 <<<QUICK>>>，写在 OPS 之后，每条占一行，不编号、不加点号。`,
           },
           {
             role: "user" as const,
@@ -6792,8 +7139,20 @@ MODIFY player.mp - 10
             mpRestored: local.mpRestored,
             hpSpent: local.hpSpent,
           });
-          if (modelOps.length > 0) {
-            useGameStore.getState().applyOps(modelOps);
+          // 守势：主动施展得全额；被动由叙事报 guard: true，只抵一半，且只认正面来攻
+          const passiveGuard =
+            activeGuard > 0 || !parsed.battleGuard
+              ? 0
+              : Math.round(
+                  unlockedSkills.reduce(
+                    (max, e) => Math.max(max, Math.round(Number(e.skill.guard) || 0)),
+                    0,
+                  ) * 0.5,
+                );
+          const guardCut = activeGuard > 0 ? activeGuard : passiveGuard;
+          const guardedOps = applyGuardToOps(modelOps, guardCut);
+          if (guardedOps.length > 0) {
+            useGameStore.getState().applyOps(guardedOps);
           }
 
           // OPS 块之外，叙事里另有的实事也经路由认一遍：得的东西、结的仇、损的法器
@@ -6805,7 +7164,7 @@ MODIFY player.mp - 10
 
           // 走位、别处的增减听模型的；凡本地判定定下的那几位，气血与位次以本地为准
           const mergedEntities = mergeBattleEntities(
-            local.entities,
+            battleEntities,
             parsed.battleEntities,
             local.owned,
           );
@@ -6815,8 +7174,34 @@ MODIFY player.mp - 10
           const incense = advanceIncense(battleState.incense, parsed.battleIncense);
           if (incense.burned > 0) useGameStore.getState().burnIncense(incense.burned);
 
+          // 敌人身上的状态随香递减，烧完的自行散去；这一合刚落的先不算这一柱
+          const freshBuffIds = new Set(enemyBuffs.map((b) => b.id));
+          const entitiesAfterBurn =
+            incense.burned > 0
+              ? mergedEntities.map((e) => {
+                  if (!Array.isArray(e.buffs) || e.buffs.length === 0) return e;
+                  return {
+                    ...e,
+                    buffs: e.buffs
+                      .map((b) =>
+                        freshBuffIds.has(b.id)
+                          ? b
+                          : { ...b, duration: b.duration - incense.burned },
+                      )
+                      .filter((b) => b.duration > 0),
+                  };
+                })
+              : mergedEntities;
+          // 挪过步便扣体力，这一合下来再缓一口气
+          const staminaNext = Math.min(
+            battleState.staminaMax,
+            Math.max(0, staminaLeft) + staminaRegen(battleState.staminaMax),
+          );
+
           const actionContext = `回合${battleState.round} 玩家行动：${action}`;
-          const resultContext = parsed.narrative ? `结果：${parsed.narrative}` : "";
+          const resultContext = parsed.narrative
+            ? `结果：${parsed.narrative}${guardCut > 0 ? `（守势减伤 ${guardCut}）` : ""}`
+            : "";
 
           set((st) => {
             const newContext = [...st.battle.context, actionContext, resultContext].slice(-20);
@@ -6829,14 +7214,18 @@ MODIFY player.mp - 10
                 turn: "player",
                 round: st.battle.round + 1,
                 narrative: parsed.narrative || st.battle.narrative,
-                map: { ...st.battle.map, entities: mergedEntities },
+                map: { ...st.battle.map, entities: entitiesAfterBurn },
                 isActive: !(allEnemiesDead || playerDead),
+                stamina: staminaNext,
+                staminaMax: battleState.staminaMax,
                 // 分出胜负便立起收尾；未分胜负时保持原样（多为 null）
                 aftermath: allEnemiesDead || playerDead
                   ? makeAftermath(allEnemiesDead)
                   : st.battle.aftermath ?? null,
                 context: newContext,
                 incense: { stick: incense.stick, progress: incense.progress },
+                // 模型照这一合的战况备下的几条出手，摆在界面上供玩家取用
+                options: parsed.quickDecisions.slice(0, 3),
               },
             };
           });
@@ -6862,8 +7251,20 @@ MODIFY player.mp - 10
                 mpRestored: local.mpRestored,
                 hpSpent: local.hpSpent,
               });
-              if (modelOps.length > 0) {
-                useGameStore.getState().applyOps(modelOps);
+              // 同主力模型那条路：守势照减
+              const passiveGuard =
+                activeGuard > 0 || !parsed.battleGuard
+                  ? 0
+                  : Math.round(
+                      unlockedSkills.reduce(
+                        (max, e) => Math.max(max, Math.round(Number(e.skill.guard) || 0)),
+                        0,
+                      ) * 0.5,
+                    );
+              const guardCut = activeGuard > 0 ? activeGuard : passiveGuard;
+              const guardedOps = applyGuardToOps(modelOps, guardCut);
+              if (guardedOps.length > 0) {
+                useGameStore.getState().applyOps(guardedOps);
               }
 
               // 同主力模型那条路：叙事里另有的实事也经路由认一遍
@@ -6875,7 +7276,7 @@ MODIFY player.mp - 10
 
               // 同主力模型那条路：本地判定定下的那几位，气血与位次以本地为准
               const mergedEntities = mergeBattleEntities(
-                local.entities,
+                battleEntities,
                 parsed.battleEntities,
                 local.owned,
               );
@@ -6884,8 +7285,33 @@ MODIFY player.mp - 10
               const incense = advanceIncense(battleState.incense, parsed.battleIncense);
               if (incense.burned > 0) useGameStore.getState().burnIncense(incense.burned);
 
+              // 同主力模型那条路：敌人身上的状态随香递减，刚落的先不算这一柱
+              const freshBuffIds = new Set(enemyBuffs.map((b) => b.id));
+              const entitiesAfterBurn =
+                incense.burned > 0
+                  ? mergedEntities.map((e) => {
+                      if (!Array.isArray(e.buffs) || e.buffs.length === 0) return e;
+                      return {
+                        ...e,
+                        buffs: e.buffs
+                          .map((b) =>
+                            freshBuffIds.has(b.id)
+                              ? b
+                              : { ...b, duration: b.duration - incense.burned },
+                          )
+                          .filter((b) => b.duration > 0),
+                      };
+                    })
+                  : mergedEntities;
+              const staminaNext = Math.min(
+                battleState.staminaMax,
+                Math.max(0, staminaLeft) + staminaRegen(battleState.staminaMax),
+              );
+
               const actionContext = `回合${battleState.round} 玩家行动：${action}`;
-              const resultContext = parsed.narrative ? `结果：${parsed.narrative}` : "";
+              const resultContext = parsed.narrative
+                ? `结果：${parsed.narrative}${guardCut > 0 ? `（守势减伤 ${guardCut}）` : ""}`
+                : "";
 
               set((st) => {
                 const newContext = [...st.battle.context, actionContext, resultContext].slice(-20);
@@ -6897,14 +7323,18 @@ MODIFY player.mp - 10
                     turn: "player",
                     round: st.battle.round + 1,
                     narrative: parsed.narrative || st.battle.narrative,
-                    map: { ...st.battle.map, entities: mergedEntities },
+                    map: { ...st.battle.map, entities: entitiesAfterBurn },
                     isActive: !(allEnemiesDead || playerDead),
+                    stamina: staminaNext,
+                    staminaMax: battleState.staminaMax,
                     // 同主力模型那条路：分出胜负便立起收尾
                     aftermath: allEnemiesDead || playerDead
                       ? makeAftermath(allEnemiesDead)
                       : st.battle.aftermath ?? null,
                     context: newContext,
                     incense: { stick: incense.stick, progress: incense.progress },
+                    // 同主力模型那条路：进言也一并收下
+                    options: parsed.quickDecisions.slice(0, 3),
                   },
                 };
               });

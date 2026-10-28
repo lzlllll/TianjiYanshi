@@ -78,40 +78,39 @@ export function BattleMap({ map }: BattleMapProps) {
 
   return (
     <div className="relative">
-      {/* 阵图不跟着面板的宽度一路涨大，收在一个方寸之内居中摆着，窄窗矮窗都放得下 */}
-      <div
-        className="mx-auto grid w-full max-w-[340px] gap-0.5 rounded-lg border border-paper-400/20 bg-ink-900/60 p-1.5 sm:p-2"
-        style={{
-          gridTemplateColumns: `repeat(${map.width}, 1fr)`,
-          aspectRatio: `${map.width} / ${map.height}`,
-        }}
-      >
-        {grid.map((row, y) =>
-          row.map((entity, x) => (
-            <div
-              key={`${x}-${y}`}
-              className={cn(
-                "relative flex items-center justify-center border border-paper-400/10 rounded-sm transition-all",
-                getEntityClass(entity)
-              )}
-            >
-              {getEntityIcon(entity) && (
-                <span className="text-sm font-bold sm:text-base">
-                  {getEntityIcon(entity)}
-                </span>
-              )}
-              {getEntityName(entity) && (
-                <span
-                  title={entity.name}
-                  className="absolute -top-1 -left-1 rounded bg-ink-900/80 px-0.5 font-serif text-[10px] leading-tight text-paper-300/80"
-                >
-                  {getEntityName(entity).slice(0, 2)}
-                </span>
-              )}
-              {getHpBar(entity)}
-            </div>
-          ))
-        )}
+      {/* 阵图格子定死 64×64：比从前大出一倍，宽了便横向滚动，不至于挤成一团 */}
+      <div className="w-full overflow-x-auto">
+        <div
+          className="mx-auto grid w-max gap-0.5 rounded-lg border border-paper-400/20 bg-ink-900/60 p-2"
+          style={{ gridTemplateColumns: `repeat(${map.width}, 64px)` }}
+        >
+          {grid.map((row, y) =>
+            row.map((entity, x) => (
+              <div
+                key={`${x}-${y}`}
+                className={cn(
+                  "relative flex h-16 w-16 items-center justify-center border border-paper-400/10 rounded-sm transition-all",
+                  getEntityClass(entity)
+                )}
+              >
+                {getEntityIcon(entity) && (
+                  <span className="text-lg font-bold sm:text-xl">
+                    {getEntityIcon(entity)}
+                  </span>
+                )}
+                {getEntityName(entity) && (
+                  <span
+                    title={`${entity.name}${entity.style ? `｜${entity.style}` : ""}${entity.facing ? `｜朝${entity.facing}` : ""}`}
+                    className="absolute -top-1 -left-1 rounded bg-ink-900/80 px-0.5 font-serif text-[10px] leading-tight text-paper-300/80"
+                  >
+                    {getEntityName(entity).slice(0, 2)}
+                  </span>
+                )}
+                {getHpBar(entity)}
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 font-serif text-xs">

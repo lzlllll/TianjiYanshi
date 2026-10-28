@@ -8,6 +8,7 @@ import { manorKey } from "@/data/npcGen";
 import { dishBuff, dishesFor } from "@/data/dishes";
 import { HOURS_PER_DAY, MAX_LODGE_HOURS, ROOMS, lodgeCost, lodgeDurationLabel, recoverAmount, roomById } from "@/data/rooms";
 import { cultivationGain, cultivationRecovery, localCultivationFrom } from "@/data/cultivation";
+import { recoveryFactors } from "@/lib/attributes";
 import { cn } from "@/lib/utils";
 import { formatGameTime, formatTimeShort, shiftGameTime } from "@/lib/gameTime";
 import { effectiveHpMax } from "@/lib/buffUtils";
@@ -206,6 +207,7 @@ export function DiningModal({
     const mul = localCultivationFrom({ facilities: sect?.facilities }).mul;
     const gain = Math.max(0, Math.round(cultivationGain(spent, mul) * 0.5));
     // 静坐也是吐纳，气血、灵力、神识照样慢慢回上来
+    const rec = recoveryFactors(player, useGameStore.getState().techniques);
     const rest = cultivationRecovery({
       hours: spent,
       hp: player.hp,
@@ -214,6 +216,10 @@ export function DiningModal({
       mpMax: player.mpMax,
       spirit: player.spirit,
       spiritMax: player.spiritMax,
+      // 体魄定气血、神魂定神识；灵力看当前心法的品阶与经脉贯通
+      hpFactor: rec.hp,
+      mpFactor: rec.mp,
+      spiritFactor: rec.spirit,
     });
 
     setPlayer({

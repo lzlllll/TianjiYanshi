@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { HOURS_PER_DAY } from "@/data/rooms";
 import { cultivationGain, cultivationRecovery } from "@/data/cultivation";
 import { estateEfficiency, RENT_TENANT_KINDS } from "@/data/estates";
+import { recoveryFactors } from "@/lib/attributes";
 import { manorBonuses, restRatio } from "@/data/manors";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import { manorSceneId } from "@/data/map";
@@ -173,6 +174,7 @@ function EstateInterior({ estate }: { estate: Estate }) {
   const cultivate = () => {
     if (ruined || rented) return;
     const gain = Math.round(cultivationGain(hours, eff * 1.5));
+    const rec = recoveryFactors(player, useGameStore.getState().techniques);
     const rest = cultivationRecovery({
       hours,
       hp: player.hp,
@@ -181,6 +183,10 @@ function EstateInterior({ estate }: { estate: Estate }) {
       mpMax: player.mpMax,
       spirit: player.spirit,
       spiritMax: player.spiritMax,
+      // 体魄定气血、神魂定神识；灵力看当前心法的品阶与经脉贯通
+      hpFactor: rec.hp,
+      mpFactor: rec.mp,
+      spiritFactor: rec.spirit,
     });
     setPlayer({
       ...player,
