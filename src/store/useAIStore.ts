@@ -60,8 +60,9 @@ import { clampCraftOffer, CRAFT_DAYS_RANGE, CRAFT_PRICE_RANGE } from "@/data/cra
 import { normalizePact } from "@/data/pacts";
 import { reputationBrief } from "@/data/reputation";
 import { beastBrief } from "@/data/beast";
-import { PLAYER_SHOP_KINDS, shopMonthlyExpense } from "@/data/playerShops";
-import type { CustomFacility, ShopFacility, ShopGood, ShopKind } from "@/data/types";
+import { PLAYER_SHOP_KINDS, shopMonthlyExpense, shopMonthlyIncome } from "@/data/playerShops";
+import { lodgeDurationLabel } from "@/data/rooms";
+import type { CustomFacility, ShopBusiness, ShopFacility, ShopGood, ShopKind } from "@/data/types";
 import { clampCustomFacility } from "@/data/sectFacilities";
 import { pinNarrativeQuest } from "@/data/broker";
 import { sectNameCore } from "@/data/sectSites";
@@ -350,6 +351,48 @@ const INITIAL_AUCTION: AuctionState = {
   opening: "",
   errorMsg: "",
 };
+
+/**
+ * 铺面里与人的往来正在写的那一段。
+ * 各处窗口自行认 key，只认自己那一处；写完便收回，不留在存档里。
+ */
+export interface ShopStream {
+  /** 哪一处在写：haggle、manageShop、dine、lodge、appraise、npc、party */
+  key: string;
+  /** 已经写出来的正文 */
+  text: string;
+  /** 思维链，只作「正在想」的提示 */
+  reasoning: string;
+}
+
+const INITIAL_SHOP_STREAM: ShopStream = { key: "", text: "", reasoning: "" };
+
+/**
+ * 从还在写的那段 JSON 里抠出某个字符串字段的已写部分。
+ * 店里的回话多半裹在 {"reply":"…"} 里，直接把 JSON 摆给玩家看不成样子。
+ */
+function partialStringField(raw: string, field: string): string {
+  const at = raw.indexOf(`"${field}"`);
+  if (at < 0) return "";
+  const colon = raw.indexOf(":", at + field.length + 2);
+  if (colon < 0) return "";
+  const open = raw.indexOf('"', colon);
+  if (open < 0) return "";
+  let out = "";
+  for (let i = open + 1; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      const next = raw[i + 1];
+      if (next === undefined) break;
+      out += next === "n" ? "\n" : next === "t" ? "\t" : next;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  return out;
+}
 
 /**
  * 照奇遇名下记着的那一卷，把这扇窗摆回先前的样子。
@@ -1310,6 +1353,8 @@ interface AIStore {
 
   /** 宝物阁的拍卖：到日子进铺子才开的那一扇窗 */
   auction: AuctionState;
+  /** 铺面与对话里正在写的那一段：各处窗口认 key，只取自己那一份 */
+  shopStream: ShopStream;
   /** 时间往前走过一段，掷一掷有没有哪家宝物阁放出拍卖的消息 */
   maybeSpawnAuction: (hours: number) => void;
   /** 定下一场拍卖：本地挑宝物阁、定日子，拍品与来客等开场再写 */
@@ -1393,6 +1438,7 @@ interface AIStore {
     text: string;
     goods?: ShopGood[];
     facilities?: ShopFacility[];
+    businesses?: ShopBusiness[];
     monthlyIncome?: number;
     monthlyExpense?: number;
   }>;
@@ -2405,6 +2451,37 @@ async function runNpcMonthlyTick(settings: AISettings, dayLabel: string, signal:
 }
 
 /**
+ * 流式调用的一套手钩：写出来的字先进 shopStream，再由各处窗口取用。
+ * field 给了便只从 JSON 里抠那一个字段，省得把花括号摆给玩家看。
+ */
+function shopStreamHooks(
+  set: (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void,
+  key: string,
+  field?: string,
+  /** 写到这一串便打住：末尾那些记号不必给玩家看 */
+  cutAt?: string,
+) {
+  return {
+    onDelta: (_delta: string, full: string) => {
+      const body = cutAt && full.includes(cutAt) ? full.slice(0, full.indexOf(cutAt)) : full;
+      const text = field ? partialStringField(body, field) : body;
+      set((s) => ({
+        shopStream: { key, text, reasoning: s.shopStream?.key === key ? s.shopStream.reasoning : "" },
+      }));
+    },
+    onReasoning: (_delta: string, fullReasoning: string) => {
+      set((s) => ({
+        shopStream: {
+          key,
+          text: s.shopStream?.key === key ? s.shopStream.text : "",
+          reasoning: fullReasoning,
+        },
+      }));
+    },
+  };
+}
+
+/**
  * 拍卖落槌：定下谁得了，钱货两清，再请叙事写一段收场。
  * 玩家执牌便从囊中扣灵石、把东西收进行囊；客人执牌则只记一句。
  */
@@ -2490,6 +2567,7 @@ export const useAIStore = create<AIStore>()(
       randomEvent: INITIAL_RANDOM_EVENT,
       adventure: INITIAL_ADVENTURE,
       auction: INITIAL_AUCTION,
+      shopStream: INITIAL_SHOP_STREAM,
       battle: INITIAL_BATTLE,
       isDeveloperMode: false,
       randomEventDisabled: false,
@@ -2671,18 +2749,24 @@ export const useAIStore = create<AIStore>()(
           place: shop.place,
           culture: shop.culture,
           cash: shop.cash,
-          monthlyIncome: shop.monthlyIncome,
+          monthlyIncome: shopMonthlyIncome(shop),
           monthlyExpenseTotal: shopMonthlyExpense(shop),
           goods: shop.goods,
           facilities: shop.facilities,
+          businesses: shop.businesses ?? [],
           instruction: instruction.trim(),
         };
-        const raw = await chatWithModel(settings, settings.flashModel, buildShopManagePrompt(brief, questSettleHint("text")), {
-          timeoutMs: 60000,
-          jsonMode: true,
-          retries: 1,
-          temperature: 0.8,
-        });
+        const stream = shopStreamHooks(set, "manageShop", "text");
+        let raw = "";
+        try {
+          raw = await chatWithModelStream(settings, settings.flashModel, buildShopManagePrompt(brief, questSettleHint("text")), {
+            timeoutMs: 60000,
+            temperature: 0.8,
+            ...stream,
+          });
+        } finally {
+          set({ shopStream: INITIAL_SHOP_STREAM });
+        }
         let parsed: any = null;
         try {
           parsed = JSON.parse(raw.replace(/```json/gi, "").replace(/```/g, "").trim());
@@ -2694,6 +2778,7 @@ export const useAIStore = create<AIStore>()(
           text: settleDoneMark(String(parsed?.text ?? "").trim()),
           goods: Array.isArray(parsed?.goods) ? (parsed.goods as ShopGood[]) : undefined,
           facilities: Array.isArray(parsed?.facilities) ? (parsed.facilities as ShopFacility[]) : undefined,
+          businesses: Array.isArray(parsed?.businesses) ? (parsed.businesses as ShopBusiness[]) : undefined,
           monthlyIncome: finite(parsed?.monthlyIncome),
           monthlyExpense: finite(parsed?.monthlyExpense),
         };
@@ -5039,16 +5124,22 @@ ${craft ? 12 : 11}. ${isDining
           if (!checkBox.check) return;
           const passed = checkBox.check;
           try {
-            const followRaw = await chatWithModel(
-              settings,
-              model,
-              [
-                ...prompt,
-                { role: "assistant" as const, content: spoken },
-                { role: "system" as const, content: checkPassedInstruction(profile, passed) },
-              ],
-              { timeoutMs: 120000, signal, retries: 1 },
-            );
+            const stream = shopStreamHooks(set, "npc", undefined, "<<<");
+            let followRaw = "";
+            try {
+              followRaw = await chatWithModelStream(
+                settings,
+                model,
+                [
+                  ...prompt,
+                  { role: "assistant" as const, content: spoken },
+                  { role: "system" as const, content: checkPassedInstruction(profile, passed) },
+                ],
+                { timeoutMs: 120000, signal, ...stream },
+              );
+            } finally {
+              set({ shopStream: INITIAL_SHOP_STREAM });
+            }
             if (signal.aborted) return;
 
             const followSpoken = await reviewNarrative(
@@ -5080,11 +5171,17 @@ ${craft ? 12 : 11}. ${isDining
         };
 
         try {
-          const raw = await chatWithModel(settings, settings.proModel, prompt, {
-            timeoutMs: 120000,
-            signal,
-            retries: 2,
-          });
+          const stream = shopStreamHooks(set, "npc", undefined, "<<<");
+          let raw = "";
+          try {
+            raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+              timeoutMs: 120000,
+              signal,
+              ...stream,
+            });
+          } finally {
+            set({ shopStream: INITIAL_SHOP_STREAM });
+          }
 
           if (signal.aborted) return;
 
@@ -5098,11 +5195,17 @@ ${craft ? 12 : 11}. ${isDining
           if (isNetworkError && settings.proModel !== settings.flashModel) {
             console.warn("[sendNPCMessage] Pro模型网络请求失败，尝试降级到Flash模型...");
             try {
-              const raw = await chatWithModel(settings, settings.flashModel, prompt, {
-                timeoutMs: 120000,
-                signal,
-                retries: 2,
-              });
+              const stream = shopStreamHooks(set, "npc", undefined, "<<<");
+              let raw = "";
+              try {
+                raw = await chatWithModelStream(settings, settings.flashModel, prompt, {
+                  timeoutMs: 120000,
+                  signal,
+                  ...stream,
+                });
+              } finally {
+                set({ shopStream: INITIAL_SHOP_STREAM });
+              }
 
               if (signal.aborted) return;
 
@@ -5461,10 +5564,16 @@ ${CRAFT_MARK}
               },
             ];
 
-            const raw = await chatWithModel(settings, settings.proModel, prompt, {
-              timeoutMs: 120000,
-              retries: 1,
-            });
+            const stream = shopStreamHooks(set, "party", undefined, "<<<");
+            let raw = "";
+            try {
+              raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+                timeoutMs: 120000,
+                ...stream,
+              });
+            } finally {
+              set({ shopStream: INITIAL_SHOP_STREAM });
+            }
             const checkBox: { check: SkillCheck | null; failed: SkillCheck | null } = { check: null, failed: null };
             const spoken = await reviewNarrative(
               settings,
@@ -5793,11 +5902,16 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
           },
         ];
 
-        const raw = await chatWithModel(settings, settings.proModel, prompt, {
-          timeoutMs: 90000,
-          retries: 1,
-          jsonMode: true,
-        });
+        const stream = shopStreamHooks(set, "dine", "narration");
+        let raw = "";
+        try {
+          raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+            timeoutMs: 90000,
+            ...stream,
+          });
+        } finally {
+          set({ shopStream: INITIAL_SHOP_STREAM });
+        }
 
         const parsed = parseJsonPayload(raw);
         const narration = settleDoneMark(
@@ -5818,11 +5932,12 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
         return { narration, rumors, ...scuttled };
       },
 
-      lodgeAt: async ({ shop, market, culture, room, roomDesc, days, words }) => {
+      lodgeAt: async ({ shop, market, culture, room, roomDesc, hours, words }) => {
         const { settings } = get();
         if (!aiReady(settings)) throw new Error("推演接口尚未接通。");
 
         const player = useGameStore.getState().player;
+        const spent = lodgeDurationLabel(hours);
 
         const prompt: import("@/lib/aiClient").ChatMessage[] = [
           {
@@ -5833,16 +5948,16 @@ ${checkInstruction()}这一行缀在 narration 的末尾，narration 之外不�
 【坊市】${market}
 【客栈】${shop}
 【住的房】${room}——${roomDesc}
-【住了几日】${days} 日
+【住了多久】${hours} 个时辰，合 ${spent}
 ${words ? `【睡前撂下的话】${words}\n` : ""}
-「${player.name}」在${shop}租下${room}，一住 ${days} 日。头一日还醒着的时候，他看过街上的样子；往后便是一觉一觉地睡过去，醒来又睡，睡醒又睡。
+「${player.name}」在${shop}租下${room}，一住 ${spent}。这段时辰他多半睡过去了，醒醒睡睡，偶尔睁眼看一看天光。
 
 请写一段 200~350 字的叙事，写这一觉睡到底之后醒来的光景：
 - 睡下之前外头是什么样，如今又是什么样——天色、街声、铺子开合、行人的疏密、气味与冷热的变化
-- 这几日里外头发生了些什么：谁家办事、市面上的东西涨了还是落了、路上多了什么人、客栈里换过几拨客人
+- 这一段里外头发生了些什么：谁家办事、市面上的东西涨了还是落了、路上多了什么人、客栈里换过几拨客人；住得短便写细微的变化，住得久才写得出人事更迭
 - 身子歇过来的那点松快：乏解了、气顺了，或是伤处仍不济事
 
-用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了几日」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。
+用第三人称古风白话，落笔要落在「世事自己往前走了，他错过去了一段」这层意味上，不要写成条目清单，不要出现「系统」「数据」「玩家」这类出戏的字眼。
 
 以 JSON 输出，不要有别的东西：
 {"narration":"这一觉的叙事正文"}
@@ -5854,11 +5969,16 @@ ${questSettleHint("narration")}`,
           },
         ];
 
-        const raw = await chatWithModel(settings, settings.proModel, prompt, {
-          timeoutMs: 90000,
-          retries: 1,
-          jsonMode: true,
-        });
+        const stream = shopStreamHooks(set, "lodge", "narration");
+        let raw = "";
+        try {
+          raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+            timeoutMs: 90000,
+            ...stream,
+          });
+        } finally {
+          set({ shopStream: INITIAL_SHOP_STREAM });
+        }
         const parsed = parseJsonPayload(raw);
         const text = settleDoneMark(String(parsed?.narration ?? "").trim() || raw.trim());
         // 店中若打听到一桩事、或一处野外去处，照问道那一套落账
@@ -5942,10 +6062,16 @@ ${questSettleHint()}
           },
         ];
 
-        const raw = await chatWithModel(settings, settings.proModel, prompt, {
-          timeoutMs: 90000,
-          retries: 1,
-        });
+        const stream = shopStreamHooks(set, "appraise", undefined, "<<<READING>>>");
+        let raw = "";
+        try {
+          raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+            timeoutMs: 90000,
+            ...stream,
+          });
+        } finally {
+          set({ shopStream: INITIAL_SHOP_STREAM });
+        }
 
         const reading = parseAppraisalReading(raw);
         return { narration: settleDoneMark(stripAppraisalReading(raw)), reading };
@@ -6076,11 +6202,16 @@ ${mystery
           { role: "user" as const, content: words },
         ];
 
-        const raw = await chatWithModel(settings, settings.proModel, prompt, {
-          timeoutMs: 60000,
-          retries: 1,
-          jsonMode: true,
-        });
+        const stream = shopStreamHooks(set, "haggle", "reply");
+        let raw = "";
+        try {
+          raw = await chatWithModelStream(settings, settings.proModel, prompt, {
+            timeoutMs: 60000,
+            ...stream,
+          });
+        } finally {
+          set({ shopStream: INITIAL_SHOP_STREAM });
+        }
 
         const parsed = parseJsonPayload(raw);
         const reply = settleDoneMark(

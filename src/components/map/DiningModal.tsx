@@ -6,8 +6,9 @@ import { ScrollCard } from "@/components/ui/ScrollCard";
 import { SealButton } from "@/components/ui/SealButton";
 import { manorKey } from "@/data/npcGen";
 import { dishBuff, dishesFor } from "@/data/dishes";
-import { HOURS_PER_DAY, MAX_LODGE_DAYS, ROOMS, lodgeCost, recoverAmount, roomById } from "@/data/rooms";
-import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
+import { HOURS_PER_DAY, MAX_LODGE_HOURS, ROOMS, lodgeCost, lodgeDurationLabel, recoverAmount, roomById } from "@/data/rooms";
+import { cultivationGain, cultivationRecovery, localCultivationFrom } from "@/data/cultivation";
+import { cn } from "@/lib/utils";
 import { formatGameTime, formatTimeShort, shiftGameTime } from "@/lib/gameTime";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import type { Dish } from "@/data/dishes";
@@ -55,6 +56,10 @@ export function DiningModal({
   const openNPCChat = useAIStore((s) => s.openNPCChat);
   const dineAt = useAIStore((s) => s.dineAt);
   const lodgeAt = useAIStore((s) => s.lodgeAt);
+  const shopStream = useAIStore((s) => s.shopStream);
+  // 这两处正写着的那一段：边写边给玩家看
+  const streamDine = shopStream.key === "dine" ? shopStream.text : "";
+  const streamLodge = shopStream.key === "lodge" ? shopStream.text : "";
 
   /** 是打尖还是住店；茶棚不留宿，只有客栈给这个 */
   const canLodge = live.kind === "客栈";
@@ -62,8 +67,9 @@ export function DiningModal({
   const [seated, setSeated] = useState<string | null>(null);
   const [pickedDish, setPickedDish] = useState<string>("");
   const [telling, setTelling] = useState<DineResult | null>(null);
-  const [lodged, setLodged] = useState<{ room: string; days: number } | null>(null);
-  const [days, setDays] = useState(1);
+  const [lodged, setLodged] = useState<{ room: string; hours: number } | null>(null);
+  /** 住几个时辰：一时辰起，最多三十日 */
+  const [hours, setHours] = useState(HOURS_PER_DAY);
   const [resting, setResting] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -125,15 +131,15 @@ export function DiningModal({
   const rent = (roomId: string) => {
     const room = roomById(roomId);
     if (!room) return;
-    const n = Math.max(1, Math.min(MAX_LODGE_DAYS, Math.trunc(days) || 1));
+    const n = Math.max(1, Math.min(MAX_LODGE_HOURS, Math.trunc(hours) || 1));
     const total = lodgeCost(room, n);
     if (!payStones(total)) {
       setError(`下品灵石不够，房钱要 ${total}。`);
       return;
     }
     setError("");
-    setLodged({ room: roomId, days: n });
-    addLog(`你在「${live.name}」租下${room.name}，一住 ${n} 日，付了 ${total} 下品灵石。`);
+    setLodged({ room: roomId, hours: n });
+    addLog(`你在「${live.name}」租下${room.name}，一住 ${lodgeDurationLabel(n)}，付了 ${total} 下品灵石。`);
   };
 
   /** 店中打听到的事，缀在叙事末尾一并说明 */
@@ -153,17 +159,17 @@ export function DiningModal({
     // 气血未过八成便是伤着，客栈里歇不出伤来，只能回灵力；
     // 上限照临时状态压过的那一道算，内伤未愈便补不到满
     const mayRestHp = maxHp > 0 && Math.min(player.hp, maxHp) / maxHp >= HP_REST_THRESHOLD;
-    const gainMp = recoverAmount(player.mpMax, room, lodged.days);
-    const gainHp = mayRestHp ? recoverAmount(maxHp, room, lodged.days) : 0;
+    const gainMp = recoverAmount(player.mpMax, room, lodged.hours);
+    const gainHp = mayRestHp ? recoverAmount(maxHp, room, lodged.hours) : 0;
 
     setPlayer({
       ...player,
       mp: Math.min(player.mpMax, player.mp + gainMp),
       hp: Math.min(maxHp, player.hp + gainHp),
     });
-    advanceTime(lodged.days * HOURS_PER_DAY);
+    advanceTime(lodged.hours);
     addLog(
-      `你在${live.name}的${room.name}歇了 ${lodged.days} 日，灵力回了 ${gainMp}，气血回了 ${gainHp}。` +
+      `你在${live.name}的${room.name}歇了 ${lodgeDurationLabel(lodged.hours)}，灵力回了 ${gainMp}，气血回了 ${gainHp}。` +
         (mayRestHp ? "" : "伤还没养到八分，这一觉补不回气血。"),
     );
 
@@ -174,7 +180,7 @@ export function DiningModal({
         culture,
         room: room.name,
         roomDesc: room.desc,
-        days: lodged.days,
+        hours: lodged.hours,
       });
       setResting(withScuttleNote(res));
       setLodged(null);
@@ -196,14 +202,34 @@ export function DiningModal({
 
     setBusy(true);
     setError("");
-    const hours = lodged.days * HOURS_PER_DAY;
+    const spent = lodged.hours;
     const mul = localCultivationFrom({ facilities: sect?.facilities }).mul;
-    const gain = Math.max(0, Math.round(cultivationGain(hours, mul) * 0.5));
+    const gain = Math.max(0, Math.round(cultivationGain(spent, mul) * 0.5));
+    // 静坐也是吐纳，气血、灵力、神识照样慢慢回上来
+    const rest = cultivationRecovery({
+      hours: spent,
+      hp: player.hp,
+      hpMax: maxHp,
+      mp: player.mp,
+      mpMax: player.mpMax,
+      spirit: player.spirit,
+      spiritMax: player.spiritMax,
+    });
 
-    setPlayer({ ...player, cultivation: (Number(player.cultivation) || 0) + gain });
-    advanceTime(hours);
+    setPlayer({
+      ...player,
+      cultivation: (Number(player.cultivation) || 0) + gain,
+      hp: rest.hp,
+      mp: rest.mp,
+      spirit: rest.spirit,
+    });
+    advanceTime(spent);
+    const restNote =
+      rest.hpGain + rest.mpGain + rest.spiritGain > 0
+        ? `气血回 ${rest.hpGain}、灵力回 ${rest.mpGain}、神识回 ${rest.spiritGain}；`
+        : "";
     addLog(
-      `你在${live.name}的${room.name}静坐 ${lodged.days} 日，参悟不辍，修为 +${gain}；` +
+      `你在${live.name}的${room.name}静坐 ${lodgeDurationLabel(spent)}，参悟不辍，修为 +${gain}；${restNote}` +
         `客房清静到底不及山门，进益只有在宗门修炼之半。`,
     );
 
@@ -214,7 +240,7 @@ export function DiningModal({
         culture,
         room: room.name,
         roomDesc: `${room.desc}；这一回是闭门静坐，不是安睡`,
-        days: lodged.days,
+        hours: spent,
       });
       setResting(withScuttleNote(res));
       setLodged(null);
@@ -310,7 +336,7 @@ export function DiningModal({
                         onClick={() => rent(r.id)}
                         className="w-full py-1.5 text-xs mt-3"
                       >
-                        {taken ? `已租下 ${lodged?.days} 日` : "租下"}
+                        {taken && lodged ? `已租下 ${lodgeDurationLabel(lodged.hours)}` : "租下"}
                       </SealButton>
                     </ScrollCard>
                   );
@@ -318,21 +344,45 @@ export function DiningModal({
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <span className="font-serif text-xs text-paper-400/60">租几日</span>
+                <span className="font-serif text-xs text-paper-400/60">租几时辰</span>
                 <input
                   type="number"
                   min={1}
-                  max={MAX_LODGE_DAYS}
-                  value={days}
-                  onChange={(e) => setDays(Math.max(1, Math.min(MAX_LODGE_DAYS, Number(e.target.value) || 1)))}
+                  max={MAX_LODGE_HOURS}
+                  value={hours}
+                  onChange={(e) =>
+                    setHours(Math.max(1, Math.min(MAX_LODGE_HOURS, Math.trunc(Number(e.target.value)) || 1)))
+                  }
                   className="w-20 input-ink text-sm text-center"
                 />
                 <span className="font-serif text-[11px] text-paper-400/45">
-                  最多 {MAX_LODGE_DAYS} 日；租下后再点歇息
+                  {lodgeDurationLabel(hours)}；一时辰起，最多三十日
                 </span>
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { h: 1, label: "一时辰" },
+                    { h: 6, label: "半日" },
+                    { h: HOURS_PER_DAY, label: "一日" },
+                    { h: HOURS_PER_DAY * 3, label: "三日" },
+                  ].map((q) => (
+                    <button
+                      key={q.h}
+                      type="button"
+                      onClick={() => setHours(q.h)}
+                      className={cn(
+                        "rounded border px-2 py-0.5 font-serif text-[11px] transition",
+                        hours === q.h
+                          ? "border-gold-500 text-gold-400"
+                          : "border-gold-500/25 text-paper-400/60 hover:text-paper-200",
+                      )}
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
                 {lodged && room && (
                   <span className="font-serif text-xs text-gold-400/80 ml-auto">
-                    已租「{room.name}」{lodged.days} 日，共 {lodgeCost(room, lodged.days)} 灵石
+                    已租「{room.name}」{lodgeDurationLabel(lodged.hours)}，共 {lodgeCost(room, lodged.hours)} 灵石
                   </span>
                 )}
               </div>
@@ -344,6 +394,14 @@ export function DiningModal({
                     ? "气血还足，歇息能把两样都补回来。"
                     : "气血已跌破八成，伤了根本，客栈里只能补回灵力——气血得另想办法。"}
                 </p>
+                {busy && streamLodge && (
+                  <ScrollCard className="!p-4 mt-3">
+                    <h3 className="font-brush text-sm text-gold-400 tracking-widest mb-2">这一觉</h3>
+                    <p className="font-serif text-sm leading-relaxed text-paper-100 whitespace-pre-wrap">
+                      {streamLodge}
+                    </p>
+                  </ScrollCard>
+                )}
                 {resting && (
                   <ScrollCard className="!p-4 mt-3">
                     <h3 className="font-brush text-sm text-gold-400 tracking-widest mb-2">这一觉</h3>
@@ -450,6 +508,13 @@ export function DiningModal({
             <p className="font-serif text-xs text-paper-400/50 mt-5">先拣个空位坐下，再叫吃的。</p>
           )}
 
+          {busy && streamDine && (
+            <ScrollCard className="!p-4 mt-5">
+              <h3 className="font-brush text-sm text-gold-400 tracking-widest mb-2">这一顿</h3>
+              <p className="font-serif text-sm leading-relaxed text-paper-100 whitespace-pre-wrap">{streamDine}</p>
+            </ScrollCard>
+          )}
+
           {telling && (
             <ScrollCard className="!p-4 mt-5">
               <h3 className="font-brush text-sm text-gold-400 tracking-widest mb-2">这一顿</h3>
@@ -493,7 +558,7 @@ export function DiningModal({
 
           <p className="font-serif text-[11px] text-paper-400/40 leading-relaxed pt-4">
             {view === "lodge"
-              ? `住一日占十二个时辰；房钱按日算，租下之后点歇息才动身。`
+              ? `住店按时辰算，一时辰也住得，最多三十日；房钱照日价折成时辰价，租下之后点歇息才动身。`
               : "坐下点菜费一个时辰；位子上有人，点一下就能攀谈。"}
           </p>
         </div>
@@ -504,7 +569,9 @@ export function DiningModal({
               <>
                 <SealButton disabled={!lodged || busy} onClick={rest} className="px-4 py-2 text-sm">
                   {busy && <Loader2 size={13} className="mr-1 animate-spin" />}
-                  {lodged && room ? `歇息 ${lodged.days} 日（至 ${formatTimeShort(shiftGameTime(currentTime, lodged.days * HOURS_PER_DAY))}）` : "先租一间房"}
+                  {lodged && room
+                    ? `歇息 ${lodgeDurationLabel(lodged.hours)}（至 ${formatTimeShort(shiftGameTime(currentTime, lodged.hours))}）`
+                    : "先租一间房"}
                 </SealButton>
                 <SealButton
                   variant="ghost"
@@ -512,7 +579,7 @@ export function DiningModal({
                   onClick={train}
                   className="px-4 py-2 text-sm"
                 >
-                  {lodged ? `打坐修炼 ${lodged.days} 日` : "打坐修炼"}
+                  {lodged ? `打坐修炼 ${lodgeDurationLabel(lodged.hours)}` : "打坐修炼"}
                 </SealButton>
                 <span className="flex items-center gap-1 font-serif text-[11px] text-paper-400/45">
                   <BedDouble size={11} />

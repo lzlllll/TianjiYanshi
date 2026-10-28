@@ -29,6 +29,9 @@ export function AppraiseModal({
   const payStones = useGameStore((s) => s.payStones);
   const identifyItem = useGameStore((s) => s.identifyItem);
   const appraiseItem = useAIStore((s) => s.appraiseItem);
+  const shopStream = useAIStore((s) => s.shopStream);
+  // 行家正说着，边写边看
+  const streamText = shopStream.key === "appraise" ? shopStream.text : "";
 
   const [pickedId, setPickedId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -170,6 +173,12 @@ export function AppraiseModal({
             )}
             {error && <p className="mt-2 font-serif text-[11px] text-cinnabar-400 leading-relaxed">{error}</p>}
           </ScrollCard>
+
+          {busy && streamText && (
+            <ScrollCard title="过眼" subtitle="行家正说着">
+              <p className="font-serif text-sm leading-relaxed text-paper-100 whitespace-pre-wrap">{streamText}</p>
+            </ScrollCard>
+          )}
 
           {result && (
             <ScrollCard title="过眼" subtitle={result.revealed ? "看明白了" : "没看明白"}>

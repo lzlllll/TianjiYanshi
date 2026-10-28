@@ -38,6 +38,9 @@ export function NPCChatModal() {
   const profile = npcChat.profiles.find((p) => p.npcId === activeNpcId);
   const relation = relations.find((r) => r.id === activeNpcId);
   const isTyping = npcChat.isTyping;
+  const shopStream = useAIStore((s) => s.shopStream);
+  // 对方正说着的话：边写边显示，写完整段再并进消息
+  const streamText = shopStream.key === "npc" || shopStream.key === "party" ? shopStream.text : "";
 
   // 同席的几个人；旧档或还没点过人时兜一个空
   const partyIds = useMemo(
@@ -382,11 +385,17 @@ export function NPCChatModal() {
                   {group ? "众" : profile?.name?.charAt(0) || "?"}
                 </div>
                 <div className="bg-gold-500/10 border border-gold-500/20 rounded-lg rounded-bl-none px-4 py-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" />
-                    <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" style={{ animationDelay: "0.1s" }} />
-                    <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" style={{ animationDelay: "0.2s" }} />
-                  </div>
+                  {streamText ? (
+                    <p className="font-serif text-sm text-paper-100 leading-relaxed whitespace-pre-wrap">
+                      {streamText}
+                    </p>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" />
+                      <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" style={{ animationDelay: "0.1s" }} />
+                      <span className="w-2 h-2 rounded-full bg-gold-400 animate-shimmer" style={{ animationDelay: "0.2s" }} />
+                    </div>
+                  )}
                 </div>
               </div>
             )}

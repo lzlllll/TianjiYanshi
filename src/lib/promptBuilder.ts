@@ -1896,6 +1896,8 @@ export interface ShopManageBrief {
   monthlyExpenseTotal: number;
   goods: { name: string; price: number; stock: number; desc?: string }[];
   facilities: { name: string; upkeep: number; effect?: string }[];
+  /** 现有的几门营生 */
+  businesses: { name: string; income: number; expense: number; desc?: string }[];
   /** 玩家这一回要办的事 */
   instruction: string;
 }
@@ -1914,11 +1916,14 @@ export function buildShopManagePrompt(brief: ShopManageBrief, questHint = ""): C
 月进项 ${brief.monthlyIncome} · 月开支合计 ${brief.monthlyExpenseTotal}（含各处设施的维持）
 货物：${brief.goods.length ? brief.goods.map((g) => `${g.name}${g.price}文×${g.stock}`).join("，") : "暂无"}
 设施：${brief.facilities.length ? brief.facilities.map((f) => `${f.name}（月耗${f.upkeep}）`).join("，") : "暂无"}
+营生：${brief.businesses.length ? brief.businesses.map((b) => `${b.name}（进${b.income}／耗${b.expense}）`).join("，") : "尚未分项，只有一笔总账"}
 
 【要求】
-- 只输出一个 JSON 对象：{"text": "叙事正文", "goods": [...], "facilities": [...], "monthlyIncome": 数字, "monthlyExpense": 数字}
+- 只输出一个 JSON 对象：{"text": "叙事正文", "goods": [...], "facilities": [...], "businesses": [...], "monthlyIncome": 数字, "monthlyExpense": 数字}
 - goods 与 facilities 要写【改动之后的完整清单】，不是只写新增的那几样；照玩家这一回的吩咐增减，没提到的照旧留着
 - goods 每项含 name、price（每件下品灵石）、stock（存货数）、desc；facilities 每项含 name、upkeep（每月要花的银子）、effect（管什么用）
+- businesses 是这间铺子靠什么挣钱的分项，写【改动之后的完整清单】，三到六项为宜，每项含 name（如 卖丹药、代客炼丹、租柜台）、income（月进项）、expense（月开销：人工、原料等）、desc（一句说明）；停办的写 active: false，仍留在册上
+- businesses 各项进项之和要与 monthlyIncome 对得上，开销之和要与 monthlyExpense 对得上；对不上时以 businesses 为准
 - monthlyExpense 只算铺面自身的开销（房租、人工等）；各处设施的 upkeep 另计，不要重复算进去
 - monthlyIncome 与 monthlyExpense 要跟铺子卖什么、置了什么设施相称；寻常小铺月进项几十到几百，别动不动上千
 - text 以第三人称写「你」，60 至 120 字，写出依着吩咐张罗的经过，末尾落到账面上（进项与开支各是多少）

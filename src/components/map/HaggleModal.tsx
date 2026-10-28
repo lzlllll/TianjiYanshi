@@ -56,7 +56,10 @@ export function HaggleModal({
   onClose: () => void;
 }) {
   const haggle = useAIStore((s) => s.haggleWithShopkeeper);
+  const shopStream = useAIStore((s) => s.shopStream);
   const inventory = useGameStore((s) => s.inventory);
+  // 掌柜这一句正写着：先摆出来，写完再并入往来
+  const streamText = shopStream.key === "haggle" ? shopStream.text : "";
 
   const buying = mode === "buy";
   // 耐心看掌柜的性子：相熟些的多听你磨两句
@@ -403,7 +406,16 @@ export function HaggleModal({
                   </div>
                 </div>
               ))}
-              {busy && (
+              {streamText && (
+                <div>
+                  <div className="inline-block max-w-[85%] text-left rounded-lg px-3 py-2 bg-gold-500/10 border border-gold-500/20 rounded-bl-none">
+                    <p className="font-serif text-sm text-paper-100 leading-relaxed whitespace-pre-wrap">
+                      {streamText}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {busy && !streamText && (
                 <div className="flex items-center gap-2 font-serif text-xs text-paper-400/60">
                   <Loader2 size={13} className="animate-spin text-gold-400" />
                   {keeper.name}正打算盘……

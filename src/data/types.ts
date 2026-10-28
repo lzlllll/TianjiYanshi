@@ -1760,6 +1760,19 @@ export interface ShopFacility {
   effect?: string;
 }
 
+/** 铺子的一项营生：靠什么挣、每月耗多少 */
+export interface ShopBusiness {
+  name: string;
+  /** 每月进项 */
+  income: number;
+  /** 每月开销（人工、原料等；设施维持另计） */
+  expense: number;
+  /** 一句说明 */
+  desc?: string;
+  /** 还办不办；歇了的留个名目在册上 */
+  active?: boolean;
+}
+
 /**
  * 玩家在坊市里自设的一间铺面。
  * 货物、设施与月收支由「经营」面板里以文字与 AI 往来改动；
@@ -1783,12 +1796,21 @@ export interface PlayerShop {
   cash: number;
   goods: ShopGood[];
   facilities: ShopFacility[];
+  /**
+   * 各门营生：进项与开销逐项列在「业务」面板上。
+   * 没有分项的旧档，仍照 monthlyIncome／monthlyExpense 这两笔总账走。
+   */
+  businesses?: ShopBusiness[];
+  /** 每月自动进货：从资金池支钱把货架补齐 */
+  autoRestock?: boolean;
   /** 每月进项 */
   monthlyIncome: number;
   /** 铺面自身的月开支；各处设施的维持另计 */
   monthlyExpense: number;
   /** 上次按月结算的月份，如「514-2」 */
   lastSettledMonth?: string;
+  /** 上月结算的实账，供业务面板回看 */
+  lastReport?: { month: string; income: number; expense: number; restock: number; net: number };
   /** 连欠的月数；欠满三月便被债主收走 */
   arrears: number;
 }
@@ -2117,8 +2139,8 @@ export interface LodgeArgs {
   /** 住的什么房 */
   room: string;
   roomDesc: string;
-  /** 租了几日 */
-  days: number;
+  /** 租了几个时辰 */
+  hours: number;
   /** 睡下之前，玩家自己说了句什么 */
   words?: string;
 }

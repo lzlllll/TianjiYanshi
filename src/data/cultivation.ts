@@ -72,3 +72,50 @@ export function cultivationGain(hours: number, mul: number): number {
   if (h <= 0) return 0;
   return Math.max(1, Math.round(h * CULTIVATION_PER_HOUR * (Number(mul) || 1)));
 }
+
+/**
+ * 打坐时气血、灵力、神识每时辰各回上限的几成。
+ * 修的是吐纳周天，不是躺平大睡，所以回得慢：坐一日也只补回两成多的气血。
+ */
+export const CULTIVATE_RECOVER_PER_HOUR = { hp: 0.02, mp: 0.04, spirit: 0.03 };
+
+export interface CultivateRecovery {
+  hp: number;
+  mp: number;
+  spirit: number;
+  hpGain: number;
+  mpGain: number;
+  spiritGain: number;
+}
+
+/** 打坐这些时辰，气血、灵力、神识各回多少：按上限的成数按时辰摊，封顶不回超 */
+export function cultivationRecovery(args: {
+  hours: number;
+  hp: number;
+  hpMax: number;
+  mp: number;
+  mpMax: number;
+  spirit: number;
+  spiritMax: number;
+}): CultivateRecovery {
+  const h = Math.max(0, Number(args.hours) || 0);
+  const cap = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+  const hpMax = cap(args.hpMax);
+  const mpMax = cap(args.mpMax);
+  const spiritMax = cap(args.spiritMax);
+  const hp = Math.min(hpMax, cap(args.hp));
+  const mp = Math.min(mpMax, cap(args.mp));
+  const spirit = Math.min(spiritMax, cap(args.spirit));
+  const grow = (cur: number, max: number, rate: number) => Math.max(0, Math.min(max - cur, Math.round(max * rate * h)));
+  const hpGain = grow(hp, hpMax, CULTIVATE_RECOVER_PER_HOUR.hp);
+  const mpGain = grow(mp, mpMax, CULTIVATE_RECOVER_PER_HOUR.mp);
+  const spiritGain = grow(spirit, spiritMax, CULTIVATE_RECOVER_PER_HOUR.spirit);
+  return {
+    hp: hp + hpGain,
+    mp: mp + mpGain,
+    spirit: spirit + spiritGain,
+    hpGain,
+    mpGain,
+    spiritGain,
+  };
+}

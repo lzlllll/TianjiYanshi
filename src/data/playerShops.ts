@@ -7,7 +7,7 @@
  * 进出都走资金池；资金池不够维持开支连欠三月，铺子便被债主收走。
  */
 
-import type { PlayerShop, ShopFacility, ShopGood, ShopKind } from "@/data/types";
+import type { PlayerShop, ShopBusiness, ShopFacility, ShopGood, ShopKind } from "@/data/types";
 
 /** 连欠三月便被债主收走 */
 export const SHOP_ARREARS_LIMIT = 3;
@@ -103,12 +103,75 @@ export function clampShopFacilities(list: unknown): ShopFacility[] {
 }
 
 /** 月开支合计：铺面自身 + 各处设施的维持 */
-export function shopMonthlyExpense(shop: Pick<PlayerShop, "monthlyExpense" | "facilities">): number {
-  const upkeep = (shop.facilities ?? []).reduce((sum, f) => sum + Math.max(0, Math.round(Number(f.upkeep) || 0)), 0);
-  return Math.max(0, Math.round(Number(shop.monthlyExpense) || 0)) + upkeep;
+export function shopMonthlyExpense(shop: Pick<PlayerShop, "monthlyExpense" | "facilities" | "businesses">): number {
+  return shopBusinessExpense(shop) + shopFacilityUpkeep(shop);
 }
 
-/** 月净额：进项减去开支合计 */
-export function shopMonthlyNet(shop: Pick<PlayerShop, "monthlyIncome" | "monthlyExpense" | "facilities">): number {
-  return Math.max(0, Math.round(Number(shop.monthlyIncome) || 0)) - shopMonthlyExpense(shop);
+/** 各处设施每月的维持合计 */
+export function shopFacilityUpkeep(shop: Pick<PlayerShop, "facilities">): number {
+  return (shop.facilities ?? []).reduce((sum, f) => sum + Math.max(0, Math.round(Number(f.upkeep) || 0)), 0);
+}
+
+/** 各门营生的月进项合计；旧档没有分项，便退回那笔总账 */
+export function shopMonthlyIncome(shop: Pick<PlayerShop, "monthlyIncome" | "businesses">): number {
+  const list = (shop.businesses ?? []).filter((b) => b && b.active !== false);
+  if (list.length === 0) return Math.max(0, Math.round(Number(shop.monthlyIncome) || 0));
+  return list.reduce((sum, b) => sum + Math.max(0, Math.round(Number(b.income) || 0)), 0);
+}
+
+/** 各门营生的月开销合计；旧档没有分项，便退回那笔总账 */
+export function shopBusinessExpense(shop: Pick<PlayerShop, "monthlyExpense" | "businesses">): number {
+  const list = (shop.businesses ?? []).filter((b) => b && b.active !== false);
+  if (list.length === 0) return Math.max(0, Math.round(Number(shop.monthlyExpense) || 0));
+  return list.reduce((sum, b) => sum + Math.max(0, Math.round(Number(b.expense) || 0)), 0);
+}
+
+/** 月净额：进项减去开支合计（自动进货另算，记在月报里） */
+export function shopMonthlyNet(
+  shop: Pick<PlayerShop, "monthlyIncome" | "monthlyExpense" | "facilities" | "businesses">,
+): number {
+  return shopMonthlyIncome(shop) - shopMonthlyExpense(shop);
+}
+
+/** 每月自动进货时，每样货补几件 */
+export const SHOP_RESTOCK_QTY = 3;
+
+/** 货架上最多列几门营生 */
+export const SHOP_BUSINESS_MAX = 8;
+
+/** 把 AI 给的营生理一理：名号去空、收支夹在合理区间 */
+export function clampShopBusinesses(list: unknown): ShopBusiness[] {
+  if (!Array.isArray(list)) return [];
+  const out: ShopBusiness[] = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = String((raw as any).name ?? "").trim().slice(0, 16);
+    if (!name) continue;
+    out.push({
+      name,
+      income: clamp(Math.round(Number((raw as any).income) || 0), 0, SHOP_MONEY_MAX),
+      expense: clamp(Math.round(Number((raw as any).expense) || 0), 0, SHOP_MONEY_MAX),
+      desc: String((raw as any).desc ?? "").trim().slice(0, 60) || undefined,
+      ...((raw as any).active === false ? { active: false } : {}),
+    });
+    if (out.length >= SHOP_BUSINESS_MAX) break;
+  }
+  return out;
+}
+
+/**
+ * 业务面板上的那几行。
+ * 分过项的照分项列；旧档与刚开张的铺子没有分项，便照总账合成一行「本业」。
+ */
+export function shopBusinessRows(shop: PlayerShop): ShopBusiness[] {
+  const list = (shop.businesses ?? []).filter((b) => b && b.name);
+  if (list.length > 0) return list;
+  return [
+    {
+      name: "本业经营",
+      income: Math.max(0, Math.round(Number(shop.monthlyIncome) || 0)),
+      expense: Math.max(0, Math.round(Number(shop.monthlyExpense) || 0)),
+      desc: `铺面本身的买卖与开销`,
+    },
+  ];
 }

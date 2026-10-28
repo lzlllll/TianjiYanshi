@@ -6,7 +6,7 @@ import { PanelTitle } from "@/components/ui/PanelTitle";
 import { SealButton } from "@/components/ui/SealButton";
 import { cn } from "@/lib/utils";
 import { HOURS_PER_DAY } from "@/data/rooms";
-import { cultivationGain } from "@/data/cultivation";
+import { cultivationGain, cultivationRecovery } from "@/data/cultivation";
 import { estateEfficiency, RENT_TENANT_KINDS } from "@/data/estates";
 import { manorBonuses, restRatio } from "@/data/manors";
 import { effectiveHpMax } from "@/lib/buffUtils";
@@ -169,14 +169,33 @@ function EstateInterior({ estate }: { estate: Estate }) {
     setNote(`歇息 ${days} 日，气血灵力各回 ${Math.round(ratio * 100)}%。`);
   };
 
-  /** 修炼：比自己在外头打坐强，进益按房子效率折算，只长修为 */
+  /** 修炼：比自己在外头打坐强，进益按房子效率折算；坐得久了气血灵力神识也慢慢回上来 */
   const cultivate = () => {
     if (ruined || rented) return;
     const gain = Math.round(cultivationGain(hours, eff * 1.5));
-    setPlayer({ ...player, cultivation: (Number(player.cultivation) || 0) + gain });
+    const rest = cultivationRecovery({
+      hours,
+      hp: player.hp,
+      hpMax: effectiveHpMax(player),
+      mp: player.mp,
+      mpMax: player.mpMax,
+      spirit: player.spirit,
+      spiritMax: player.spiritMax,
+    });
+    setPlayer({
+      ...player,
+      cultivation: (Number(player.cultivation) || 0) + gain,
+      hp: rest.hp,
+      mp: rest.mp,
+      spirit: rest.spirit,
+    });
     advanceTime(hours);
-    addLog(`你在「${estate.name}」静坐 ${days} 日，修为 +${gain}。`);
-    setNote(`修炼 ${days} 日，修为 +${gain}。`);
+    const restNote =
+      rest.hpGain + rest.mpGain + rest.spiritGain > 0
+        ? `，气血回 ${rest.hpGain}、灵力回 ${rest.mpGain}、神识回 ${rest.spiritGain}`
+        : "";
+    addLog(`你在「${estate.name}」静坐 ${days} 日，修为 +${gain}${restNote}。`);
+    setNote(`修炼 ${days} 日，修为 +${gain}${restNote}。`);
   };
 
   /** 演武：屋里有一方空地，练一门指定功法 */

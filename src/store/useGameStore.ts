@@ -55,7 +55,7 @@ import {
   upgradeCost as manorUpgradeCost,
 } from "@/data/manors";
 import { migrateRelation } from "@/data/npcGen";
-import { clampShopFacilities, clampShopGoods, shopLeaseCost, shopMonthlyExpense, SHOP_ARREARS_LIMIT, SHOP_MONEY_MAX } from "@/data/playerShops";
+import { clampShopBusinesses, clampShopFacilities, clampShopGoods, shopLeaseCost, shopMonthlyExpense, shopMonthlyIncome, SHOP_ARREARS_LIMIT, SHOP_GOODS_MAX, SHOP_MONEY_MAX, SHOP_RESTOCK_QTY } from "@/data/playerShops";
 import { activeModifierEffects } from "@/data/sectModifiers";
 import type {
   Estate,
@@ -64,6 +64,7 @@ import type {
   ManorPlot,
   ManorShape,
   PlayerShop,
+  ShopBusiness,
   ShopFacility,
   ShopGood,
   ShopKind,
@@ -73,7 +74,7 @@ import { resolveLocation } from "@/data/locations";
 import { normalizeAdventure, pickOrNudgeSpotNear } from "@/data/adventures";
 import { OPENING_GAME_TIME, OPENING_DAY_SERIAL, LEGACY_DAY_OFFSET, ERA_YEAR_OFFSET, daySerial, gameDateKey, gameMonthKey, normalizeGameTime, shiftGameTime, shichenName } from "@/lib/gameTime";
 import { MAX_TRAVEL_COMPANIONS, isNpcAround, manorKey, rollManor, rollQuestNpc, travelingCount } from "@/data/npcGen";
-import { cultivationGain, localCultivationFrom } from "@/data/cultivation";
+import { cultivationGain, cultivationRecovery, localCultivationFrom } from "@/data/cultivation";
 import { brokerTargetsFor } from "@/data/broker";
 import {
   LECTURE_ABSENT_DAYS,
@@ -142,7 +143,7 @@ import { pruneBuffs, shortenDebuffs } from "@/lib/buffTime";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import { BUFF_TEMPLATES, buffFromTemplate } from "@/data/buffs";
 import { BATH_RELIEF_PER_HOUR, bathCost, clampHours } from "@/data/bath";
-import { goodDesc } from "@/data/goods";
+import { goodDesc, itemBaseValue } from "@/data/goods";
 import { gradeForPrice, itemTypeFor } from "@/data/shopStock";
 import {
   REALMS,
@@ -238,17 +239,23 @@ interface GameStore extends GameState {
   withdrawShopCash: (id: string, amount: number) => number;
   /** 往铺子资金池里注钱；返回实注入的数 */
   depositShopCash: (id: string, amount: number) => number;
-  /** 把「经营」面板里议定的改动落库：货物、设施与月收支 */
+  /** 把「经营」面板里议定的改动落库：货物、设施、营生与月收支 */
   applyShopPatch: (
     id: string,
     patch: {
       name?: string;
       goods?: ShopGood[];
       facilities?: ShopFacility[];
+      businesses?: ShopBusiness[];
+      autoRestock?: boolean;
       monthlyIncome?: number;
       monthlyExpense?: number;
     },
   ) => void;
+  /** 从行囊里拿东西摆上自家铺子的货架；返回挪过去的件数 */
+  stockShopGood: (shopId: string, itemId: string, count: number) => number;
+  /** 从自家铺子的货架上取回行囊；返回取出的件数 */
+  takeShopGood: (shopId: string, goodName: string, count: number) => number;
   /** 名下铺面按月结算：进项入池、开销从池里扣；连欠三月便被债主收走 */
   settlePlayerShops: () => void;
   /** 名下宅邸地块 */
@@ -4701,12 +4708,38 @@ EFFECT: [效果描述]`,
             label = `「${target.name}」`;
           }
           player.cultivation = (Number(player.cultivation) || 0) + real;
-          set({ techniques, player, log: [`你在「${cell.shape}」中${action} ${h} 个时辰，${label}长了 ${real} 点。`, ...st.log].slice(0, 30) });
+          // 打坐是吐纳周天，坐久了气血、灵力、神识都慢慢回上来；参悟与演练不动这一笔
+          const rest =
+            action === "打坐"
+              ? cultivationRecovery({
+                  hours: h,
+                  hp: player.hp,
+                  hpMax: player.hpMax,
+                  mp: player.mp,
+                  mpMax: player.mpMax,
+                  spirit: player.spirit,
+                  spiritMax: player.spiritMax,
+                })
+              : null;
+          if (rest) {
+            player.hp = rest.hp;
+            player.mp = rest.mp;
+            player.spirit = rest.spirit;
+          }
+          const restNote =
+            rest && rest.hpGain + rest.mpGain + rest.spiritGain > 0
+              ? `，气血回 ${rest.hpGain}、灵力回 ${rest.mpGain}、神识回 ${rest.spiritGain}`
+              : "";
+          set({
+            techniques,
+            player,
+            log: [`你在「${cell.shape}」中${action} ${h} 个时辰，${label}长了 ${real} 点${restNote}。`, ...st.log].slice(0, 30),
+          });
           get().advanceTime(h);
           return {
             ok: true,
             gain: real,
-            text: `在「${cell.shape}」里${action}了 ${h} 个时辰，${label}长了 ${real} 点${bonus > 0 ? `（此处加成 +${Math.round(bonus * 100)}%）` : ""}。`,
+            text: `在「${cell.shape}」里${action}了 ${h} 个时辰，${label}长了 ${real} 点${bonus > 0 ? `（此处加成 +${Math.round(bonus * 100)}%）` : ""}${restNote}。`,
           };
         }
 
@@ -4953,25 +4986,115 @@ EFFECT: [效果描述]`,
 
       applyShopPatch: (id, patch) =>
         set((s) => ({
-          playerShops: (s.playerShops ?? []).map((x) =>
-            x.id === id
-              ? {
-                  ...x,
-                  name: patch.name?.trim() || x.name,
-                  goods: patch.goods ? clampShopGoods(patch.goods) : x.goods,
-                  facilities: patch.facilities ? clampShopFacilities(patch.facilities) : x.facilities,
-                  monthlyIncome:
-                    patch.monthlyIncome !== undefined
-                      ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyIncome) || 0)))
-                      : x.monthlyIncome,
-                  monthlyExpense:
-                    patch.monthlyExpense !== undefined
-                      ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyExpense) || 0)))
-                      : x.monthlyExpense,
-                }
-              : x,
-          ),
+          playerShops: (s.playerShops ?? []).map((x) => {
+            if (x.id !== id) return x;
+            const businesses = patch.businesses ? clampShopBusinesses(patch.businesses) : x.businesses;
+            // 分了项的，总账便照分项合计走，免得两本账各说各的
+            const listed = (businesses ?? []).filter((b) => b && b.active !== false);
+            const incomeOfList = listed.length > 0 ? listed.reduce((sum, b) => sum + b.income, 0) : undefined;
+            const expenseOfList = listed.length > 0 ? listed.reduce((sum, b) => sum + b.expense, 0) : undefined;
+            const income =
+              incomeOfList !== undefined
+                ? Math.min(SHOP_MONEY_MAX, incomeOfList)
+                : patch.monthlyIncome !== undefined
+                  ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyIncome) || 0)))
+                  : x.monthlyIncome;
+            const expense =
+              expenseOfList !== undefined
+                ? Math.min(SHOP_MONEY_MAX, expenseOfList)
+                : patch.monthlyExpense !== undefined
+                  ? Math.max(0, Math.min(SHOP_MONEY_MAX, Math.round(Number(patch.monthlyExpense) || 0)))
+                  : x.monthlyExpense;
+            return {
+              ...x,
+              name: patch.name?.trim() || x.name,
+              goods: patch.goods ? clampShopGoods(patch.goods) : x.goods,
+              facilities: patch.facilities ? clampShopFacilities(patch.facilities) : x.facilities,
+              businesses,
+              autoRestock: patch.autoRestock !== undefined ? !!patch.autoRestock : x.autoRestock,
+              monthlyIncome: income,
+              monthlyExpense: expense,
+            };
+          }),
         })),
+
+      stockShopGood: (shopId, itemId, count) => {
+        const st = get();
+        const shop = (st.playerShops ?? []).find((s) => s.id === shopId);
+        const item = st.inventory.find((i) => i.id === itemId);
+        if (!shop || !item) return 0;
+        const take = Math.max(0, Math.min(Math.trunc(Number(count) || 0), item.count));
+        if (take <= 0) return 0;
+        const goods = shop.goods.map((g) => ({ ...g }));
+        const at = goods.findIndex((g) => g.name === item.name);
+        // 货架满了便不再往上码
+        if (at < 0 && goods.length >= SHOP_GOODS_MAX) return 0;
+        if (at >= 0) {
+          goods[at] = { ...goods[at], stock: Math.max(0, Math.round(Number(goods[at].stock) || 0)) + take };
+        } else {
+          // 上架价照这件东西的身价加五成；往后可在经营面板里改
+          goods.push({
+            name: item.name,
+            price: Math.max(1, Math.round(itemBaseValue(item) * 1.5)),
+            stock: take,
+            desc: (item.desc ?? "").slice(0, 60) || undefined,
+          });
+        }
+        const rest = item.count - take;
+        set({
+          playerShops: (st.playerShops ?? []).map((x) => (x.id === shopId ? { ...x, goods } : x)),
+          inventory:
+            rest > 0
+              ? st.inventory.map((i) => (i.id === itemId ? { ...i, count: rest } : i))
+              : st.inventory.filter((i) => i.id !== itemId),
+          log: [`你把${item.name}${take > 1 ? ` ${take} 件` : ""}摆上了「${shop.name}」的货架。`, ...st.log].slice(0, 30),
+        });
+        return take;
+      },
+
+      takeShopGood: (shopId, goodName, count) => {
+        const st = get();
+        const shop = (st.playerShops ?? []).find((s) => s.id === shopId);
+        if (!shop) return 0;
+        const at = shop.goods.findIndex((g) => g.name === goodName);
+        if (at < 0) return 0;
+        const good = shop.goods[at];
+        const take = Math.max(0, Math.min(Math.trunc(Number(count) || 0), Math.max(0, Math.round(Number(good.stock) || 0))));
+        if (take <= 0) return 0;
+        const type = itemTypeFor(shop.kind);
+        const stacked = st.inventory.find((i) => i.name === good.name && i.type === type);
+        const goods = shop.goods.map((g, i) => (i === at ? { ...g, stock: Math.max(0, Math.round(Number(g.stock) || 0) - take) } : g));
+        // 取回来的东西按货架上的标价作身价，日后转手照它折
+        const unit = Math.max(1, Math.round(Number(good.price) || 0));
+        set({
+          playerShops: (st.playerShops ?? []).map((x) => (x.id === shopId ? { ...x, goods } : x)),
+          inventory: stacked
+            ? st.inventory.map((i) =>
+                i.id === stacked.id
+                  ? {
+                      ...i,
+                      count: i.count + take,
+                      value: Math.max(1, Math.round(((i.value ?? unit) * i.count + unit * take) / (i.count + take))),
+                    }
+                  : i,
+              )
+            : [
+                ...st.inventory,
+                {
+                  id: `i-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+                  name: good.name,
+                  type,
+                  grade: gradeForPrice(unit),
+                  count: take,
+                  value: unit,
+                  icon: good.name.charAt(0),
+                  desc: good.desc || `从「${shop.name}」的货架上取的。`,
+                },
+              ],
+          log: [`你从「${shop.name}」的货架上取下${good.name}${take > 1 ? ` ${take} 件` : ""}。`, ...st.log].slice(0, 30),
+        });
+        return take;
+      },
 
       settlePlayerShops: () => {
         const st = get();
@@ -4987,7 +5110,7 @@ EFFECT: [效果描述]`,
             continue;
           }
           changed = true;
-          const income = Math.max(0, Math.round(Number(shop.monthlyIncome) || 0));
+          const income = shopMonthlyIncome(shop);
           const expense = shopMonthlyExpense(shop);
           let cash = Math.round(Number(shop.cash) || 0) + income - expense;
           let arrears = Math.max(0, Number(shop.arrears) || 0);
@@ -5002,13 +5125,35 @@ EFFECT: [效果描述]`,
             notes.push(`「${shop.name}」连欠三月，被债主收走，铺面另易其主。`);
             continue;
           }
+          // 自动进货：池子里有余钱才补，每样照标价补几件，补不起便少补
+          let goods = shop.goods;
+          let restock = 0;
+          if (shop.autoRestock && shop.useStock !== false && cash > 0 && shop.goods.length > 0) {
+            goods = shop.goods.map((g) => ({ ...g }));
+            for (const g of goods) {
+              const unit = Math.max(1, Math.round(Number(g.price) || 0));
+              const buy = Math.min(SHOP_RESTOCK_QTY, Math.floor(cash / unit));
+              if (buy <= 0) continue;
+              g.stock = Math.max(0, Math.round(Number(g.stock) || 0)) + buy;
+              cash -= unit * buy;
+              restock += unit * buy;
+            }
+            if (restock > 0) notes.push(`「${shop.name}」自动进货，花了 ${restock} 下品灵石。`);
+          }
           if (arrears > 0) {
             notes.push(`「${shop.name}」这个月没挣够开销，已欠 ${arrears} 月。`);
           } else if (expense > income) {
             // 池子里还有钱，便自动支取差额把这一月撑过去
             notes.push(`「${shop.name}」进项不敷，自动从资金池支出 ${expense - income} 维持经营。`);
           }
-          next.push({ ...shop, cash, arrears, lastSettledMonth: monthKey });
+          next.push({
+            ...shop,
+            cash,
+            arrears,
+            goods,
+            lastSettledMonth: monthKey,
+            lastReport: { month: monthKey, income, expense, restock, net: income - expense - restock },
+          });
         }
         if (!changed) return;
         set((s) => ({

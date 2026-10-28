@@ -52,16 +52,30 @@ export const MAX_LODGE_DAYS = 30;
 /** 一个时辰按十二时辰折算，住一日即推十二个时辰 */
 export const HOURS_PER_DAY = 12;
 
+/** 住店最长能租多少时辰：一日十二个时辰，三十日便是三百六十 */
+export const MAX_LODGE_HOURS = MAX_LODGE_DAYS * HOURS_PER_DAY;
+
 export function roomById(id: string): Room | undefined {
   return ROOMS.find((r) => r.id === id);
 }
 
-export function lodgeCost(room: Room, days: number): number {
-  return room.price * Math.max(0, Math.trunc(days));
+/** 房钱按时辰算：一日十二个时辰摊下来，最少收一文 */
+export function lodgeCost(room: Room, hours: number): number {
+  const h = Math.max(0, Math.trunc(hours));
+  return Math.max(1, Math.round((room.price * h) / HOURS_PER_DAY));
 }
 
-/** 歇这些日子能补回多少：按上限的成数算，取整，另外封顶 */
-export function recoverAmount(max: number, room: Room, days: number): number {
-  const gain = Math.round(max * room.rate * Math.max(0, Math.trunc(days)));
+/** 歇这些时辰能补回多少：按上限的成数算，取整，另外封顶 */
+export function recoverAmount(max: number, room: Room, hours: number): number {
+  const h = Math.max(0, Math.trunc(hours));
+  const gain = Math.round(((max * room.rate) / HOURS_PER_DAY) * h);
   return Math.max(0, Math.min(max, gain));
+}
+
+/** 把时辰数说成人话：几日又几个时辰 */
+export function lodgeDurationLabel(hours: number): string {
+  const h = Math.max(0, Math.trunc(Number(hours) || 0));
+  const d = Math.floor(h / HOURS_PER_DAY);
+  const rest = h % HOURS_PER_DAY;
+  return [d > 0 ? `${d} 日` : "", rest > 0 ? `${rest} 个时辰` : ""].filter(Boolean).join(" ") || "一时辰";
 }
