@@ -7800,7 +7800,8 @@ MODIFY player.mp - 10
     }),
     {
       name: "xiuxian-ai",
-      version: 6,
+      // 第 7 版起战斗随缓存走：退出去再进来，阵上的人、柱香与战况都还在原处
+      version: 7,
       migrate: (state: any, version: number) => {
         if (version < 1) {
           if (state.conversation && !Array.isArray(state.conversation.turns)) {
@@ -7897,6 +7898,26 @@ MODIFY player.mp - 10
         // 讲价与铺面都是眼前这一场的事，不随存档醒来：读档时把窗关掉，免得一进来又弹出早先那一扇
         merged.narrativeHaggle = null;
         merged.narrativeShop = null;
+        // 战斗接回来：阵上还有人在打，便照原样接着打；存着的是一张空场，才当没开过战。
+        // 推演这一类一时的标记一律抹掉，读回来停在等人出手的地方
+        const restoredBattle = merged.battle;
+        if (
+          restoredBattle &&
+          restoredBattle.isActive &&
+          !(Array.isArray(restoredBattle.map?.entities) && restoredBattle.map.entities.length > 0)
+        ) {
+          merged.battle = { ...INITIAL_BATTLE, context: [] };
+        } else if (restoredBattle) {
+          merged.battle = {
+            ...restoredBattle,
+            isResolving: false,
+            errorMsg: "",
+            turn: restoredBattle.isActive ? "player" : restoredBattle.turn,
+            aftermath: restoredBattle.aftermath
+              ? { ...restoredBattle.aftermath, resolving: false }
+              : (restoredBattle.aftermath ?? null),
+          };
+        }
         const conv = merged.conversation;
         if (conv && Array.isArray(conv.turns) && conv.turns.some((t) => t.mode === "battle" || t.haggle || t.shop)) {
           merged.conversation = {
@@ -7937,9 +7958,19 @@ MODIFY player.mp - 10
               messages: (Array.isArray(p.messages) ? p.messages : []).slice(-20),
             })),
         },
-        // 战斗不随存档走：存下去的一律是「未开打」的那一份，
-        // 否则刷新之后会照着上次的阵势自己开一场
-        battle: { ...INITIAL_BATTLE, context: [] },
+        // 战斗照存：退出游戏再进来，阵上与柱香都还在原处。
+        // 只把「正在推演」这类一时的标记抹掉——那一手没落完，读回来便停在等人出手的地方
+        battle: {
+          ...s.battle,
+          isResolving: false,
+          errorMsg: "",
+          turn: s.battle.isActive ? "player" : s.battle.turn,
+          // 每回的结算摘记只留近几条，免得存得越长越大
+          context: (Array.isArray(s.battle.context) ? s.battle.context : []).slice(-8),
+          aftermath: s.battle.aftermath
+            ? { ...s.battle.aftermath, resolving: false }
+            : (s.battle.aftermath ?? null),
+        },
         isDeveloperMode: s.isDeveloperMode,
         randomEventDisabled: s.randomEventDisabled,
         introSeen: s.introSeen,
