@@ -430,6 +430,24 @@ const ITEM_TYPE_RANK: Record<string, number> = { 法宝: 0, 符箓: 1, 丹药: 2
 const ITEM_GRADE_RANK: Record<string, number> = { 仙品: 0, 天品: 1, 玄品: 2, 灵品: 3, 凡品: 4 };
 
 /**
+ * 最近几回的叙事，摘成一段话。
+ * 战斗一开，问道里的正文便被战斗界面挡住了；推进战斗时把前因带上几段，
+ * 模型才不至于忘了这一战是为着什么打起来的、对手是什么来历。
+ */
+function recentStoryBrief(turns: Turn[] | undefined, limit = 2, chars = 420): string {
+  const list = (Array.isArray(turns) ? turns : []).filter((t) => t?.narrative);
+  return list
+    .slice(-limit)
+    .map((t) => {
+      const body = String(t.narrative).replace(/\s+/g, " ").trim();
+      const cut = body.length > chars ? `${body.slice(0, chars)}……` : body;
+      const input = String(t.playerInput ?? "").trim();
+      return input ? `（你当时说：${input}）\n${cut}` : cut;
+    })
+    .join("\n\n");
+}
+
+/**
  * 变故提示词里的「玩家简要状况」。
  * 只报与拿捏分寸有关的几样：境界、身份、气血、伤势、身上的钱物与物件、
  * 所修功法、江湖上的名声、同行的人——写得粗，但够模型掂量这一趟的分量。
@@ -6481,6 +6499,8 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
 
         const player = useGameStore.getState().player;
         const battleState = get().battle;
+        // 最近两回的叙事：这一战的前因与对手的来历都在里头，战斗里也要读得到
+        const storyBrief = recentStoryBrief(get().conversation.turns);
         const inventory = Array.isArray(useGameStore.getState().inventory) ? useGameStore.getState().inventory : [];
         const techniques = Array.isArray(useGameStore.getState().techniques) ? useGameStore.getState().techniques : [];
         const relations = Array.isArray(useGameStore.getState().relations) ? useGameStore.getState().relations : [];
@@ -6577,6 +6597,7 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
               width: battleState.map.width,
               height: battleState.map.height,
               recent: battleState.context.slice(-4),
+              story: storyBrief,
             }),
             { timeoutMs: 30000, retries: 1, jsonMode: true },
           );
@@ -6714,7 +6735,7 @@ ${PROSE_STYLE}
 - 玩家丹药：${playerPills.map((p) => `${p.name}(${p.count}颗)`).join(", ") || "无"}
 - 香：第 ${battleState.incense.stick} 柱，已烧到 ${battleState.incense.progress}%
 ${beast ? `- 随身灵兽：${beastBrief(beast)}（图上 id 为 beast，type 为 ally，是你这一边的）\n` : ""}${allyBrief ? `- 同行队友（图上 type 为 ally，是你这一边的人）：${allyBrief}\n` : ""}- 地图实体：${JSON.stringify(local.entities)}
-
+${storyBrief ? `\n【这一战之前的近几回】（前因、对手的来历与所在之处都在这几段里，叙事须与之相合）\n${storyBrief}\n` : ""}
 战斗上下文：
 ${battleState.context.join("\n")}
 
@@ -6944,6 +6965,7 @@ MODIFY player.mp - 10
             retreat: aft.retreat,
             place,
             text: body,
+            story: recentStoryBrief(get().conversation.turns),
           };
           const raw = await chatWithModel(settings, settings.flashModel, buildEscapePrompt(brief), {
             timeoutMs: 60000,
@@ -7098,7 +7120,11 @@ MODIFY player.mp - 10
           .map((e) => e.name);
 
         try {
-          const brief: FateBrief = { enemies, text: body };
+          const brief: FateBrief = {
+            enemies,
+            text: body,
+            story: recentStoryBrief(get().conversation.turns),
+          };
           const raw = await chatWithModel(settings, settings.flashModel, buildFatePrompt(brief), {
             timeoutMs: 60000,
             jsonMode: true,
@@ -7174,7 +7200,11 @@ MODIFY player.mp - 10
         );
 
         try {
-          const brief: SurrenderBrief = { patience: aft.patience, text: body };
+          const brief: SurrenderBrief = {
+            patience: aft.patience,
+            text: body,
+            story: recentStoryBrief(get().conversation.turns),
+          };
           const raw = await chatWithModel(settings, settings.flashModel, buildSurrenderPrompt(brief), {
             timeoutMs: 60000,
             jsonMode: true,

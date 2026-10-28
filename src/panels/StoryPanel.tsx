@@ -106,6 +106,13 @@ const QUICK_DECISIONS = [
   "探索后山秘境，寻找机缘",
 ];
 
+/**
+ * 哪一轮的战事已经摆过阵了。
+ * 搁在组件外头：问道窗一收一摊，组件便重挂一次，写在 ref 里的记号也跟着没了，
+ * 于是同一轮又摆一次阵，把打了一半的回合与伤亡全冲掉。
+ */
+let battleStartedForTurn: string | null = null;
+
 export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
   const conversation = useAIStore((s) => s.conversation);
   const runTurn = useAIStore((s) => s.runTurn);
@@ -185,6 +192,10 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
     const isSectWar = !!lastTurn.sectWar;
     if (!isSectWar && lastTurn.mode !== "battle") return;
     if (battleTurnRef.current === lastTurn.id) return;
+    // 这一轮的战事已经开过了：收起问道再摊开、或收场之后再摊开，都不能照着同一轮重摆一次阵，
+    // 否则回合、伤亡与叙事全被冲掉。记在组件外头，卸载重挂也还记得
+    if (battleStartedForTurn === lastTurn.id) return;
+    battleStartedForTurn = lastTurn.id;
     battleTurnRef.current = lastTurn.id;
 
     if (isSectWar && lastTurn.sectWar) {

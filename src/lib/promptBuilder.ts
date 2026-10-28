@@ -1995,6 +1995,8 @@ export interface EscapeBrief {
   retreat: number;
   place: string;
   text: string;
+  /** 这一战之前最近几回的叙事：前因与对手来历都在这几段里 */
+  story?: string;
 }
 
 /** 战斗解析的素材：玩家这一句行动、他能使的招式、场上各人的位置与气血 */
@@ -2034,6 +2036,8 @@ export interface BattleIntentBrief {
   width: number;
   height: number;
   recent?: string[];
+  /** 这一战之前最近几回的叙事：读懂玩家这句话要做什么，也要知道前因 */
+  story?: string;
 }
 
 /**
@@ -2078,7 +2082,9 @@ ${skillLines}
 
 【场上的人】（战场 ${brief.width}×${brief.height} 格，坐标从 0 起算）
 ${entityLines}
-${brief.recent && brief.recent.length > 0 ? `\n【近几回的经过】\n${brief.recent.join("\n")}\n` : ""}
+${brief.recent && brief.recent.length > 0 ? `\n【近几回的经过】\n${brief.recent.join("\n")}\n` : ""}${
+    brief.story ? `\n【这一战之前的近几回】\n${brief.story}\n` : ""
+  }
 玩家这一回合的行动：${brief.action}
 
 【要求】
@@ -2110,7 +2116,7 @@ export function buildEscapePrompt(brief: EscapeBrief): ChatMessage[] {
   const system = `你是修仙文字游戏里的说书人。一场厮杀已分胜负，眼下是收尾的追逃：${
     chase ? "你胜了，敌人转身要逃，你提气追了上去" : "你败了，伤重难支，只得且战且退"
   }，此地在${brief.place}。
-
+${brief.story ? `\n【这一战之前的近几回】（这一战因何而起、对手是什么来历，都在这几段里，叙事须与之相合）\n${brief.story}\n` : ""}
 【当前态势】
 ${chase ? "追击" : "撤退"}进度 ${chase ? brief.pursuit : brief.retreat}/100（${
     chase ? "你追赶敌人之势" : "你挣脱追兵之势"
@@ -2140,6 +2146,8 @@ ${chase ? "撤退" : "追击"}进度 ${chase ? brief.retreat : brief.pursuit}/10
 export interface FateBrief {
   enemies: string[];
   text: string;
+  /** 这一战之前最近几回的叙事：前因与对手来历都在这几段里 */
+  story?: string;
 }
 
 /** 处置敌人：玩家说了如何发落这败者，请说书人写一段了结的叙事 */
@@ -2148,7 +2156,7 @@ export function buildFatePrompt(brief: FateBrief): ChatMessage[] {
     brief.enemies.length ? `落败的是：${brief.enemies.join("、")}。` : ""
   }
 玩家说了要如何发落，请就着这一句话写一段了结的叙事。
-
+${brief.story ? `\n【这一战之前的近几回】（这一战因何而起、这败者是什么来历，都在这几段里，叙事须与之相合）\n${brief.story}\n` : ""}
 【要求】
 - 只输出一个 JSON 对象：{"narrative": "叙事正文"}
 - narrative 以第三人称写「你」，60 至 120 字，写你处置这败者的经过与对方的反应
@@ -2169,13 +2177,15 @@ export function buildFatePrompt(brief: FateBrief): ChatMessage[] {
 export interface SurrenderBrief {
   patience: number;
   text: string;
+  /** 这一战之前最近几回的叙事：前因与对手来历都在这几段里 */
+  story?: string;
 }
 
 /** 败者对话：玩家说一句求饶或交涉的话，请模型按话术的得体程度增减敌方耐心 */
 export function buildSurrenderPrompt(brief: SurrenderBrief): ChatMessage[] {
   const system = `你是修仙文字游戏里的说书人。你在一场厮杀中落败被擒，落在敌手，眼下开口求饶或交涉。
 敌方的耐心 ${brief.patience}/100（越低越要动杀心，耐心归零便是死）。
-
+${brief.story ? `\n【这一战之前的近几回】（这一战因何而起、这敌手是什么来历，都在这几段里，求饶与交涉须与之相合）\n${brief.story}\n` : ""}
 玩家这一句：${brief.text}
 
 【要求】

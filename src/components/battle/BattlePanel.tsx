@@ -12,31 +12,94 @@ import { Swords, X, Loader2, Flame, Footprints, Package, Coins, Skull, Flag } fr
 export function BattlePanel() {
   const battle = useAIStore((s) => s.battle);
   const endBattle = useAIStore((s) => s.endBattle);
+  const isDeveloperMode = useAIStore((s) => s.isDeveloperMode);
+  // 胜负未分，还在交手
+  const ongoing = battle.isActive && !battle.aftermath;
 
   return (
-    // 各块按内容排开、整页可上下滚：窗口矮或是窄时，行动指令那一栏也不会被裁掉
-    <div className="paper-texture spiritual-particles relative h-full flex flex-col overflow-y-auto p-3 sm:p-5">
-      <PanelTitle
-        title="战斗"
-        poem="黄沙百战穿金甲，不破楼兰终不还。"
-      />
-      {/* 战斗由叙事触发后必须留一个出口，否则玩家会被困在战斗界面 */}
-      <button
-        onClick={endBattle}
-        className="flex items-center gap-1 text-xs font-serif text-cinnabar-400/70 hover:text-cinnabar-300 transition mb-3"
-      >
-        <X size={12} /> 结束战斗，退出战斗界面
-      </button>
+    // 左侧战事、右侧前情：窗口宽时并排，窄时上下摞着，整页仍可滚动
+    <div className="paper-texture spiritual-particles relative h-full flex flex-col lg:flex-row gap-3 lg:gap-5 overflow-hidden p-3 sm:p-5">
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <PanelTitle
+          title="战斗"
+          poem="黄沙百战穿金甲，不破楼兰终不还。"
+        />
+        {/*
+          仗没打完就没有退出的路：寻常玩家只能把它打到分出胜负。
+          开发者另开一扇门，免得调试时被自己挑起的战事困住。
+          收起问道窗只是把这一页暂时挪开，战况仍在，摊开还是原处那一场。
+        */}
+        {ongoing ? (
+          isDeveloperMode ? (
+            <button
+              onClick={endBattle}
+              className="flex items-center gap-1 text-xs font-serif text-cinnabar-400/70 hover:text-cinnabar-300 transition mb-3"
+            >
+              <X size={12} /> 结束战斗，退出战斗界面（开发者）
+            </button>
+          ) : (
+            <p className="mb-3 font-serif text-xs text-paper-400/50">胜负未分，这一战走不脱。</p>
+          )
+        ) : (
+          <button
+            onClick={endBattle}
+            className="flex items-center gap-1 text-xs font-serif text-cinnabar-400/70 hover:text-cinnabar-300 transition mb-3"
+          >
+            <X size={12} /> 结束战斗，退出战斗界面
+          </button>
+        )}
 
-      {/* 未分胜负时是交手，分出胜负后转为收尾；宗门战另有自己的一套发落 */}
-      {battle.sectWar && battle.aftermath ? (
-        <SectWarAftermathView />
-      ) : battle.aftermath ? (
-        <BattleAftermathView />
-      ) : (
-        <BattleOngoingView />
-      )}
+        {/* 未分胜负时是交手，分出胜负后转为收尾；宗门战另有自己的一套发落 */}
+        {battle.sectWar && battle.aftermath ? (
+          <SectWarAftermathView />
+        ) : battle.aftermath ? (
+          <BattleAftermathView />
+        ) : (
+          <BattleOngoingView />
+        )}
+      </div>
+
+      {/* 右侧：主游戏叙事，免得不记得这一战是为着什么打起来的 */}
+      <aside className="flex max-h-[38vh] w-full shrink-0 flex-col border-t-2 border-gold-500/20 pt-3 lg:h-full lg:max-h-none lg:w-80 xl:w-96 lg:border-l-2 lg:border-t-0 lg:border-gold-500/20 lg:pl-4 lg:pt-0">
+        <StoryPeek />
+      </aside>
     </div>
+  );
+}
+
+/**
+ * 右栏的前情：问道里近几回的正文。
+ * 战斗一开就把叙事挡在后面了，此处留一份，省得打到一半忘了前因。
+ */
+function StoryPeek() {
+  const turns = useAIStore((s) => s.conversation.turns);
+  const streaming = useAIStore((s) => s.conversation.streamingNarrative);
+  const recent = (Array.isArray(turns) ? turns : []).slice(-4);
+
+  return (
+    <ScrollCard title="前情" subtitle="问道里的近几回" className="flex h-full min-h-0 flex-col">
+      <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+        {recent.length === 0 && !streaming ? (
+          <p className="font-serif text-xs leading-relaxed text-paper-400/50 py-2">
+            还没有可回看的叙事。这一战的来由，可收起战斗界面到问道里翻看。
+          </p>
+        ) : (
+          recent.map((t) => (
+            <div key={t.id} className="border-b border-paper-400/10 pb-2 last:border-b-0">
+              {t.playerInput && (
+                <p className="font-serif text-[11px] leading-relaxed text-gold-400/70">你：{t.playerInput}</p>
+              )}
+              <p className="mt-1 whitespace-pre-wrap font-serif text-[13px] leading-relaxed text-paper-200">
+                {t.narrative}
+              </p>
+            </div>
+          ))
+        )}
+        {streaming && (
+          <p className="whitespace-pre-wrap font-serif text-[13px] leading-relaxed text-paper-300/80">{streaming}</p>
+        )}
+      </div>
+    </ScrollCard>
   );
 }
 
