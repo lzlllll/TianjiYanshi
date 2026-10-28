@@ -2559,6 +2559,10 @@ export interface BattleEntity {
   facing?: BattleFacing;
   /** 这一位惯用的出手样式；没写便不吃样式相克 */
   style?: CombatStyle;
+  /** 境界全称，如「炼气后期」；阵上悬浮时报给人看 */
+  realm?: string;
+  /** 一句长相或来路，叙事里报过的才记 */
+  desc?: string;
 }
 
 export interface BattleMap {

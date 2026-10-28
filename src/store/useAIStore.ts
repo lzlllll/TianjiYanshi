@@ -1608,6 +1608,9 @@ function mergeBattleEntities(
       ...e,
       facing: e.facing ?? mine.facing,
       style: e.style ?? mine.style,
+      // 境界与来路是开战那笔记下的，模型回报里不带这两项，照旧留着
+      realm: e.realm ?? mine.realm,
+      desc: e.desc ?? mine.desc,
       buffs: Array.isArray(mine.buffs) ? mine.buffs : e.buffs,
     };
     if (!ownedSet.has(e.id)) return base;

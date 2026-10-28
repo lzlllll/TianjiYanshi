@@ -74,6 +74,9 @@ function buildBattleFoes(foes: BattleFoeBrief[] | undefined, playerRealm: number
         mp: maxMp,
         maxMp,
         icon: foe.name.slice(0, 1),
+        // 境界与来路一并记在实体上，阵上悬浮才报得出
+        realm: REALM_NAMES[realm] ?? undefined,
+        ...(foe.desc ? { desc: foe.desc } : {}),
         ...(foe.style ? { style: foe.style } : {}),
       });
     }

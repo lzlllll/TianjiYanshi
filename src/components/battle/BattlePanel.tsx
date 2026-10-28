@@ -12,6 +12,7 @@ import { effectiveAttributes, movementLimit } from "@/lib/attributes";
 import { computableSkills, computeSkillCast, isHeartConversion, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
 import { styleMatchup, techniqueStyleOf } from "@/data/combatStyles";
 import { facingOf } from "@/lib/battleFacing";
+import type { BattleEntity } from "@/data/types";
 import {
   aliveEnemies,
   enemiesInRange,
@@ -391,46 +392,96 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
 function EnemyPanel() {
   const battle = useAIStore((s) => s.battle);
   const alive = aliveEnemies(battle.map.entities);
+  // 鼠标落在谁身上，便把这一位的已知底细浮出来
+  const [tip, setTip] = useState<{ x: number; y: number; entity: BattleEntity } | null>(null);
 
   if (alive.length === 0) {
     return <p className="font-serif text-[11px] text-paper-400/50">台上已无敌手。</p>;
   }
 
   return (
-    <div className="space-y-1.5">
-      {alive.map((e) => {
-        const buffs = Array.isArray(e.buffs) ? e.buffs : [];
-        const hp = typeof e.hp === "number" ? e.hp : 0;
-        const maxHp = typeof e.maxHp === "number" ? e.maxHp : 0;
-        return (
-          <div key={e.id} className="rounded border border-paper-400/15 bg-ink-900/20 px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate font-serif text-[12px] text-paper-200">{e.name}</span>
-              <span className="shrink-0 font-number text-[11px] text-paper-300/80">
-                {typeof e.hp === "number" ? `${hp}/${e.maxHp ?? "?"}` : "伤情不明"}
-              </span>
-            </div>
-            {maxHp > 0 && (
-              <div className="mt-1 h-1 overflow-hidden rounded bg-ink-900">
-                <div
-                  className="h-full bg-gradient-to-r from-cinnabar-600 to-cinnabar-400 transition-all"
-                  style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }}
-                />
-              </div>
-            )}
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-serif text-[10px] text-paper-400/60">
-              <span>{e.style ?? "样式未明"}</span>
-              <span>朝向 {facingOf(e)}</span>
-              {buffs.length > 0 && (
-                <span className="text-gold-400/70">
-                  {buffs.map((b) => `${b.name}·余 ${Math.max(0, Math.round(Number(b.duration) || 0))} 柱`).join("、")}
+    <>
+      <div className="space-y-1.5">
+        {alive.map((e) => {
+          const buffs = Array.isArray(e.buffs) ? e.buffs : [];
+          const hp = typeof e.hp === "number" ? e.hp : 0;
+          const maxHp = typeof e.maxHp === "number" ? e.maxHp : 0;
+          return (
+            <div
+              key={e.id}
+              onMouseEnter={(ev) => {
+                const rect = ev.currentTarget.getBoundingClientRect();
+                setTip({ x: rect.left, y: rect.bottom + 6, entity: e });
+              }}
+              onMouseLeave={() => setTip(null)}
+              className="rounded border border-paper-400/15 bg-ink-900/20 px-2 py-1.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-serif text-[12px] text-paper-200">{e.name}</span>
+                <span className="shrink-0 font-number text-[11px] text-paper-300/80">
+                  {typeof e.hp === "number" ? `${hp}/${e.maxHp ?? "?"}` : "伤情不明"}
                 </span>
+              </div>
+              {maxHp > 0 && (
+                <div className="mt-1 h-1 overflow-hidden rounded bg-ink-900">
+                  <div
+                    className="h-full bg-gradient-to-r from-cinnabar-600 to-cinnabar-400 transition-all"
+                    style={{ width: `${Math.max(0, Math.min(100, (hp / maxHp) * 100))}%` }}
+                  />
+                </div>
               )}
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-serif text-[10px] text-paper-400/60">
+                <span>{e.style ?? "样式未明"}</span>
+                <span>朝向 {facingOf(e)}</span>
+                {buffs.length > 0 && (
+                  <span className="text-gold-400/70">
+                    {buffs.map((b) => `${b.name}·余 ${Math.max(0, Math.round(Number(b.duration) || 0))} 柱`).join("、")}
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+      {tip && <EnemyTip x={tip.x} y={tip.y} entity={tip.entity} />}
+    </>
+  );
+}
+
+/** 敌人的底细浮层：只报已经知道的——境界、气血、灵力、样式、朝向、位次与身上的余效 */
+function EnemyTip({ x, y, entity }: { x: number; y: number; entity: BattleEntity }) {
+  const buffs = Array.isArray(entity.buffs) ? entity.buffs : [];
+  const known = [
+    entity.realm ? `境界 ${entity.realm}` : "",
+    typeof entity.hp === "number" ? `气血 ${entity.hp}/${entity.maxHp ?? "?"}` : "",
+    typeof entity.mp === "number" ? `灵力 ${entity.mp}/${entity.maxMp ?? "?"}` : "",
+    `样式 ${entity.style ?? "未明"} · 朝向 ${facingOf(entity)}`,
+    `位次 第 ${entity.position.x} 列 ${entity.position.y} 行`,
+    buffs.length > 0
+      ? `状态 ${buffs.map((b) => `${b.name}·余 ${Math.max(0, Math.round(Number(b.duration) || 0))} 柱`).join("、")}`
+      : "",
+  ].filter(Boolean);
+
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[80] w-56 rounded border border-cinnabar-400/40 bg-ink-900/95 px-3 py-2 shadow-lg"
+      style={{ left: Math.min(x, Math.max(0, window.innerWidth - 240)), top: y }}
+    >
+      <p className="mb-1.5 font-serif text-[12px] text-gold-300">{entity.name}</p>
+      <div className="space-y-0.5">
+        {known.map((line) => (
+          <p key={line} className="font-serif text-[10px] leading-relaxed text-paper-300/80">
+            {line}
+          </p>
+        ))}
+      </div>
+      {entity.desc && (
+        <p className="mt-1.5 border-t border-paper-400/15 pt-1.5 font-serif text-[10px] leading-relaxed text-paper-400/70">
+          {entity.desc}
+        </p>
+      )}
+    </div>,
+    document.body,
   );
 }
 

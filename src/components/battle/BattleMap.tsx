@@ -100,7 +100,7 @@ export function BattleMap({ map }: BattleMapProps) {
                 )}
                 {getEntityName(entity) && (
                   <span
-                    title={`${entity.name}${entity.style ? `｜${entity.style}` : ""}${entity.facing ? `｜朝${entity.facing}` : ""}`}
+                    title={`${entity.name}${entity.realm ? `｜${entity.realm}` : ""}${entity.style ? `｜${entity.style}` : ""}${entity.facing ? `｜朝${entity.facing}` : ""}`}
                     className="absolute -top-1 -left-1 rounded bg-ink-900/80 px-0.5 font-serif text-[10px] leading-tight text-paper-300/80"
                   >
                     {getEntityName(entity).slice(0, 2)}
