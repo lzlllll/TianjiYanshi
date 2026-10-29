@@ -31,6 +31,7 @@ import { composeSectSite, sectNameCore } from "@/data/sectSites";
 import { normalizeSectRelation } from "@/data/sectRelations";
 import { normalizeOccupation } from "@/data/occupations";
 import { resolveLocation } from "@/data/locations";
+import { MAX_TRAVEL_COMPANIONS } from "@/data/npcGen";
 import { isKnownGood } from "@/data/goods";
 import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data/skills";
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
@@ -1679,8 +1680,15 @@ function normalizeRelation(item: any): any {
     delete item.fixedUntilDay;
   }
 
-  // 谁与你同行只由你在尘缘里定下，叙事说了不算
-  delete item.traveling;
+  // 叙事可以让新认下的人一露面便与你同行：只认明确的写法，其余一概当作不同行。
+  // 人数与仇敌这两条由落账处把着，越过便摘掉
+  const wantTravel =
+    item.traveling === true ||
+    item.traveling === "true" ||
+    item.traveling === "同行" ||
+    item.traveling === "随行";
+  if (wantTravel) item.traveling = true;
+  else delete item.traveling;
 
   return item;
 }
@@ -2366,6 +2374,22 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
       else rel[field] = raw.slice(0, 40);
       return null; // 已直接处理
     }
+    if (field === "traveling") {
+      // 叙事可让他与你结伴上路，也可以在分手处解散；只认明确的写法
+      const on = /^(true|1|是|同行|随行|yes|on)$/i.test(raw);
+      if (on) {
+        if (String(rel.type ?? "") === "enemy") return null;
+        const companions = (Array.isArray(root?.relations) ? root.relations : []).filter(
+          (r: any) => r && r !== rel && r.traveling,
+        ).length;
+        if (companions >= MAX_TRAVEL_COMPANIONS) {
+          console.debug("[dataOps] 同行已满，叙事再添便不落账:", rel.name ?? rel.id);
+          return null;
+        }
+      }
+      rel.traveling = on;
+      return null; // 已直接处理
+    }
     // 名录之外的人物字段不再一概打回：正文里若给他添了别的名目——生辰、绰号、喜好，
     // 写实了便照写，路由圈不圈都不作数，只守住「编号不容改写」这一条。
     if (field === "id" || !raw) return null;
@@ -2940,7 +2964,13 @@ function applyOne(root: any, op: DataOp): void {
           arr.push(normalized);
         }
       } else if (op.collection === "relations") {
-        arr.push(normalizeRelation(payload));
+        const rel = normalizeRelation(payload);
+        // 一露面便同行的：仇敌不成，同行的人也有限，越过便把这一项摘掉
+        if (rel?.traveling) {
+          const companions = arr.filter((r: any) => r && r.traveling).length;
+          if (rel.type === "enemy" || companions >= MAX_TRAVEL_COMPANIONS) delete rel.traveling;
+        }
+        arr.push(rel);
       } else if (op.collection === "player.buffs") {
         // 名目不在名录里就丢掉，不往身上添一条程序算不出的状态
         const buff = normalizeBuff(payload, root);

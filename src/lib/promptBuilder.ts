@@ -1122,6 +1122,7 @@ ${buildWritableHint(writable)}
 - 铺面添货：叙事里若给某家铺子调来了货、补了存货（新到一批药材、庄上送来新酒、行商送来紧俏物事），用 add shop.goods，payload 写 {"shop":"铺子名","goods":[{"name":"货名","price":单价下品灵石,"stock":存货数,"desc":"一句说明"}]}；铺子名须与摘要中「本城铺面」那一行的名号一字不差，已有的货便添存量，没有的便新上一样。玩家自己去铺子挑货、出货那一类买卖不要写这一条，那由铺面界面结算。
 - delete：用 collection 与 id 两个字段，id 必须是摘要中已存在的条目 id。
 - 删人：正文里某人若当场殒命、身死、被杀、坐化、寿终，务必用 delete relations 把他从尘缘里抹去，id 从摘要中取——此条为硬规矩，纵是师长旧友也不得把已死之人留在尘缘；远走不归、恩断义绝的同样可删；只是一时不快、暂别几日的，不要删。
+- 同行：正文里若有人当真与你并肩上路（相邀同游、结伴赶路、受雇护送、师徒同行），用 modify relations[<id>].traveling = true 把他记为同行；到了分手、散伙、各奔前程处，照写 = false。同行至多三人，仇敌不结伴，人数已满便不再添。成了同行的人，此后赶路、住店、动武都会带上他，叙事须写出他跟着你走，不要只让他露一面便不见；新认下的人若要一露面便同行，也可在 add relations 的 payload 里写 "traveling": true。
 
 【内容规则】
 1. 只输出叙事中确实发生的变化，没有发生就不要编造；本轮若无任何变化，ops 输出空数组。
@@ -1310,8 +1311,9 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
   {
     id: "bond",
     label: "尘缘",
-    spec: `只产出人物关系，逐位 add relations，每位 {"id","name","title","type","relation","trust","realm","note","gender","age","origin","personality","appearance","affiliation","location","persona"}：
+    spec: `只产出人物关系，逐位 add relations，每位 {"id","name","title","type","relation","trust","realm","note","gender","age","origin","personality","appearance","affiliation","location","persona","traveling"}：
 - type 只取 dao_companion、master、disciple、friend、enemy
+- traveling：叙述里若已写明这位一路随行（同行、同路、随侍、结伴上路），写 true，至多三人；其余人不写这一项
 - relation 为「关系」，-100 到 100 的整数：0 为平交，正为亲近，负为交恶；陌生人约在 0 上下
 - trust 为「信任」，1 到 5 的整数：1 不可信任、2 尚存嫌隙、3 相交莫逆、4 推心置腹、5 同生共死；新结识的人给 2
 - realm 为该人物的修为境界
