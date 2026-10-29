@@ -164,6 +164,8 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
   const player = useGameStore((s) => s.player);
   const battle = useAIStore((s) => s.battle);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
+  // 这一招点到的对手：一招可及多人的，可一并点上几位
+  const [pickedTargets, setPickedTargets] = useState<string[]>([]);
   const [tip, setTip] = useState<{ x: number; y: number; name: string; range: SkillRange } | null>(null);
 
   // 已解锁的招式：与战斗解析、招式面板同一套算法
@@ -226,10 +228,20 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
         )
       : [];
 
-  const act = (targetName?: string) => {
+  // 点到的对手里，够得着的才作数
+  const chosenIds = pickedTargets.filter((id) => reachable.some((e) => e.id === id));
+
+  const act = () => {
     if (!picked || disabled) return;
     const name = `${picked.technique.name}·${picked.skill.name}`;
-    onAct(targetName ? `施展「${name}」，攻向「${targetName}」` : `施展「${name}」`);
+    // 点了几位便写几位；一位也没有便是不挑对手的那一路（守势、运功）
+    const targets = pickedTargets.filter((id) => alive.some((e) => e.id === id));
+    const aimed = targets
+      .map((id) => alive.find((e) => e.id === id)?.name)
+      .filter((n): n is string => Boolean(n))
+      .map((n) => `「${n}」`)
+      .join("");
+    onAct(aimed ? `施展「${name}」，攻向${aimed}` : `施展「${name}」`);
   };
 
   if (available.length === 0) {
@@ -279,7 +291,10 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
                 });
               }}
               onMouseLeave={() => setTip(null)}
-              onClick={() => setPickedKey(isPicked ? null : key)}
+              onClick={() => {
+                setPickedKey(isPicked ? null : key);
+                setPickedTargets([]);
+              }}
               className={cn(
                 "rounded border px-2 py-1 text-left font-serif text-[11px] transition",
                 isPicked
@@ -307,7 +322,7 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
               ? `守势：这一回合减免 ${guardValue} 点伤害，不冲人去`
               : !aimsAtFoe
                 ? `这一招不冲人去，施展便可（${rangeLabel(pickedRange)}）`
-                : `范围：${rangeLabel(pickedRange)}｜点一位够得着的对手出手`}
+                : `范围：${rangeLabel(pickedRange)}｜点选够得着的对手，可点多位`}
           </p>
           {!aimsAtFoe ? (
             <button
@@ -321,36 +336,58 @@ function BattleQuickActions({ onAct, disabled }: { onAct: (text: string) => void
           ) : alive.length === 0 ? (
             <p className="font-serif text-[11px] text-paper-400/50">台上已无敌手。</p>
           ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {alive.map((e) => {
-                const hit = reachable.some((x) => x.id === e.id);
-                const vs = styleMatchup(pickedStyle, e.style);
-                const hurt =
-                  pickedCast && pickedCast.damage > 0
-                    ? Math.max(1, Math.round(pickedCast.damage * vs.factor))
-                    : 0;
-                return (
-                  <button
-                    key={e.id}
-                    type="button"
-                    disabled={!hit || disabled}
-                    onClick={() => act(e.name)}
-                    className={cn(
-                      "rounded border px-2 py-1 font-serif text-[11px] transition",
-                      hit
-                        ? "border-cinnabar-400/50 text-paper-100 hover:bg-cinnabar-500/20"
-                        : "border-paper-400/15 text-paper-400/40 cursor-not-allowed",
-                    )}
-                  >
-                    {e.name}
-                    {vs.kind === "advantage" ? " · 克" : vs.kind === "disadvantage" ? " · 被克" : ""}
-                    {hurt > 0 ? ` · 伤 ${hurt}` : ""}
-                    {typeof e.hp === "number" ? ` ${e.hp}/${e.maxHp ?? "?"}` : ""}
-                    {hit ? "" : " · 范围外"}
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {alive.map((e) => {
+                  const hit = reachable.some((x) => x.id === e.id);
+                  const chosen = pickedTargets.includes(e.id);
+                  const vs = styleMatchup(pickedStyle, e.style);
+                  const hurt =
+                    pickedCast && pickedCast.damage > 0
+                      ? Math.max(1, Math.round(pickedCast.damage * vs.factor))
+                      : 0;
+                  return (
+                    <button
+                      key={e.id}
+                      type="button"
+                      disabled={!hit || disabled}
+                      onClick={() =>
+                        setPickedTargets((prev) =>
+                          prev.includes(e.id) ? prev.filter((x) => x !== e.id) : [...prev, e.id],
+                        )
+                      }
+                      className={cn(
+                        "rounded border px-2 py-1 font-serif text-[11px] transition",
+                        !hit
+                          ? "border-paper-400/15 text-paper-400/40 cursor-not-allowed"
+                          : chosen
+                            ? "border-gold-400 bg-gold-500/20 text-gold-200"
+                            : "border-cinnabar-400/50 text-paper-100 hover:bg-cinnabar-500/20",
+                      )}
+                    >
+                      {e.name}
+                      {vs.kind === "advantage" ? " · 克" : vs.kind === "disadvantage" ? " · 被克" : ""}
+                      {hurt > 0 ? ` · 伤 ${hurt}` : ""}
+                      {typeof e.hp === "number" ? ` ${e.hp}/${e.maxHp ?? "?"}` : ""}
+                      {hit ? "" : " · 范围外"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={disabled || chosenIds.length === 0}
+                  onClick={act}
+                  className="rounded border border-gold-400/50 px-2.5 py-1 font-serif text-[11px] text-gold-200 transition hover:bg-gold-500/20 disabled:opacity-50"
+                >
+                  出手{chosenIds.length > 0 ? `（${chosenIds.length} 位）` : ""}
+                </button>
+                <span className="font-serif text-[10px] text-paper-400/50">
+                  点选多位可一并打出去
+                </span>
+              </div>
+            </>
           )}
           {aimsAtFoe && reachable.length === 0 && alive.length > 0 && (
             <p className="mt-1.5 font-serif text-[10px] text-paper-400/50">

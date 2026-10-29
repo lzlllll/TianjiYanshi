@@ -1600,31 +1600,80 @@ function mergeBattleEntities(
 ): BattleEntity[] {
   if (!Array.isArray(fromModel) || fromModel.length === 0) return local;
   const ownedSet = new Set(owned);
-  const merged = fromModel.map((e) => {
-    const mine = local.find((l) => l.id === e.id);
-    if (!mine) return e;
+  /** 本地这一份已被模型那条认领过的：末尾就不必再补一遍 */
+  const used = new Set<string>();
+  /** 已经摆上阵的编号：模型偶尔把同一位写两遍，编号只认头一条 */
+  const seen = new Set<string>();
+  const merged: BattleEntity[] = [];
+
+  for (const raw of fromModel) {
+    if (!raw || typeof raw !== "object") continue;
+    const rawId = String(raw.id ?? "").trim();
+    const rawName = String(raw.name ?? "").trim();
+    if (rawId && seen.has(rawId)) continue;
+
+    // 先按编号认人；编号认不出再按名号认——模型有时把 enemy-1-1 写成 enemy1，
+    // 若不当成同一位，末尾又把本地那份补回来，阵上便多出一个一模一样的人
+    let mine = rawId ? local.find((l) => l.id === rawId && !used.has(l.id)) : undefined;
+    if (!mine && rawName) {
+      const type = raw.type ?? "enemy";
+      mine = local.find((l) => !used.has(l.id) && l.name === rawName && l.type === type);
+    }
+    // 编号与名号都改写了也认得出：阵上一格只站一个人，同型同格必是同一位
+    if (!mine && raw.position) {
+      const type = raw.type ?? "enemy";
+      mine = local.find(
+        (l) =>
+          !used.has(l.id) &&
+          l.type === type &&
+          l.position?.x === raw.position!.x &&
+          l.position?.y === raw.position!.y,
+      );
+    }
+    if (mine) used.add(mine.id);
+    const id = mine?.id ?? rawId;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
     // 本地判定的状态不随模型的回报丢掉：0 伤害的纯负面招式也靠这一笔留下
     const base: BattleEntity = {
-      ...e,
-      facing: e.facing ?? mine.facing,
-      style: e.style ?? mine.style,
+      ...raw,
+      id,
+      name: rawName || mine?.name || "无名",
+      type: raw.type ?? mine?.type ?? "enemy",
+      position: raw.position ?? mine?.position ?? { x: 0, y: 0 },
+      facing: raw.facing ?? mine?.facing,
+      style: raw.style ?? mine?.style,
       // 境界与来路是开战那笔记下的，模型回报里不带这两项，照旧留着
-      realm: e.realm ?? mine.realm,
-      desc: e.desc ?? mine.desc,
-      buffs: Array.isArray(mine.buffs) ? mine.buffs : e.buffs,
+      realm: raw.realm ?? mine?.realm,
+      desc: raw.desc ?? mine?.desc,
+      buffs: Array.isArray(mine?.buffs) ? mine!.buffs : raw.buffs,
     };
-    if (!ownedSet.has(e.id)) return base;
-    return {
+    if (!mine || !ownedSet.has(id)) {
+      merged.push(base);
+      continue;
+    }
+    merged.push({
       ...base,
       hp: mine.hp,
       maxHp: mine.maxHp,
       isDead: mine.isDead,
       position: mine.position,
-    };
-  });
+    });
+  }
+
   // 模型漏报的人照旧留在场上，免得凭空少了一位
   for (const l of local) {
-    if (!merged.some((e) => e.id === l.id)) merged.push(l);
+    if (used.has(l.id) || seen.has(l.id)) continue;
+    // 那一格上已摆了同型的一位，便是同一个人被写了两遍，不再补
+    const sameSpot = merged.some(
+      (e) =>
+        e.type === l.type &&
+        e.position?.x === l.position?.x &&
+        e.position?.y === l.position?.y,
+    );
+    if (sameSpot) continue;
+    merged.push(l);
   }
   return merged;
 }
@@ -1752,6 +1801,8 @@ interface BattleIntent {
   skill: string;
   technique: string;
   target: string;
+  /** 这一招同时点到的几位对手；只打一位时为空 */
+  targets: string[];
   move: { x: number; y: number } | null;
   item: string;
   note: string;
@@ -1761,17 +1812,23 @@ interface BattleIntent {
 function parseBattleIntent(raw: string): BattleIntent {
   const payload = parseJsonPayload(raw) as Record<string, unknown> | null;
   const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-  const empty: BattleIntent = { skill: "", technique: "", target: "", move: null, item: "", note: "" };
+  const empty: BattleIntent = { skill: "", technique: "", target: "", targets: [], move: null, item: "", note: "" };
   if (!payload || typeof payload !== "object") return empty;
 
   const move = payload.move as Record<string, unknown> | null | undefined;
   const x = typeof move?.x === "number" && Number.isFinite(move.x) ? Math.trunc(move.x) : null;
   const y = typeof move?.y === "number" && Number.isFinite(move.y) ? Math.trunc(move.y) : null;
+  // 多目标写成数组；模型偶尔仍只写单个 target，两处都收下
+  const targets = (Array.isArray(payload.targets) ? payload.targets : [])
+    .map((t) => str(t))
+    .filter(Boolean)
+    .slice(0, 8);
 
   return {
     skill: str(payload.skill),
     technique: str(payload.technique),
     target: str(payload.target),
+    targets,
     move: x !== null && y !== null ? { x, y } : null,
     item: str(payload.item),
     note: str(payload.note),
@@ -3923,18 +3980,31 @@ export const useAIStore = create<AIStore>()(
           abortController = null;
         }
         const turns = Array.isArray(conv.turns)
-          ? conv.turns.slice(-4).map((t) => ({
-            ...t,
-            snapshot: null,
-            flashRaw: "",
-            opsRaw: "",
-            proRequest: {
-              summary: t.proRequest?.summary || "",
-              recentTurns: [],
-              decision: t.proRequest?.decision || "",
-              relevantData: "",
-            },
-          }))
+          ? conv.turns.slice(-4).map((t) => {
+            // 战斗不随存档醒来：把上一局留下的开战标记摘掉，
+            // 否则读档后问答窗照着那一轮又摆开一场早该收摊的阵
+            const battleFree =
+              t.mode === "battle" || t.sectWar || t.battleFoes
+                ? {
+                    ...t,
+                    mode: t.mode === "battle" ? undefined : t.mode,
+                    battleFoes: undefined,
+                    sectWar: undefined,
+                  }
+                : t;
+            return {
+              ...battleFree,
+              snapshot: null,
+              flashRaw: "",
+              opsRaw: "",
+              proRequest: {
+                summary: t.proRequest?.summary || "",
+                recentTurns: [],
+                decision: t.proRequest?.decision || "",
+                relevantData: "",
+              },
+            };
+          })
           : [];
         set({
           conversation: {
@@ -3957,6 +4027,9 @@ export const useAIStore = create<AIStore>()(
             openingFiled: [],
             openingFeed: [],
           },
+          // 战斗是眼前这一场的事，不随存档走：读档时把阵势收摊，
+          // 免得上一场打到一半的敌人压在刚读回来的这一局上头
+          battle: INITIAL_BATTLE,
         });
       },
 
@@ -6721,6 +6794,7 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
           skill: "",
           technique: "",
           target: "",
+          targets: [],
           move: null,
           item: "",
           note: "",
@@ -6878,73 +6952,143 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
               battleState.map.height,
             )
           : [];
-        // 这一招落在谁头上：点名的人够得着便打他；够不着便落空，不自动改打旁人
-        let targetId: string | null = null;
+        // 这一招落在谁头上：点名的人都要算，够得着的逐个吃这一手，够不着的落空，不自动改打旁人
+        let targetIds: string[] = [];
         let rangeNote = "";
         if (cast && castRange) {
-          const asked = (intent.target || "").trim();
-          const foe = asked
-            ? battleState.map.entities.find(
-                (e) =>
-                  e.type === "enemy" &&
-                  !e.isDead &&
-                  (e.id === asked || e.name === asked || asked.includes(e.name) || e.name.includes(asked)),
-              )
-            : undefined;
-          if (foe) {
-            if (reachable.some((e) => e.id === foe.id)) {
-              targetId = foe.id;
-            } else {
-              rangeNote = `范围：这一招及于${rangeLabel(castRange)}，${foe.name}却在范围之外，够不着，这一招落了空。`;
+          // 点名可能不止一位：提示词解析出的 targets 与原话里写到的名字都算
+          const askedFoes: BattleEntity[] = [];
+          const askOne = (key: string) => {
+            const name = String(key ?? "").trim();
+            if (!name) return;
+            const foe = battleState.map.entities.find(
+              (e) =>
+                e.type === "enemy" &&
+                !e.isDead &&
+                (e.id === name || e.name === name || name.includes(e.name) || e.name.includes(name)),
+            );
+            if (foe && !askedFoes.some((f) => f.id === foe.id)) askedFoes.push(foe);
+          };
+          for (const key of intent.targets) askOne(key);
+          askOne(intent.target);
+          // 快捷出手会写成「……攻向「甲」「乙」」，原话里点到的名字也一并认
+          for (const e of battleState.map.entities) {
+            if (e.type !== "enemy" || e.isDead) continue;
+            if (action.includes(e.name) && !askedFoes.some((f) => f.id === e.id)) askedFoes.push(e);
+          }
+
+          const reachIds = new Set(reachable.map((e) => e.id));
+          const hit = askedFoes.filter((e) => reachIds.has(e.id));
+          const missed = askedFoes.filter((e) => !reachIds.has(e.id));
+          if (hit.length > 0) {
+            targetIds = hit.map((e) => e.id);
+            if (missed.length > 0) {
+              rangeNote = `范围：这一招及于${rangeLabel(castRange)}，${missed
+                .map((e) => e.name)
+                .join("、")}却在范围之外，这几路落了空。`;
             }
+          } else if (askedFoes.length > 0) {
+            rangeNote = `范围：这一招及于${rangeLabel(castRange)}，${askedFoes
+              .map((e) => e.name)
+              .join("、")}却在范围之外，够不着，这一招落了空。`;
           } else if (reachable.length > 0) {
-            targetId = resolveBattleTarget(reachable, playerId, "");
+            targetIds = [resolveBattleTarget(reachable, playerId, "")];
           } else {
             rangeNote = `范围：这一招及于${rangeLabel(castRange)}，此刻范围之内没有敌人，这一招无处可落。`;
           }
         }
 
-        // 从哪一侧攻入、两式如何相克：背后与侧方更见便宜，样式相克另给一倍率，皆由本地算定
-        const targetEntity = targetId
-          ? battleState.map.entities.find((e) => e.id === targetId)
-          : undefined;
-        const angle =
-          cast && targetEntity && cast.damage > 0 ? strikeAngle(origin, targetEntity) : null;
-        const styleMatch =
-          cast && targetEntity && cast.damage > 0
-            ? styleMatchup(
-                matchedSkill ? techniqueStyleOf(matchedSkill.technique) : null,
-                targetEntity.style,
-              )
-            : null;
-        let appliedCast = cast;
-        if (appliedCast && cast && cast.damage > 0) {
-          const angleFactor = angle?.factor ?? 1;
-          const styleFactor = styleMatch?.factor ?? 1;
-          if (angleFactor !== 1 || styleFactor !== 1) {
-            const damage = Math.max(1, Math.round(cast.damage * angleFactor * styleFactor));
-            appliedCast = {
-              ...cast,
-              damage,
-              breakdown: [
-                ...cast.breakdown,
-                ...(angle && angleFactor !== 1 ? [`${angle.label}出手 ×${angleFactor}`] : []),
-                ...(styleMatch && styleFactor !== 1
-                  ? [`样式：${styleMatch.label} ×${styleFactor}`]
-                  : []),
-              ],
-              summary: cast.summary.replace(/造成 \d+ 点伤害/, `造成 ${damage} 点伤害`),
-            };
+        // 从哪一侧攻入、两式如何相克：每位对手各算一道，再照各自的结果落伤
+        const settledFoes: {
+          entity: BattleEntity;
+          angle: ReturnType<typeof strikeAngle>;
+          styleMatch: ReturnType<typeof styleMatchup>;
+          cast: typeof cast;
+        }[] = [];
+        let battleEntitiesNow = battleState.map.entities;
+        const ownedIds: string[] = [];
+        let mpSpentTotal = 0;
+        let hpSpentTotal = 0;
+        let mpRestoredTotal = 0;
+
+        const settleOneFoe = (tid: string, first: boolean) => {
+          const targetEntity = battleState.map.entities.find((e) => e.id === tid);
+          if (!targetEntity) return;
+          const angle = cast && cast.damage > 0 ? strikeAngle(origin, targetEntity) : null;
+          const styleMatch =
+            cast && cast.damage > 0
+              ? styleMatchup(
+                  matchedSkill ? techniqueStyleOf(matchedSkill.technique) : null,
+                  targetEntity.style,
+                )
+              : null;
+          let appliedCast = cast;
+          if (appliedCast && cast && cast.damage > 0) {
+            const angleFactor = angle?.factor ?? 1;
+            const styleFactor = styleMatch?.factor ?? 1;
+            if (angleFactor !== 1 || styleFactor !== 1) {
+              const damage = Math.max(1, Math.round(cast.damage * angleFactor * styleFactor));
+              appliedCast = {
+                ...cast,
+                damage,
+                breakdown: [
+                  ...cast.breakdown,
+                  ...(angle && angleFactor !== 1 ? [`${angle.label}出手 ×${angleFactor}`] : []),
+                  ...(styleMatch && styleFactor !== 1
+                    ? [`样式：${styleMatch.label} ×${styleFactor}`]
+                    : []),
+                ],
+                summary: cast.summary.replace(/造成 \d+ 点伤害/, `造成 ${damage} 点伤害`),
+              };
+            }
           }
+          // 头一位照原样扣灵力、带步法；其余几位只吃伤害，不再重复扣账
+          const castForThis =
+            !first && appliedCast
+              ? { ...appliedCast, mpCost: 0, hpCost: 0, mpRestore: 0 }
+              : appliedCast;
+          const r = applyBattleCast({
+            entities: battleEntitiesNow,
+            playerId,
+            cast: castForThis,
+            targetId: tid,
+            moveTo: first ? moveTo : null,
+          });
+          battleEntitiesNow = r.entities;
+          ownedIds.push(...r.owned);
+          if (first) {
+            mpSpentTotal = r.mpSpent;
+            hpSpentTotal = r.hpSpent;
+            mpRestoredTotal = r.mpRestored;
+          }
+          settledFoes.push({ entity: targetEntity, angle, styleMatch, cast: appliedCast });
+        };
+
+        if (targetIds.length > 0) {
+          targetIds.forEach((tid, i) => settleOneFoe(tid, i === 0));
+        } else {
+          // 不冲人去的一手（守势、运功回气、只加自身状态），或这一招落了空：只落走位与自身那一路
+          const r = applyBattleCast({
+            entities: battleEntitiesNow,
+            playerId,
+            cast,
+            targetId: null,
+            moveTo,
+          });
+          battleEntitiesNow = r.entities;
+          ownedIds.push(...r.owned);
+          mpSpentTotal = r.mpSpent;
+          hpSpentTotal = r.hpSpent;
+          mpRestoredTotal = r.mpRestored;
         }
 
-        const local = applyBattleCast({
-          entities: battleState.map.entities,
-          playerId,
-          cast: appliedCast,
-          targetId,
-          moveTo,
-        });
+        const local = {
+          entities: battleEntitiesNow,
+          owned: ownedIds,
+          mpSpent: mpSpentTotal,
+          hpSpent: hpSpentTotal,
+          mpRestored: mpRestoredTotal,
+        };
 
         // 招式使成之后，照招式上写定的那几条状态落到己方或对手头上
         const skillBuffDuration = matchedSkill
@@ -6990,7 +7134,7 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
                 });
               }
               selfBuffLines.push(`${tpl.name}（余 ${skillBuffDuration} 柱）`);
-            } else if (tpl.isDebuff && targetId) {
+            } else if (tpl.isDebuff && targetIds.length > 0) {
               enemyBuffs.push({
                 id: tpl.id,
                 name: tpl.name,
@@ -7000,11 +7144,12 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
             }
           }
         }
-        // 这一招落在对手身上的状态，记在那一位名下，随香递减
+        // 这一招落在对手身上的状态，记在点到的那几位名下，随香递减
         let battleEntities = local.entities;
-        if (enemyBuffs.length > 0 && targetId) {
+        if (enemyBuffs.length > 0 && targetIds.length > 0) {
+          const struck = new Set(targetIds);
           battleEntities = battleEntities.map((e) =>
-            e.id === targetId
+            struck.has(e.id)
               ? { ...e, buffs: [...(Array.isArray(e.buffs) ? e.buffs : []), ...enemyBuffs] }
               : e,
           );
@@ -7029,30 +7174,45 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         }
 
         // 第三步：把判定结果与各项参数一并交给叙事那一步照写
-        const settledTarget = targetId
-          ? local.entities.find((e) => e.id === targetId)
-          : undefined;
+        const leadCast = settledFoes[0]?.cast ?? cast;
         const settleLines: string[] = [];
-        if (appliedCast) {
-          settleLines.push(`招式：《${appliedCast.techniqueName}》·${appliedCast.skillName}`);
-          settleLines.push(`判定依据：${appliedCast.breakdown.join("、")}`);
-          settleLines.push(`结算：${appliedCast.summary}`);
-          if (angle) settleLines.push(`出手方位：自${angle.label}攻入（伤害 ×${angle.factor}）`);
-          if (styleMatch) settleLines.push(`样式：${styleMatch.label}（伤害 ×${styleMatch.factor}）`);
-          // 心法催运不冲着谁去，便不报目标
-          if (targetId && appliedCast.hpCost <= 0) settleLines.push(`目标：${settledTarget?.name ?? targetId}`);
-          if (appliedCast.damage > 0 && settledTarget && typeof settledTarget.hp === "number") {
+        if (leadCast) {
+          settleLines.push(`招式：《${leadCast.techniqueName}》·${leadCast.skillName}`);
+          settleLines.push(`判定依据：${leadCast.breakdown.join("、")}`);
+          settleLines.push(`结算：${leadCast.summary}`);
+        }
+        // 每位对手各报一笔：自哪一侧攻入、样式如何相克、伤了多少、余下多少气血
+        for (const foe of settledFoes) {
+          const after = local.entities.find((e) => e.id === foe.entity.id);
+          const mods = [
+            foe.angle ? `自${foe.angle.label}攻入 ×${foe.angle.factor}` : "",
+            foe.styleMatch && foe.styleMatch.factor !== 1
+              ? `样式：${foe.styleMatch.label} ×${foe.styleMatch.factor}`
+              : "",
+          ].filter(Boolean);
+          const hurt = foe.cast && foe.cast.damage > 0 ? `伤 ${foe.cast.damage}` : "这一手不伤他";
+          settleLines.push(
+            `目标：${foe.entity.name}，${hurt}${mods.length > 0 ? `（${mods.join("；")}）` : ""}`,
+          );
+          if (after && typeof after.hp === "number") {
             settleLines.push(
-              `目标气血：已由系统扣至 ${settledTarget.hp}${
-                typeof settledTarget.maxHp === "number" ? `/${settledTarget.maxHp}` : ""
-              }${settledTarget.isDead ? "，气绝倒地" : ""}`,
+              `目标气血：${foe.entity.name} 已由系统扣至 ${after.hp}${
+                typeof after.maxHp === "number" ? `/${after.maxHp}` : ""
+              }${after.isDead ? "，气绝倒地" : ""}`,
             );
           }
+        }
+        if (settledFoes.length > 1) {
+          settleLines.push("这一合打的是多人：上面每一位都要在叙事里写到，不可只写其中一位。");
         }
         if (castRange) {
           settleLines.push(`招式范围：${rangeLabel(castRange)}`);
           if (rangeNote) {
-            settleLines.push(`${rangeNote}叙事须写成落空，不得写成打中，也不要再扣目标气血。`);
+            settleLines.push(
+              settledFoes.length > 0
+                ? `${rangeNote}叙事里须分写：够得着的照实写成打中，够不着的写成落空，不要给落空的那几位扣气血。`
+                : `${rangeNote}叙事须写成落空，不得写成打中，也不要再扣目标气血。`,
+            );
           } else {
             settleLines.push(`范围内敌人：${reachable.map((e) => e.name).join("、") || "无"}`);
           }
@@ -7083,9 +7243,11 @@ ${checkInstruction()}这一行也要缀在 reply 的末尾，reply 之外不要�
         if (selfBuffLines.length > 0) {
           settleLines.push(`己方状态：已由系统落下 ${selfBuffLines.join("、")}（不要重复写进 OPS）`);
         }
-        if (enemyBuffs.length > 0 && settledTarget) {
+        if (enemyBuffs.length > 0 && settledFoes.length > 0) {
           settleLines.push(
-            `敌方状态：${settledTarget.name} 身上落下 ${enemyBuffs.map((b) => `「${b.name}」`).join("、")}，各余 ${skillBuffDuration} 柱`,
+            `敌方状态：${settledFoes.map((f) => f.entity.name).join("、")} 身上落下 ${enemyBuffs
+              .map((b) => `「${b.name}」`)
+              .join("、")}，各余 ${skillBuffDuration} 柱`,
           );
         }
         settleLines.push(
@@ -7143,6 +7305,7 @@ ${battleState.context.join("\n")}
 换柱时照实报 100（或更高的数），不要直接写下一柱的小数字。
 【朝向】entities 里每位都带 facing（东、南、西、北），写明面朝哪一方，你照叙事把它更新；从背后攻入伤害更重（×1.3）、侧方 ×1.15、正面不增。这一笔由系统照站位算定，你只照实写「绕到背后」「侧身递剑」这类经过，不必自己报倍数。
 【样式】entities 的 style 是这一位的出手样式（长兵、挥砍短兵、刺击短兵、软兵、拳脚、射术、音律、御兽、符阵、术法）；两式相克由系统算定，你只照实写「一寸长一寸强」「横刀封住直刺」这类经过，不必自己报倍率，也不要改写 style 掩人耳目。
+【名录】entities 须照上一回合图上那几位原样回写：id 一字不改照抄，不可另起编号，同一位只写一条，不可写成两条；这一合没挪窝的，position 照旧。倒下的人仍旧留着并标 isDead，不要删去。只有在叙事里当真添了新人（增援、伏兵、召出的傀儡）时，才另起一个从前未有过的 id。
 【守势】若敌方这一合从正面攻在你身上，且【守势招式】里有你使得出的，可在 BATTLE 块里报 -- guard: true：系统照最高那一招的一半减伤。背后、侧方来的伤不算；这一合没被打中、或没有守势招式，报 false。玩家主动施展守势的那一回合由系统全额减伤，此处不必再报。
 ${beast ? `【随身灵兽】图上的 beast 是你随身带着的${beast.name}，也是你这一边的。它${beast.temper || "自有性子"}，这一场里你每一段叙事都要写出它做了什么——扑咬、示警、绕到敌后、护在你身前、被打退，都行；招式要像一头兽，别让它说人话。它只受敌人所伤，你的招式不要伤及它，照实更新它的位置与气血，倒下了标 isDead 即可。亲疏越厚，它越肯为你搏命；亲疏还浅，就许它畏缩、走神、抢食。\n` : ""}${allies.length > 0 ? `【同行队友】图上的 ally 是同行的自己人，与你并肩，不是敌人。你的每一条叙事里都要写出他们这一回合做了什么（出招、护你、喝骂、吃亏都行），并照实更新他们的位置与气血；他们若是倒下，标 isDead 即可，不要写成敌人。他们只受敌人所伤，你的招式不要伤及他们。\n` : ""}【战斗中的持续状态】战斗里留下的临时状态一律按柱香计：用 ADD player.buffs 写入，
 payload 写 {"id":"名录里的id","durationType":"incense","duration":柱数}，柱数取 1 到 12；
