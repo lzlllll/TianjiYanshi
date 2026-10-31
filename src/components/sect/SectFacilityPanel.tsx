@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import type { FacilityKindId } from "@/data/types";
 import { X } from "lucide-react";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 
 type FacilityTab = "manage" | "act" | "story";
 
@@ -74,7 +74,7 @@ export function SectFacilityPanel({
   const done = sect?.facilityDaily ?? {};
   const lv = positionLevel(sect?.positions);
   const cap = state.level >= FACILITY_LEVEL_CAP;
-  const hasModel = AI_BACKEND_READY;
+  const hasModel = useAIStore((s) => aiReady(s.settings));
 
   const yieldNow = facilityYield({
     name,

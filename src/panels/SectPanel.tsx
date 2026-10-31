@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Users, Award, Flag } from "lucide-react";
 import { useGameStore } from "@/store/useGameStore";
 import { lowStonesWorth } from "@/data/spiritStones";
@@ -9,11 +9,10 @@ import { CloudDivider } from "@/components/ui/CloudDivider";
 import { SealButton } from "@/components/ui/SealButton";
 import { GradeTag } from "@/components/ui/GradeTag";
 import { SectManagement } from "@/components/sect/SectManagement";
-import { SectFoundModal } from "@/components/sect/SectFoundModal";
 import { SECT_FOUND_STONE_COST, playerSectName } from "@/data/sectSites";
 import { vassalTribute } from "@/data/sectRelations";
 import { cn } from "@/lib/utils";
-import { daySerial, shichenName } from "@/lib/gameTime";
+import { daySerial, gameMonthKey, shichenName } from "@/lib/gameTime";
 import {
   STONES_PER_CONTRIBUTION_IN,
   STONES_PER_CONTRIBUTION_OUT,
@@ -24,12 +23,12 @@ import {
   positionLevel,
   preachReward,
 } from "@/data/sectLife";
-import { facilityInfo } from "@/data/sectFacilities";
+import { facilityInfo, treasuryStockOf } from "@/data/sectFacilities";
 import { sectModifierSpec } from "@/data/sectModifiers";
 import type { SectShopItem } from "@/data/types";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 
-type SubTab = "overview" | "position" | "task" | "shop" | "heritage" | "relations" | "management";
+type SubTab = "overview" | "position" | "task" | "shop" | "treasury" | "heritage" | "relations" | "management";
 
 /** 登座讲经可挑的几个题目；挑了才讲得成，不是按一下便算 */
 const PREACH_TOPICS = ["本门经义", "养生之道", "丹道火候", "剑理刀法"];
@@ -43,7 +42,7 @@ const EMPTY_LIST: never[] = [];
 export function SectPanel() {
   const sect = useGameStore((s) => s.sect);
   const [tab, setTab] = useState<SubTab>("overview");
-  const [founding, setFounding] = useState(false);
+  const beginFoundingPick = useGameStore((s) => s.beginFoundingPick);
 
   const player = useGameStore((s) => s.player);
   const sectSites = useGameStore((s) => s.sectSites);
@@ -62,6 +61,7 @@ export function SectPanel() {
     { id: "position", label: "职位晋升" },
     { id: "task", label: "门派任务" },
     { id: "shop", label: "贡献商店" },
+    { id: "treasury", label: "宗门宝库" },
     { id: "heritage", label: "门派底蕴" },
     { id: "relations", label: "宗门关系" },
     ...(isLeader ? [{ id: "management" as SubTab, label: "宗门管理" }] : []),
@@ -93,7 +93,7 @@ export function SectPanel() {
 
           <div className="mt-5 flex items-center gap-3">
             <SealButton
-              onClick={() => setFounding(true)}
+              onClick={() => beginFoundingPick()}
               disabled={lowStones < SECT_FOUND_STONE_COST}
               className="px-4 py-2 text-sm"
             >
@@ -105,14 +105,10 @@ export function SectPanel() {
             <span className="font-serif text-xs text-paper-400/60">
               {lowStones < SECT_FOUND_STONE_COST
                 ? `灵石不足，还差 ${SECT_FOUND_STONE_COST - lowStones}`
-                : "自选一处空地，写定门风，便立得起门户"}
+                : "点过之后回到舆图上，挑一处空地作山门"}
             </span>
           </div>
         </ScrollCard>
-
-        {founding && (
-          <SectFoundModal onClose={() => setFounding(false)} onFounded={() => setFounding(false)} />
-        )}
       </div>
     );
   }
@@ -186,6 +182,7 @@ export function SectPanel() {
           </>
         )}
         {tab === "heritage" && <HeritageBoard />}
+        {tab === "treasury" && <SectWarehouse />}
         {tab === "relations" && <SectRelationsBoard />}
         {tab === "management" && <SectManagement />}
       </div>
@@ -635,6 +632,8 @@ function TaskBoard() {
       <div className="flex items-start justify-between gap-3 mb-3">
         <p className="font-serif text-xs text-paper-400/50 leading-relaxed">
           接下只是领了差事，须亲往去处、办妥交付才算完成；办了事回来，贡献与灵石才入账。
+          赏的下品灵石须从宗门宝库里支，宝库空了便只记在账上。落在门中建筑上的差事，
+          要交差的人就在那一座里候着。
         </p>
         <SealButton
           onClick={() => refreshSectTasks(true)}
@@ -735,8 +734,9 @@ function TaskBoard() {
 }
 
 function ShopBoard() {
-  const shop = useGameStore((s) => Array.isArray(s.sect?.shop) ? s.sect.shop : EMPTY_LIST);
+  const shop = useGameStore((s) => (Array.isArray(s.sect?.shop) ? s.sect.shop : EMPTY_LIST));
   const contribution = useGameStore((s) => s.sect?.contribution || 0);
+  const treasury = useGameStore((s) => s.sect?.management?.treasury);
   const buyShop = useGameStore((s) => s.buyShop);
 
   return (
@@ -744,12 +744,14 @@ function ShopBoard() {
       title="贡献商店"
       subtitle={`现有贡献 ${(contribution ?? 0).toLocaleString()}`}
     >
-      <p className="font-serif text-xs text-paper-400/50 mb-3">
-        兑换后立即扣除贡献并把物品收入储物袋；也可在宗门叙事中提及，由推演一并结算。
+      <p className="font-serif text-xs text-paper-400/50 mb-3 leading-relaxed">
+        柜上的东西都从宗门宝库里支取，库房空着便兑不出来；门中弟子每月按人头上交，
+        交上来的先入宝库，货架上才有货。
       </p>
       <div className="grid grid-cols-2 gap-3">
         {shop.map((item: SectShopItem) => {
-          const canBuy = contribution >= item.cost;
+          const stock = treasuryStockOf(treasury, item.name);
+          const canBuy = contribution >= item.cost && stock > 0;
           return (
             <div
               key={item.id}
@@ -765,9 +767,14 @@ function ShopBoard() {
                   <h4 className="font-brush text-base text-paper-100">{item.name}</h4>
                   <span className="font-serif text-xs text-paper-400/50">{item.type}</span>
                 </div>
-                <span className="font-number text-sm text-cinnabar-400">
-                  {(item.cost ?? 0).toLocaleString()}
-                </span>
+                <div className="text-right">
+                  <div className="font-number text-sm text-cinnabar-400">
+                    {(item.cost ?? 0).toLocaleString()}
+                  </div>
+                  <div className={cn("font-number text-[11px]", stock > 0 ? "text-jade-400/80" : "text-paper-500/60")}>
+                    存 {stock}
+                  </div>
+                </div>
               </div>
               <p className="font-serif text-xs text-paper-400/60 leading-relaxed flex-1">
                 {item.desc}
@@ -778,13 +785,108 @@ function ShopBoard() {
                 variant="ghost"
                 className="mt-2 w-full py-1 text-xs"
               >
-                {canBuy ? "兑换" : "贡献不足"}
+                {stock <= 0 ? "宝库无货" : canBuy ? "兑换" : "贡献不足"}
               </SealButton>
             </div>
           );
         })}
       </div>
+      {shop.length === 0 && (
+        <p className="font-serif text-xs text-paper-400/50 py-2">
+          门中尚未设贡献商店的货单。
+        </p>
+      )}
     </ScrollCard>
+  );
+}
+
+/**
+ * 宗门宝库：灵石、常料与成件之物各记一栏。
+ * 建筑日产与弟子纳献都入这里，贡献商店也从这里支取。
+ */
+function SectWarehouse() {
+  const sect = useGameStore((s) => s.sect);
+  const treasury = sect?.management?.treasury;
+  const consumption = sect?.management?.consumption;
+  const currentTime = useGameStore((s) => s.currentTime);
+
+  const stones = Number(treasury?.spiritStones) || 0;
+  const materials = Array.isArray(treasury?.materials) ? treasury!.materials.filter((m) => m && m.name) : [];
+  const items = Array.isArray(treasury?.items) ? treasury!.items.filter((i) => i && i.name) : [];
+  const month = gameMonthKey(currentTime);
+  const settled = treasury?.settledMonth === month;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <ScrollCard title="灵石" subtitle="门中的公账">
+          <div className="text-center py-5">
+            <div className="font-number text-4xl text-gold-400 mb-1">{stones.toLocaleString()}</div>
+            <div className="font-serif text-xs text-paper-400/60">下品灵石</div>
+            <div className="mt-3 pt-3 border-t border-paper-400/10 flex items-center justify-between">
+              <span className="font-serif text-xs text-paper-400/50">日均开销</span>
+              <span className="font-number text-xs text-cinnabar-400">
+                {(consumption?.dailyCost ?? 0).toLocaleString()}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span className="font-serif text-xs text-paper-400/50">本月纳献</span>
+              <span className={cn("font-serif text-xs", settled ? "text-jade-400" : "text-paper-400/50")}>
+                {settled ? "已入账" : "待弟子交纳"}
+              </span>
+            </div>
+          </div>
+        </ScrollCard>
+
+        <ScrollCard title="成件之物" subtitle="丹药、符箓、法宝">
+          <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+            {items.length === 0 ? (
+              <p className="font-serif text-xs text-paper-400/50 py-3">
+                库里没有成件的东西。门中弟子每月按人头上交，交上来便摆在这里。
+              </p>
+            ) : (
+              items.map((it) => (
+                <div
+                  key={it.name}
+                  className="flex items-center justify-between gap-2 rounded border border-paper-400/10 bg-ink-900/30 px-2.5 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <div className="font-brush text-sm text-paper-100 truncate">{it.name}</div>
+                    <div className="font-serif text-[11px] text-paper-400/55">
+                      {it.type} · {it.grade}
+                    </div>
+                  </div>
+                  <span className="shrink-0 font-number text-sm text-jade-400">×{it.count}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </ScrollCard>
+      </div>
+
+      <ScrollCard title="常料库存" subtitle="按名目计的日常用度">
+        {materials.length === 0 ? (
+          <p className="font-serif text-xs text-paper-400/50 py-2">库里还没有料。</p>
+        ) : (
+          <div className="grid grid-cols-3 gap-2">
+            {materials.map((m) => (
+              <div
+                key={m.name}
+                className="flex items-center justify-between rounded border border-paper-400/10 bg-ink-900/25 px-2.5 py-1.5"
+              >
+                <span className="font-serif text-xs text-paper-300 truncate">{m.name}</span>
+                <span className="font-number text-xs text-jade-400">{m.amount.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </ScrollCard>
+
+      <p className="font-serif text-xs text-paper-400/45 leading-relaxed">
+        各建筑日产、附庸纳贡与弟子按月的上交都入这一处；贡献商店兑出去的东西也从这里支。
+        库里的常料存得太多，日结时会自行发卖换灵石。
+      </p>
+    </div>
   );
 }
 
@@ -929,7 +1031,7 @@ function HeritageBoard() {
   const learnHeritage = useGameStore((s) => s.learnHeritage);
   const preachScripture = useGameStore((s) => s.preachScripture);
   const narrateFacility = useAIStore((s) => s.narrateFacility);
-  const hasModel = AI_BACKEND_READY;
+  const hasModel = useAIStore((s) => aiReady(s.settings));
   const [topic, setTopic] = useState(PREACH_TOPICS[0]);
   const [hint, setHint] = useState("");
   // 参悟与讲经各出一段自己的叙事，与问道那一路分开

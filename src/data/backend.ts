@@ -14,12 +14,19 @@
 
 import type { AISettings } from "@/data/types";
 
-/** 后端根地址：已部署的 Cloudflare Worker；留空则与游戏同源（本地服务版与 exe） */
-export const BACKEND_BASE_URL = "https://tianji-ai-proxy.lzl386588.workers.dev/";
+/**
+ * 后端根地址。默认转发后端已停用：此前那台 Cloudflare Worker 长期回 502，
+ * 开局与每一步推演都会卡在失败上，故先注释掉，改由玩家在「自定义接口」里自备。
+ * 恢复时把下面那行注释放开即可。
+ */
+// export const BACKEND_BASE_URL = "https://tianji-ai-proxy.lzl386588.workers.dev/";
+export const BACKEND_BASE_URL = "";
 
-/** 本地服务版本（本地服务与 exe）会把接口代理进同一个源，故视为已有后端 */
-const SAME_ORIGIN_BACKEND =
-  import.meta.env.DEV || import.meta.env.VITE_LOCAL_PROXY === "1";
+/**
+ * 本地服务版本（本地服务与 exe）会把接口代理进同一个源，故视为已有后端。
+ * 开发服务器没有那套代理，不再算作后端——否则请求会落到 404，看着像接口挂了。
+ */
+const SAME_ORIGIN_BACKEND = import.meta.env.VITE_LOCAL_PROXY === "1";
 
 /** 是否已接上可用的推演后端；没有后端时各处行动会被拦住并给出提示 */
 export const AI_BACKEND_READY = Boolean(BACKEND_BASE_URL) || SAME_ORIGIN_BACKEND;

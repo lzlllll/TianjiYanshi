@@ -157,12 +157,25 @@ export interface SectSiteTerm {
   note?: string;
 }
 
-/** 一处山门的宝库：灵石与常料，另记日结算到哪一日 */
+/** 宝库里的一件成物：丹药、符箓一类的整件东西，与按名目计的常料分开记 */
+export interface SectTreasuryItem {
+  name: string;
+  /** 物件类别，如丹药、符箓、法宝 */
+  type: string;
+  grade: ItemGrade;
+  count: number;
+}
+
+/** 一处山门的宝库：灵石、常料与成件之物，另记日结算到哪一日 */
 export interface SectTreasury {
   spiritStones: number;
   materials: { name: string; amount: number }[];
+  /** 门中宝库存着的成件之物；贡献商店由这里支取 */
+  items?: SectTreasuryItem[];
   /** 上一次日结算到哪一日，免得同日重算 */
   settledDay?: number;
+  /** 上一次月结算落在哪一月；弟子按月上交便照这个记 */
+  settledMonth?: string;
 }
 
 /** 两处宗门之间怎么相处 */
@@ -853,6 +866,10 @@ export interface SectShopItem {
   cost: number;
   type: string;
   desc: string;
+  /** 柜上现存几件；为 0 便兑不出来，须等门中弟子按月上交 */
+  stock?: number;
+  /** 这一件的品阶，上交与入库都照它记 */
+  grade?: ItemGrade;
 }
 
 export interface SectHeritage {
@@ -875,6 +892,11 @@ export interface SectIndustry {
   investment: number;
   description: string;
   level: number;
+  /** 这一处产业对应山门里的哪一座建筑；有了它便能就地扩建、停工 */
+  building?: string;
+  kindId?: FacilityKindId;
+  cellIndex?: number;
+  status?: SectFacilityState["status"];
 }
 
 /** 建筑按地块用场分的十类；与 src/data/map/sectTiles.ts 的建筑地块一一对应 */
@@ -904,6 +926,13 @@ export interface SectActivity {
   status: "筹备中" | "进行中" | "已结束";
   target: string;
   description: string;
+  /** 起于哪一日、止于哪一日；过了止日便自行收场 */
+  startDay?: number;
+  endDay?: number;
+  /** 玩家上一次在哪一日参与过；一日只算一回 */
+  lastJoinDay?: number;
+  /** 发起这一场从宝库支了多少灵石 */
+  cost?: number;
 }
 
 export interface SectHall {
@@ -915,6 +944,8 @@ export interface SectHall {
   memberCount: number;
   maxMembers: number;
   description: string;
+  /** 这一堂辖下是哪几类建筑；对上便算有主，产出不打折 */
+  kindIds?: FacilityKindId[];
 }
 
 export interface SectManagement {
@@ -1526,7 +1557,10 @@ export interface Relation {
    * 旧档只存了情谊 affinity，载入时由它折算而来。
    */
   relation?: number;
-  /** 信任：1 到 5 五档，各有名目；陌生人起于第 2 档 */
+  /**
+   * 信任：-100 到 100 的整数，0 为泛泛之交，正为信得过，负为信不过。
+   * 旧档存的是 1 到 5 五档，载入时由 migrateRelation 折算过来。
+   */
   trust?: number;
   /** 旧档的情谊，0 到 100；新档不再写它，只作折算之用 */
   affinity?: number;
@@ -2349,6 +2383,11 @@ export interface GameState {
   /** 当前打开的侧拉面板；null 表示没有面板打开 */
   currentPanel: PanelId | null;
   craftingTab: CraftingTab;
+  /**
+   * 开山立派的三步：正在主舆图上选点、已选定的那处空地、填名号的窗开着没有。
+   * 只作界面用，不进存档。
+   */
+  founding?: { picking: boolean; spot?: { x: number; y: number }; open: boolean };
   /** 玩家当前查看的地图场景 id；只影响视角，不改变所在位置 */
   mapSceneId: string;
   /** 玩家当前所在的地点 id，对应地图标点；决定大地图上的光标位置 */

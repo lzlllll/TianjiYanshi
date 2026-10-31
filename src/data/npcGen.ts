@@ -506,30 +506,55 @@ export function manorKey(cityId: string, districtId: number): string {
  * 道侣、师父、仇敌，以及情谊过线的徒弟与好友，都算「重要NPC」——
  * 他们会随日子自行行动、留下记忆。情谊太浅的好友只是「点头之交」。
  */
-/** 信任的五档名目，下标即档位；0 不用 */
-export const TRUST_NAMES = ["", "不可信任", "尚存嫌隙", "相交莫逆", "推心置腹", "同生共死"] as const;
+/** 信任的六档名目，由低到高 */
+export const TRUST_NAMES = ["不可信任", "尚存嫌隙", "泛泛之交", "相交莫逆", "推心置腹", "同生共死"] as const;
 
-/** 新结识的人：关系平交，信任起于第 2 档 */
-export const STRANGER_TRUST = 2;
+/** 新结识的人：关系平交，信任也自 0 起 */
+export const STRANGER_TRUST = 0;
 
-/** 信任落在哪一档的名字 */
+/** 信任落在哪一档的名字；与新尺一致，都是 -100~100 */
 export function trustName(trust: number | undefined): string {
-  const t = Math.max(1, Math.min(5, Math.round(Number(trust) || STRANGER_TRUST)));
-  return TRUST_NAMES[t];
+  const t = Math.max(-100, Math.min(100, Math.round(Number(trust) || STRANGER_TRUST)));
+  if (t >= 85) return "同生共死";
+  if (t >= 60) return "推心置腹";
+  if (t >= 30) return "相交莫逆";
+  if (t >= 0) return "泛泛之交";
+  if (t >= -50) return "尚存嫌隙";
+  return "不可信任";
+}
+
+/** 旧档的 1~5 档折成 -100~100：1 最不可信，5 最可信 */
+const LEGACY_TRUST: Record<number, number> = { 1: -60, 2: -20, 3: 20, 4: 60, 5: 90 };
+
+/** 关系与信任都收在 -100~100 之内 */
+function clampBond(n: unknown, fallback: number): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(-100, Math.min(100, Math.round(v)));
+}
+
+/** 信任归一：旧档 1~5 这一小段只可能是档位，折成新尺 */
+export function normalizeTrustValue(n: unknown): number {
+  const v = clampBond(n, STRANGER_TRUST);
+  return Number.isInteger(v) && v >= 1 && v <= 5 ? LEGACY_TRUST[v] : v;
 }
 
 /**
  * 旧档的情谊折算成「关系」与「信任」；已有新值的原样返回。
- * 情谊 0~100 折成关系 -100~100，信任按情谊分档。
+ * 情谊 0~100 折成 -100~100；只缺信任的，与关系同尺。
  */
 export function migrateRelation(r: Relation): Relation & { relation: number; trust: number } {
-  if (typeof r.relation === "number" && typeof r.trust === "number") {
-    return r as Relation & { relation: number; trust: number };
-  }
+  const hasRelation = typeof r.relation === "number";
+  const hasTrust = typeof r.trust === "number";
   const a = Number(r.affinity);
   const legacy = Number.isFinite(a) ? Math.max(0, Math.min(100, a)) : 50;
-  const relation = Math.round(legacy * 2 - 100);
-  const trust = legacy >= 90 ? 5 : legacy >= 70 ? 4 : legacy >= 45 ? 3 : legacy >= 20 ? 2 : 1;
+
+  const relation = hasRelation ? clampBond(r.relation, 0) : Math.round(legacy * 2 - 100);
+  const trust = hasTrust ? normalizeTrustValue(r.trust) : relation;
+
+  if (hasRelation && hasTrust && relation === r.relation && trust === r.trust) {
+    return r as Relation & { relation: number; trust: number };
+  }
   return { ...r, relation, trust };
 }
 

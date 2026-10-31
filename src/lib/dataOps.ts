@@ -31,7 +31,7 @@ import { composeSectSite, sectNameCore } from "@/data/sectSites";
 import { normalizeSectRelation } from "@/data/sectRelations";
 import { normalizeOccupation } from "@/data/occupations";
 import { resolveLocation } from "@/data/locations";
-import { MAX_TRAVEL_COMPANIONS } from "@/data/npcGen";
+import { MAX_TRAVEL_COMPANIONS, normalizeTrustValue } from "@/data/npcGen";
 import { isKnownGood } from "@/data/goods";
 import { findSkill, normalizeSkill, rollSkillCheck, trainOnceADay } from "@/data/skills";
 import { normalizeReputation, reputationAxisByName } from "@/data/reputation";
@@ -1620,14 +1620,15 @@ function normalizeRelation(item: any): any {
     徒弟: "disciple", 好友: "friend", 朋友: "friend", 仇敌: "enemy", 仇人: "enemy",
   };
   item.type = RELATION_TYPES.includes(item.type) ? item.type : TYPE_ALIASES[item.type] || "friend";
-  // 关系与信任是正主；模型若只给了旧的情谊，照同一口径折算过来
+  // 关系与信任是正主，两者同一把尺（-100~100）；模型若只给了旧的情谊，照同一口径折算过来
   if (item.relation === undefined || item.trust === undefined) {
     const a = typeof item.affinity === "number" ? Math.max(0, Math.min(100, item.affinity)) : 50;
     if (item.relation === undefined) item.relation = Math.round(a * 2 - 100);
-    if (item.trust === undefined) item.trust = a >= 90 ? 5 : a >= 70 ? 4 : a >= 45 ? 3 : a >= 20 ? 2 : 1;
+    // 只给了旧情谊的：信任照着关系落，新结识的人便是 0 上下
+    if (item.trust === undefined) item.trust = item.relation;
   }
   item.relation = Math.max(-100, Math.min(100, Math.round(Number(item.relation) || 0)));
-  item.trust = Math.max(1, Math.min(5, Math.round(Number(item.trust) || 2)));
+  item.trust = normalizeTrustValue(item.trust);
   delete item.affinity;
   delete item.affinityMax;
   if (!item.realm) {
@@ -2352,7 +2353,7 @@ function normalizeModifyPath(root: any, path: string, value: string): { path: st
       if (!Number.isFinite(n)) return null;
       if (field === "age") rel.age = Math.max(1, Math.min(299, Math.round(n)));
       else if (field === "relation") rel.relation = Math.max(-100, Math.min(100, Math.round(n)));
-      else rel.trust = Math.max(1, Math.min(5, Math.round(n)));
+      else rel.trust = normalizeTrustValue(n);
       return null; // 已直接处理
     }
     if (field === "type") {
@@ -3170,6 +3171,133 @@ function normalizeTimelineEvent(item: any): any {
     title: String(item.title ?? item.name ?? item.event ?? ""),
     detail: String(item.detail ?? item.desc ?? item.description ?? item.content ?? ""),
   };
+}
+
+/** 路上变故的结算额度：一桩事不该一夜之间送出一座金山 */
+const EVENT_OPS_MAX = 12;
+const EVENT_ITEMS_MAX = 6;
+const EVENT_RELATIONS_MAX = 3;
+const EVENT_ITEM_COUNT_MAX = 20;
+const EVENT_CULTIVATION_CAP = 80;
+const EVENT_STONE_CAP = 500;
+const EVENT_REPUTATION_CAP = 30;
+const EVENT_BOND_CAP = 40;
+const EVENT_VITAL_CAP = 200;
+const EVENT_BUY_PRICE_MAX = 1000;
+
+/** 这些集合允许在变故里新增；别的一概不收 */
+const EVENT_ADD_COLLECTIONS = new Set(["inventory", "relations", "buffs", "quests", "adventures"]);
+
+/**
+ * 路上变故的结算收口：限条数、限名目、限幅度。
+ * 变故与问道走同一套 ops，但它不占回合、可反复应对，
+ * 若不设上限，玩家可以一直回话把灵石、修为、珍物刷出来。
+ */
+export function capEventOps(ops: DataOp[], state: GameState): DataOp[] {
+  if (!Array.isArray(ops) || ops.length === 0) return [];
+  const out: DataOp[] = [];
+  let items = 0;
+  let relations = 0;
+
+  const num = (v: unknown, fallback = 0): number => {
+    const n = Number(String(v ?? "").replace(/[^\d.+-]/g, ""));
+    return Number.isFinite(n) ? n : fallback;
+  };
+  /** 一次改动最多能挪多少；返回 null 表示这条路径不许改 */
+  const capOf = (path: string): { cap: number; current: number } | null => {
+    if (path === "player.cultivation") {
+      return { cap: EVENT_CULTIVATION_CAP, current: Number(state?.player?.cultivation) || 0 };
+    }
+    const stone = path.match(/^(?:player\.)?spiritStones\.(low|mid|high|supreme)$/);
+    if (stone) {
+      const key = stone[1] as "low" | "mid" | "high" | "supreme";
+      return { cap: EVENT_STONE_CAP, current: Number(state?.spiritStones?.[key]) || 0 };
+    }
+    const vital = path.match(/^player\.(hp|mp|spirit)$/);
+    if (vital) {
+      const key = vital[1] as "hp" | "mp" | "spirit";
+      return { cap: EVENT_VITAL_CAP, current: Number(state?.player?.[key]) || 0 };
+    }
+    if (/^reputation\./.test(path)) {
+      const key = path.split(".")[1] as keyof GameState["reputation"];
+      return { cap: EVENT_REPUTATION_CAP, current: Number((state?.reputation as any)?.[key]) || 0 };
+    }
+    return null;
+  };
+
+  for (const op of ops) {
+    if (out.length >= EVENT_OPS_MAX) break;
+
+    if (op.kind === "buy") {
+      out.push({
+        ...op,
+        price: Math.max(0, Math.min(EVENT_BUY_PRICE_MAX, Math.round(num(op.price)))),
+        count: Math.max(1, Math.min(EVENT_ITEM_COUNT_MAX, Math.round(num(op.count, 1)))),
+      });
+      continue;
+    }
+
+    if (op.kind === "delete") {
+      if (op.collection === "inventory") out.push(op);
+      continue;
+    }
+
+    if (op.kind === "add") {
+      if (!EVENT_ADD_COLLECTIONS.has(op.collection)) continue;
+      if (op.collection === "inventory") {
+        if (items >= EVENT_ITEMS_MAX) continue;
+        const payload = op.payload;
+        if (!payload || typeof payload !== "object") continue;
+        // 变故里不送仙品；品阶与数目都收一收
+        if (String((payload as any).grade ?? "") === "仙品") continue;
+        const count = Math.max(1, Math.min(EVENT_ITEM_COUNT_MAX, Math.round(num((payload as any).count, 1))));
+        out.push({ ...op, payload: { ...(payload as Record<string, unknown>), count } });
+        items += 1;
+        continue;
+      }
+      if (op.collection === "relations") {
+        if (relations >= EVENT_RELATIONS_MAX) continue;
+        relations += 1;
+        out.push(op);
+        continue;
+      }
+      out.push(op);
+      continue;
+    }
+
+    // modify
+    const path = String(op.path ?? "");
+    if (/^currentTime\./.test(path) || /^player\.(realm|realmIndex)$/.test(path)) continue;
+
+    const bond = path.match(/^relations\[[^\]]+\]\.(relation|trust)$/);
+    if (bond) {
+      const v = Math.round(num(op.value));
+      const clamped = Math.max(-100, Math.min(100, v));
+      const deltaLimited =
+        op.op === "=" ? clamped : Math.max(-EVENT_BOND_CAP, Math.min(EVENT_BOND_CAP, clamped));
+      out.push({ ...op, op: op.op === "=" ? "=" : op.op, value: String(deltaLimited) });
+      continue;
+    }
+    if (/^relations\[[^\]]+\]\./.test(path)) {
+      // 文本类（note、memory、行踪等）不设幅度，只收内容
+      out.push(op);
+      continue;
+    }
+
+    const limit = capOf(path);
+    if (!limit) continue;
+    const raw = Math.round(num(op.value));
+    if (op.op === "=") {
+      const lo = Math.max(0, limit.current - limit.cap);
+      const hi = Math.max(0, limit.current + limit.cap);
+      out.push({ ...op, value: String(Math.max(lo, Math.min(hi, raw))) });
+      continue;
+    }
+    const delta = Math.max(-limit.cap, Math.min(limit.cap, Math.abs(raw)));
+    out.push({ ...op, value: String(delta) });
+  }
+
+  return out;
 }
 
 function applyModify(parent: any, key: PathSeg, op: Extract<DataOp, { kind: "modify" }>): void {

@@ -669,9 +669,26 @@ export function sectSceneId(siteId: string): string {
   return `${SECT_SCENE_PREFIX}${siteId}`;
 }
 
+/** 照地势挑一张模板，返回它的编号；立宗时记下来，往后不必再靠地势猜 */
+export function sectTemplateIdForMapType(mapType: string | undefined): string | undefined {
+  const byType = sectMaps.find((t) => t.mapType && t.mapType === mapType);
+  return (byType ?? sectMaps[0])?.id;
+}
+
+/**
+ * 一份模板也没读出来时的兜底山门：正中一座主殿，其余尽是空地。
+ * 有了它，新立的宗门至少点得进、门中的事也有处安放，不至于整条宗门玩法没有着落。
+ */
+function fallbackSectTemplate(): SectMapTemplate {
+  const tiles = new Array(SECT_GRID_SIZE * SECT_GRID_SIZE).fill(SECT_EMPTY_TILE);
+  const center = Math.floor(tiles.length / 2);
+  tiles[center] = SECT_HALL_TILE;
+  return { id: "tpl-fallback", name: "简易山门", tiles, mapType: "valley" };
+}
+
 /** 给一处宗门挑一张模板：点名的那张没有，就照地势挑，再没有随便给一张 */
 function pickSectTemplate(site: SectSite): SectMapTemplate | undefined {
-  if (sectMaps.length === 0) return undefined;
+  if (sectMaps.length === 0) return fallbackSectTemplate();
   if (site.templateId) {
     const exact = sectMaps.find((t) => t.id === site.templateId);
     if (exact) return exact;

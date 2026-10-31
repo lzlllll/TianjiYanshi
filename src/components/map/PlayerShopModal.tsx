@@ -13,6 +13,7 @@ import {
   SHOP_RESTOCK_QTY,
 } from "@/data/playerShops";
 import { Briefcase, Coins, Loader2, Package, RefreshCw, Wrench, X } from "lucide-react";
+import { useElapsedSeconds } from "@/lib/useElapsedSeconds";
 
 /**
  * 自设铺面的「经营」面板。
@@ -40,6 +41,8 @@ export function PlayerShopModal({ shopId, onClose }: { shopId: string; onClose: 
   const [moveCount, setMoveCount] = useState("1");
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
+  // 等掌柜这一段的秒数：光转个圈看不出进益，缀个数心里有底
+  const waitSeconds = useElapsedSeconds(busy);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
@@ -339,13 +342,18 @@ export function PlayerShopModal({ shopId, onClose }: { shopId: string; onClose: 
                   <SealButton onClick={() => void instruct()} disabled={busy || !instruction.trim()} className="px-3 py-1.5 text-xs">
                     <span className="flex items-center gap-1.5">
                       {busy ? <Loader2 size={12} className="animate-spin" /> : <Coins size={12} />}
-                      {busy ? "正在张罗……" : "照办"}
+                      {busy ? `正在张罗……已候 ${waitSeconds} 秒` : "照办"}
                     </span>
                   </SealButton>
                   <span className="font-serif text-[11px] text-ink-lightest">
                     货物、设施、营生与月收支都由此改动；无接口时请先去设置填写。
                   </span>
                 </div>
+                {busy && (
+                  <p className="mt-1.5 font-serif text-[11px] text-ink-light leading-relaxed">
+                    掌柜正照着你的话盘算货与账，这一段写得慢些，稍候便好。
+                  </p>
+                )}
               </div>
             </>
           )}

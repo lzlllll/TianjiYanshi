@@ -121,7 +121,7 @@ import {
   type FateBrief,
   type SurrenderBrief,
 } from "@/lib/promptBuilder";
-import { parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
+import { capEventOps, parseJsonOps, parseJsonPayload, parseModelOutput, summarizeOps } from "@/lib/dataOps";
 import { buildCatalogText } from "@/data/dataCatalog";
 import { applyBattleCast, computeSkillCast, computableSkills, findSkillByName, findSkillMentionedIn, isHeartConversion, resolveBattleTarget, techniqueLevelOf, type CombatActor } from "@/lib/skillCalc";
 import { enemiesInRange, rangeLabel, skillRange } from "@/data/battleRange";
@@ -132,6 +132,7 @@ import { REALMS, REALM_NAMES, canTalkTo } from "@/data/mockData";
 import {
   EVENT_END_MARK,
   EVENT_QUICK_MARK,
+  EVENT_QUICK_END,
   ADVENTURE_DONE_MARK,
   ADVENTURE_KEEP_MARK,
   ADVENTURE_CHOICE_MARK,
@@ -473,13 +474,13 @@ function closenessOf(r: Relation): number {
 }
 
 /**
- * 相熟之人：不是仇敌，且亲疏不低于三十或信任到第三档。
+ * 相熟之人：不是仇敌，且亲疏不低于三十，或信任到了「相交莫逆」那一档（30）。
  * 路上变故有概率从他们身上起，故单挑一份出来。
  */
 function familiarRelations(gs: GameState): Relation[] {
   return (Array.isArray(gs.relations) ? gs.relations : [])
     .filter((r) => r && r.name && r.type !== "enemy")
-    .filter((r) => closenessOf(r) >= 30 || Number(r.trust) >= 3)
+    .filter((r) => closenessOf(r) >= 30 || Number(r.trust) >= 30)
     .sort((a, b) => closenessOf(b) - closenessOf(a));
 }
 
@@ -1926,9 +1927,12 @@ async function extractEventOps(settings: AISettings, narrative: string, signal: 
     const state = useGameStore.getState().getSnapshot() as unknown as GameState;
     const extraction = await runOpsExtraction(settings, state, narrative, signal, { source: "event" });
     if (signal.aborted || extraction.ops.length === 0) return [];
-    useGameStore.getState().applyOps(extraction.ops);
-    console.debug("[randomEvent] 这一段落账", extraction.ops.length, "条");
-    return extraction.ops;
+    // 变故的额度另有一套：限条数、限名目、限幅度，免得反复应对把资源刷出来
+    const capped = capEventOps(extraction.ops, state);
+    if (capped.length === 0) return [];
+    useGameStore.getState().applyOps(capped);
+    console.debug("[randomEvent] 这一段落账", capped.length, "条（原", extraction.ops.length, "条）");
+    return capped;
   } catch (e) {
     if (!signal.aborted) console.warn("[randomEvent] 这一段的数据结算未成:", e);
     return [];
@@ -1944,12 +1948,12 @@ export function takeEventOptions(raw: string): { text: string; options: string[]
   if (start === -1) return { text: raw.trim(), options: [] };
 
   const after = raw.slice(start + EVENT_QUICK_MARK.length);
-  const endIdx = after.indexOf("<<<END>>>");
+  const endIdx = after.indexOf(EVENT_QUICK_END);
   const block = endIdx === -1 ? after : after.slice(0, endIdx);
   const text =
     endIdx === -1
       ? raw.slice(0, start)
-      : raw.slice(0, start) + after.slice(endIdx + "<<<END>>>".length);
+      : raw.slice(0, start) + after.slice(endIdx + EVENT_QUICK_END.length);
 
   const options = block
     .split("\n")
@@ -2094,6 +2098,14 @@ let lastAdventureSpawnDay = 0;
 let lastMonthlyAdventureTry = "";
 /** 上回宝物阁放出拍卖消息是哪一日；一日至多一桩 */
 let lastAuctionSpawnDay = 0;
+
+/**
+ * 路上变故一日只掷一回：记下这一日掷过没有。
+ * 从前每一次推进时辰都各掷一次，把一段长休拆成十几个短休便能多掷十几次。
+ */
+let lastRandomEventRollDay = 0;
+/** 自上一次掷骰以来攒下的行程时辰：长休也只在当日算作一回 */
+let pendingEventHours = 0;
 
 /**
  * 开局建档：把同一份开篇叙事并发交给多个领域助手，各自只写自己那一块。
@@ -2403,9 +2415,13 @@ async function runOpeningExtraction(
   const placePromise = recognizePlace();
   await Promise.allSettled(
     OPENING_DOMAINS.map(async (domain) => {
-      await runDomain(domain);
-      // 这一门跑完了（成与不成都要报），等待页照它报进度
-      onFiled?.(domain.id, domainSatisfied(domain));
+      try {
+        await runDomain(domain);
+      } finally {
+        // 这一门跑完了（成与不成、甚至中途抛错都要报），等待页照它报进度；
+        // 少报一门，等待页便永远停在「正在推演开篇」，进不了主界面
+        onFiled?.(domain.id, domainSatisfied(domain));
+      }
     }),
   );
   const placeOps = await placePromise;
@@ -3554,18 +3570,19 @@ export const useAIStore = create<AIStore>()(
               });
         if (signal.aborted) return;
 
-        // 开局八门若有没写全的，记一句，进主界面时提示；
-        // 自带接口的玩家不套用这句「免费模型」的话
+        // 开局八门若有没写全的，记一句，进主界面时提示；话术照接口来源分开
         if (
           conv.turns.length === 0 &&
           "missing" in extraction &&
-          extraction.missing.length > 0 &&
-          !hasCustomApi(settings)
+          extraction.missing.length > 0
         ) {
           set((st) => ({
             conversation: {
               ...st.conversation,
-              openingWarning: "免费ai模型出现错误，部分数据未生成，不保证游玩可靠性。",
+              // 自备接口也会漏档：提示话术照接口来源分开，但都得让玩家知道档案不全
+              openingWarning: hasCustomApi(settings)
+                ? "推演接口返回的开篇档案有缺项，部分数据未生成；可在后续回合里继续补齐。"
+                : "免费ai模型出现错误，部分数据未生成，不保证游玩可靠性。",
             },
           }));
         }
@@ -3627,6 +3644,22 @@ export const useAIStore = create<AIStore>()(
           console.warn(
             `[runTurn] 结算之后仍空着的是：${blankBasics.join("、")}。下一轮推演会按空白档就地补齐。`,
           );
+        }
+        // 开局四样底子全空，等于人物没立住：宁可留在开局页让玩家重试，
+        // 也不放他进一个没有功法、没有财物、没有相识之人、也没有本事的空世界
+        if (isFirstTurn && blankBasics.length === 4) {
+          set((st) => ({
+            conversation: {
+              ...st.conversation,
+              stage: "error",
+              errorMsg:
+                "开篇建档失败：功法、随身财物、相识之人、本事都没能生成，多半是模型输出不合格式。请检查通灵接口或换一档模型后重试。",
+              streamingNarrative: "",
+              streamingReasoning: "",
+              openingWarning: "",
+            },
+          }));
+          return;
         }
 
         const hasNewsOp = ops.some((o) => o.kind === "add" && o.collection === "news.items");
@@ -3959,6 +3992,9 @@ export const useAIStore = create<AIStore>()(
           abortController.abort();
           abortController = null;
         }
+        // 变故的掷骰记录另起一册：新局不该沿用上一局那一日
+        lastRandomEventRollDay = 0;
+        pendingEventHours = 0;
         // 推演账与几扇临时窗口（交谈、战斗、变故、奇遇）都归零；
         // 接口设置保留，重开一局不必再填一次密钥
         set({
@@ -4061,19 +4097,28 @@ export const useAIStore = create<AIStore>()(
         if (!lastTurn || lastTurn.opening) return;
 
         const h = Math.max(0, Number(hours) || 0);
-        // 一两个时辰的琐碎走动不生变故
-        if (h < 2) return;
+        if (h <= 0) return;
+        // 先把这一段行程记下：几段短走合起来算一日之内的行程，
+        // 不再因为「只走了一个时辰」就绝对无事，也不会拆成十几段多掷十几次
+        pendingEventHours += h;
 
         const gs = useGameStore.getState();
         const today = daySerial(gs.currentTime);
-        // 一日之内至多一桩，免得连着来
+        // 一日只掷一回，长短同样只算一回
+        if (lastRandomEventRollDay === today) return;
+        lastRandomEventRollDay = today;
+
+        const traveled = pendingEventHours;
+        pendingEventHours = 0;
+
+        // 这一日已开过一桩（多半是上一段行程里开的），不另起
         if (today - (Number(st.randomEvent.openedDay) || 0) < 1) return;
 
-        // 走得越久，路上碰见事的可能越大，至多四成半
-        const chance = Math.min(0.45, 0.08 + h * 0.02);
+        // 走得越久，路上碰见事的可能越大；短走也留几分成算，至多五成
+        const chance = Math.min(0.5, 0.06 + traveled * 0.03);
         if (Math.random() > chance) return;
 
-        void get().triggerRandomEvent(`往前走了约 ${h} 个时辰`);
+        void get().triggerRandomEvent(`往前走了约 ${traveled} 个时辰`);
       },
 
       triggerRandomEvent: async (reason) => {
@@ -4911,8 +4956,8 @@ export const useAIStore = create<AIStore>()(
         try {
           const player = useGameStore.getState().player;
           const relation = useGameStore.getState().relations.find((r) => r.id === npcId);
-          // 关系（-100~100）与信任（1~5 档）；念给模型时把关系折算回 0~100 的好感度
-          const bond = relation ? migrateRelation(relation) : { relation: 0, trust: 2 };
+          // 关系与信任同一把尺（-100~100）；念给模型时另把关系折算回 0~100 的好感度
+          const bond = relation ? migrateRelation(relation) : { relation: 0, trust: 0 };
           const affinity = Math.round((bond.relation + 100) / 2);
 
           const statsStr = relation?.stats
@@ -4947,7 +4992,7 @@ NPC 信息：
 姓名：${name}
 称号：${title}
 与玩家关系：${relation?.note || "暂无"}
-好感度：${affinity}/100（关系 ${bond.relation}，信任第 ${bond.trust} 档）
+好感度：${affinity}/100（关系 ${bond.relation}，信任 ${bond.trust}，两者皆 -100~100）
 ${personaStr ? `已定下的人设（必须照此写，不要另起炉灶）：\n${personaStr}\n` : ""}${statsStr ? `${statsStr}\n` : ""}${techStr ? `${techStr}\n` : ""}
 
 玩家信息：
@@ -4975,7 +5020,7 @@ ATTITUDE: [立场态度]`,
             const initialPrompt = `你是「${name}」，称号「${title}」。
 ${personaStr ? `${personaStr}\n` : ""}${statsStr ? `${statsStr}\n` : ""}${techStr ? `${techStr}\n` : ""}
 【人设】${relation.persona}${relation.note ? `\n【与玩家的渊源】${relation.note}` : ""}
-${relation.memory ? `【你心里记着的事】${relation.memory}\n` : ""}【对玩家态度】关系 ${bond.relation}，信任第 ${bond.trust} 档（好感约 ${affinity}/100）
+${relation.memory ? `【你心里记着的事】${relation.memory}\n` : ""}【对玩家态度】关系 ${bond.relation}，信任 ${bond.trust}（两者皆 -100~100，0 为泛泛之交；好感约 ${affinity}/100）
 你正在与「${player.name}」（${player.title}）交谈。请以你的身份回复对方的话语，保持角色一致性，前后一致，不要另起炉灶。
 ${DIALOGUE_STYLE}`;
 
@@ -8049,49 +8094,96 @@ MODIFY player.mp - 10
        * 若还照旧回合的标记开战，只会浮起一座没有敌人的空场。
        */
       merge: (persisted, current) => {
-        const merged = { ...current, ...((persisted as Partial<AIStore>) || {}) } as AIStore;
-        // 旧档里的模型名可能被手改过（如 gpt-oss-20b）：没填自定义接口时一律收回免费预设
-        if (merged.settings && !hasCustomApi(merged.settings)) {
-          merged.settings = {
-            ...merged.settings,
-            flashModel: FREE_MODEL.model,
-            proModel: FREE_MODEL.model,
-          };
-        }
-        // 讲价与铺面都是眼前这一场的事，不随存档醒来：读档时把窗关掉，免得一进来又弹出早先那一扇
-        merged.narrativeHaggle = null;
-        merged.narrativeShop = null;
-        // 战斗接回来：阵上还有人在打，便照原样接着打；存着的是一张空场，才当没开过战。
-        // 推演这一类一时的标记一律抹掉，读回来停在等人出手的地方
-        const restoredBattle = merged.battle;
-        if (
-          restoredBattle &&
-          restoredBattle.isActive &&
-          !(Array.isArray(restoredBattle.map?.entities) && restoredBattle.map.entities.length > 0)
-        ) {
-          merged.battle = { ...INITIAL_BATTLE, context: [] };
-        } else if (restoredBattle) {
-          merged.battle = {
-            ...restoredBattle,
-            isResolving: false,
-            errorMsg: "",
-            turn: restoredBattle.isActive ? "player" : restoredBattle.turn,
-            aftermath: restoredBattle.aftermath
-              ? { ...restoredBattle.aftermath, resolving: false }
-              : (restoredBattle.aftermath ?? null),
-          };
-        }
-        const conv = merged.conversation;
-        if (conv && Array.isArray(conv.turns) && conv.turns.some((t) => t.mode === "battle" || t.haggle || t.shop)) {
+        try {
+          const merged = { ...current, ...((persisted as Partial<AIStore>) || {}) } as AIStore;
+          // 旧档里的模型名可能被手改过（如 gpt-oss-20b）：没填自定义接口时一律收回免费预设
+          if (merged.settings && typeof merged.settings === "object" && !hasCustomApi(merged.settings)) {
+            merged.settings = {
+              ...merged.settings,
+              flashModel: FREE_MODEL.model,
+              proModel: FREE_MODEL.model,
+            };
+          }
+          // 讲价与铺面都是眼前这一场的事，不随存档醒来：读档时把窗关掉，免得一进来又弹出早先那一扇
+          merged.narrativeHaggle = null;
+          merged.narrativeShop = null;
+          // 战斗接回来：阵上还有人在打，便照原样接着打；存着的是一张空场，才当没开过战。
+          // 推演这一类一时的标记一律抹掉，读回来停在等人出手的地方
+          const restoredBattle = merged.battle;
+          if (
+            restoredBattle &&
+            restoredBattle.isActive &&
+            !(Array.isArray(restoredBattle.map?.entities) && restoredBattle.map.entities.length > 0)
+          ) {
+            merged.battle = { ...INITIAL_BATTLE, context: [] };
+          } else if (restoredBattle) {
+            merged.battle = {
+              ...restoredBattle,
+              isResolving: false,
+              errorMsg: "",
+              turn: restoredBattle.isActive ? "player" : restoredBattle.turn,
+              aftermath: restoredBattle.aftermath
+                ? { ...restoredBattle.aftermath, resolving: false }
+                : (restoredBattle.aftermath ?? null),
+            };
+          }
+
+          // 会话状态逐项校验：旧版本残留的残缺字段会让界面反复重置，整页卡成空白
+          const conv = merged.conversation && typeof merged.conversation === "object"
+            ? merged.conversation
+            : INITIAL_CONVERSATION;
+          const turns = Array.isArray(conv.turns)
+            ? conv.turns
+              .filter((t) => t && typeof t === "object")
+              // 战斗、讲价与铺面都是眼前这一场的事，旧回合里的入口不再带回
+              .map((t) =>
+                t.mode || t.haggle || t.shop
+                  ? {
+                    ...t,
+                    mode: t.mode === "battle" ? undefined : t.mode,
+                    battleFoes: t.mode === "battle" ? undefined : t.battleFoes,
+                    haggle: undefined,
+                    shop: undefined,
+                  }
+                  : t,
+              )
+            : [];
           merged.conversation = {
+            ...INITIAL_CONVERSATION,
             ...conv,
-            turns: conv.turns.map((t) => {
-              if (!t.mode && !t.haggle && !t.shop) return t;
-              return { ...t, mode: t.mode === "battle" ? undefined : t.mode, battleFoes: t.mode === "battle" ? undefined : t.battleFoes, haggle: undefined, shop: undefined };
-            }),
+            turns,
+            narrativeLog: Array.isArray(conv.narrativeLog) ? conv.narrativeLog : [],
+            quickDecisions: Array.isArray(conv.quickDecisions)
+              ? conv.quickDecisions.map((d) => String(d ?? "").trim()).filter(Boolean).slice(0, 8)
+              : [],
+            openingFiled: Array.isArray(conv.openingFiled) ? conv.openingFiled : [],
+            openingFeed: Array.isArray(conv.openingFeed) ? conv.openingFeed : [],
+            summary: typeof conv.summary === "string" ? conv.summary : "",
+            errorMsg: typeof conv.errorMsg === "string" ? conv.errorMsg : "",
+            // 刷新或崩溃时未跑完的推演没有 abortController 可续，留在 pro/flash 会让界面永远转圈
+            stage: conv.stage === "flash" || conv.stage === "pro" ? "idle" : (conv.stage ?? "idle"),
+            streamingNarrative: "",
+            streamingReasoning: "",
           };
+
+          // 交谈记录同理：残缺的 profiles 会拖垮这一扇窗
+          const npc = merged.npcChat && typeof merged.npcChat === "object"
+            ? merged.npcChat
+            : INITIAL_NPC_CHAT;
+          merged.npcChat = {
+            ...INITIAL_NPC_CHAT,
+            ...npc,
+            profiles: Array.isArray(npc.profiles)
+              ? npc.profiles.filter((p) => p && typeof p === "object")
+              : [],
+            partyIds: Array.isArray(npc.partyIds) ? npc.partyIds : [],
+            partyMessages: Array.isArray(npc.partyMessages) ? npc.partyMessages : [],
+          };
+          return merged;
+        } catch (e) {
+          console.error("[useAIStore] 本机推演记录读回失败，已回退到初始状态：", e);
+          return current;
         }
-        return merged;
       },
       partialize: (s) => ({
         settings: s.settings,

@@ -16,6 +16,7 @@ import { ShopSetupModal } from "@/components/map/ShopSetupModal";
 import { isAroundHere, isPinnedAt, manorKey, relationWhereabout, rollDistrictNpcs } from "@/data/npcGen";
 import { auctionAtShop, auctionWhen } from "@/data/auction";
 import { daySerial } from "@/lib/gameTime";
+import { useElapsedSeconds } from "@/lib/useElapsedSeconds";
 import { shopLeaseCost } from "@/data/playerShops";
 import type { BuskResult, Market, Quest, Shop } from "@/data/types";
 import { Coins, Loader2, Music, Store, Users, X } from "lucide-react";
@@ -58,6 +59,8 @@ export function MarketPanel({
   const auctionOf = (shopId: string) => auctionAtShop(auctions, shopId, today);
 
   const [busyId, setBusyId] = useState("");
+  // 等铺子那一段写照写出来的秒数：转着圈不出声，人便不知是不是卡住了
+  const probeSeconds = useElapsedSeconds(!!busyId);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   /** 进了门的铺子：有货架的买卖，或有座头的客栈茶棚 */
@@ -65,6 +68,8 @@ export function MarketPanel({
   /** 卖艺：选中的本事、这一场的总账与叙事 */
   const [buskSkill, setBuskSkill] = useState("");
   const [buskBusy, setBuskBusy] = useState(false);
+  // 卖艺这一场写完要些时候，缀个数免得人以为卡住
+  const buskSeconds = useElapsedSeconds(buskBusy);
   const [buskResult, setBuskResult] = useState<BuskResult | null>(null);
   const [buskText, setBuskText] = useState("");
   /** 自设的铺面：这一坊市里已有的，与正在新开的 */
@@ -320,6 +325,11 @@ export function MarketPanel({
                       {busyId === shop.id && <Loader2 size={12} className="mr-1 animate-spin" />}
                       {shop.info ? "已驻足" : "驻足"}
                     </SealButton>
+                    {busyId === shop.id && (
+                      <span className="font-serif text-[11px] leading-relaxed text-gold-400/75">
+                        正探头往里看，这一段写照在写着……已候 {probeSeconds} 秒
+                      </span>
+                    )}
                   </div>
                 </ScrollCard>
               ))}
@@ -387,13 +397,18 @@ export function MarketPanel({
               >
                 <span className="flex items-center gap-1.5">
                   {buskBusy ? <Loader2 size={12} className="animate-spin" /> : <Music size={12} />}
-                  {buskBusy ? "正在吆喝……" : "开摊卖艺"}
+                  {buskBusy ? `正在吆喝……已候 ${buskSeconds} 秒` : "开摊卖艺"}
                 </span>
               </SealButton>
             </div>
 
             {skills.length === 0 && (
               <p className="font-serif text-xs text-ink-lightest mt-2">你还没立下一门本事，无从卖艺。</p>
+            )}
+            {buskBusy && (
+              <p className="font-serif text-xs text-ink-light mt-2 leading-relaxed">
+                五场考教与这一段的叙事一并写着，头一回多半慢些，稍等便好。
+              </p>
             )}
 
             {buskResult && (

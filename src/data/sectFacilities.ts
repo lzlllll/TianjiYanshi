@@ -15,14 +15,18 @@
  */
 
 import { getSectTileKind, sectTileCode } from "./map/sectTiles";
-import { allSectBuildings, sectMapLayout } from "./map/sectBuildings";
+import { allSectBuildings, sectBuildingSpec, sectMapLayout } from "./map/sectBuildings";
 import type {
   CustomFacility,
   FacilityKindId,
+  ItemGrade,
   MapScene,
   SectFacilityState,
   SectHall,
   SectHeritage,
+  SectIndustry,
+  SectTreasury,
+  SectTreasuryItem,
 } from "./types";
 
 /** 建筑等级上限 */
@@ -1531,3 +1535,199 @@ export function initialEndowment(args: {
     ],
   };
 }
+
+// ---------------- 各堂编制与产业台账 ----------------
+
+/**
+ * 各堂的编制：一类地块配一堂。
+ * 堂名里带着这一类地块的字眼，facilitySteward 一对便对上，故有无堂主直接落在产出上。
+ */
+export const HALL_ROSTER: { kindId: FacilityKindId; name: string; desc: string }[] = [
+  { kindId: "hall", name: "议事堂", desc: "总领门中庶务，掌门之下诸事皆经此堂。" },
+  { kindId: "scripture", name: "藏经堂", desc: "掌经籍抄录与弟子课业，传承由此传出。" },
+  { kindId: "martial", name: "演武堂", desc: "掌操练与比试，门中武备由此而出。" },
+  { kindId: "alchemy", name: "丹药堂", desc: "掌炉火与药材，门中丹药皆经其手。" },
+  { kindId: "forge", name: "铸器堂", desc: "掌炉砧与矿料，兵刃器物出于此。" },
+  { kindId: "spirit", name: "灵脉堂", desc: "掌灵脉泉眼，供全门吐纳与饮水。" },
+  { kindId: "farm", name: "灵田堂", desc: "掌田圃农事，灵谷蔬菜皆由此来。" },
+  { kindId: "beast", name: "灵兽堂", desc: "掌栏苑禽兽，坐骑与兽材出于此。" },
+  { kindId: "array", name: "阵法堂", desc: "掌护山阵法与符箓，门中安危系于此。" },
+  { kindId: "housing", name: "客居堂", desc: "掌居所斋堂与迎来送往。" },
+];
+
+/** 某一类地块归哪一堂管 */
+export function hallNameForKind(kindId: FacilityKindId): string {
+  return (HALL_ROSTER.find((h) => h.kindId === kindId) ?? HALL_ROSTER[0]).name;
+}
+
+/** 台账里的一条：一座建筑眼下的账 */
+export interface FacilityLedgerEntry {
+  cellIndex: number;
+  name: string;
+  kindId: FacilityKindId;
+  kindName: string;
+  level: number;
+  status: FacilityStatus;
+  steward?: string;
+  yieldNow: FacilityYield;
+  upkeep: number;
+  upgrade: { stones: number; materials: { name: string; amount: number }[] };
+  custom?: CustomFacility;
+  isFeature?: boolean;
+}
+
+/**
+ * 本门眼下立着的各座建筑，连同它们各自的账。
+ *
+ * 山门图里的那几座照排布现算；玩家自己营造的几座另接在后头，
+ * 免得这两处各算各的、台账与地面对不上。
+ */
+export function facilityLedger(args: {
+  scene: MapScene | undefined;
+  facilities?: Record<string, SectFacilityState>;
+  custom?: Record<string, CustomFacility>;
+  /** 自建的那几座：格序 → 建筑名 */
+  built?: Record<string, string>;
+  halls?: SectHall[];
+}): FacilityLedgerEntry[] {
+  const { scene, facilities, custom = {}, built = {}, halls } = args;
+  const out: FacilityLedgerEntry[] = [];
+  const push = (cellIndex: number, name: string, kindId: FacilityKindId) => {
+    const state = facilityStateOf(facilities, name);
+    const own = custom[name];
+    const steward = facilitySteward(halls, kindId);
+    out.push({
+      cellIndex,
+      name,
+      kindId,
+      kindName: getSectTileKind(sectTileCode(kindId)).name,
+      level: state.level,
+      status: state.status,
+      steward,
+      yieldNow: facilityYield({
+        name,
+        kindId,
+        level: state.level,
+        status: state.status,
+        hasSteward: !!steward,
+        nature: scene?.sectNature,
+        isFeature: scene?.sectFeature === name,
+        custom: own,
+      }),
+      upkeep: facilityUpkeep(name, kindId, state.level, own),
+      upgrade: upgradeCost({ name, kindId, level: state.level, nature: scene?.sectNature, custom: own }),
+      custom: own,
+      isFeature: scene?.sectFeature === name,
+    });
+  };
+
+  facilityRoster(scene).forEach((b) => push(b.cellIndex, b.name, b.kindId));
+  Object.entries(built).forEach(([key, name]) => {
+    const cellIndex = Number(key);
+    if (!Number.isInteger(cellIndex) || !name) return;
+    const spec = sectBuildingSpec(name, custom[name]?.kindId);
+    if (!spec) return;
+    push(cellIndex, name, spec.kind);
+  });
+  return out;
+}
+
+/** 把台账里的一条说成一门产业，供「宗门产业」一页列账 */
+export function industryOf(entry: FacilityLedgerEntry): SectIndustry {
+  const parts = entry.yieldNow.materials.map((m) => `${m.name} +${m.amount}`);
+  if (entry.yieldNow.stone > 0) parts.push(`灵石 +${entry.yieldNow.stone}`);
+  if (entry.yieldNow.reputation > 0) parts.push(`声望 +${entry.yieldNow.reputation}`);
+  return {
+    id: `ind-${entry.cellIndex}-${entry.name}`,
+    name: entry.name,
+    production: parts.length > 0 ? `每日 ${parts.join("、")}` : "此处不生财货，产出的是人与功夫",
+    // 投进去的本钱：每修一级所费之和
+    investment: Array.from({ length: Math.max(0, entry.level - 1) }).reduce<number>(
+      (sum, _, i) =>
+        sum + upgradeCost({ name: entry.name, kindId: entry.kindId, level: i + 1 }).stones,
+      0,
+    ),
+    description: facilityInfo(entry.name, entry.kindId, entry.custom).note,
+    level: entry.level,
+    building: entry.name,
+    kindId: entry.kindId,
+    cellIndex: entry.cellIndex,
+    status: entry.status,
+  };
+}
+
+// ---------------- 宝库与按月纳献 ----------------
+
+/** 宝库里某一样东西现存几件：成件之物按名计，常料按名目计 */
+export function treasuryStockOf(treasury: SectTreasury | undefined, name: string): number {
+  if (!treasury || !name) return 0;
+  const item = (Array.isArray(treasury.items) ? treasury.items : []).find((i) => i?.name === name);
+  if (item) return Math.max(0, Math.trunc(Number(item.count) || 0));
+  const mat = (Array.isArray(treasury.materials) ? treasury.materials : []).find((m) => m?.name === name);
+  return Math.max(0, Math.trunc(Number(mat?.amount) || 0));
+}
+
+/** 从宝库里支走若干件；返回支完之后的宝库，不够便返回 null */
+export function takeFromTreasury(
+  treasury: SectTreasury,
+  name: string,
+  count = 1,
+): SectTreasury | null {
+  const n = Math.max(1, Math.trunc(Number(count) || 1));
+  const items = Array.isArray(treasury.items) ? treasury.items.map((i) => ({ ...i })) : [];
+  const at = items.findIndex((i) => i?.name === name);
+  if (at >= 0 && (Number(items[at].count) || 0) >= n) {
+    items[at] = { ...items[at], count: items[at].count - n };
+    return { ...treasury, items: items.filter((i) => i.count > 0) };
+  }
+  const materials = Array.isArray(treasury.materials) ? treasury.materials.map((m) => ({ ...m })) : [];
+  const mi = materials.findIndex((m) => m?.name === name);
+  if (mi >= 0 && (Number(materials[mi].amount) || 0) >= n) {
+    materials[mi] = { ...materials[mi], amount: materials[mi].amount - n };
+    return { ...treasury, materials: materials.filter((m) => m.amount > 0) };
+  }
+  return null;
+}
+
+/** 弟子按月能交上来的几样东西：人越多，交的越杂、越厚 */
+const TRIBUTE_ITEMS: { name: string; type: string; grade: ItemGrade; per: number; cap: number }[] = [
+  { name: "疗伤丹", type: "丹药", grade: "凡品", per: 0.4, cap: 12 },
+  { name: "聚气丹", type: "丹药", grade: "灵品", per: 0.2, cap: 8 },
+  { name: "清心符", type: "符箓", grade: "凡品", per: 0.3, cap: 10 },
+  { name: "护身符", type: "符箓", grade: "灵品", per: 0.15, cap: 6 },
+  { name: "青锋剑", type: "法宝", grade: "灵品", per: 0.1, cap: 4 },
+  { name: "灵纹护腕", type: "法宝", grade: "玄品", per: 0.05, cap: 2 },
+];
+
+/**
+ * 门中弟子按月上交的东西。
+ * 交多少照人数算，另加一点随机，免得每月一个数；人都没有便什么也交不上来。
+ */
+export function monthlyDiscipleTribute(args: {
+  disciples: number;
+  elders?: number;
+  level?: number;
+}): { items: SectTreasuryItem[]; materials: { name: string; amount: number }[] } {
+  const disciples = Math.max(0, Number(args.disciples) || 0);
+  const elders = Math.max(0, Number(args.elders) || 0);
+  const level = Math.max(1, Number(args.level) || 1);
+  if (disciples + elders <= 0) return { items: [], materials: [] };
+
+  const hands = disciples + elders * 3;
+  const items: SectTreasuryItem[] = [];
+  for (const t of TRIBUTE_ITEMS) {
+    const roll = 0.75 + Math.random() * 0.5;
+    const count = Math.min(t.cap, Math.floor(hands * t.per * roll * (0.8 + level * 0.1)));
+    if (count <= 0) continue;
+    items.push({ name: t.name, type: t.type, grade: t.grade, count });
+  }
+  return {
+    items,
+    materials: [
+      { name: "药材", amount: Math.round(hands * 0.4) },
+      { name: "灵谷", amount: Math.round(hands * 0.6) },
+      { name: "矿石", amount: Math.round(hands * 0.3) },
+    ],
+  };
+}
+

@@ -34,12 +34,16 @@ import { EndingScreen } from "@/components/ending/EndingScreen";
 import { GameIntroModal } from "@/components/start/GameIntroModal";
 import { OpeningWarningModal } from "@/components/start/OpeningWarningModal";
 import { GuidedTutorial } from "@/components/tutorial/GuidedTutorial";
+import { SectFoundModal } from "@/components/sect/SectFoundModal";
 import { useTutorialStore } from "@/store/useTutorialStore";
 
 export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const storyOpen = useAIStore((s) => s.isStoryOpen);
   const setStoryOpen = useAIStore((s) => s.setStoryOpen);
+  // 开山立派的名号窗：地点已在主舆图上选过，这里只管门风与落印
+  const founding = useGameStore((s) => s.founding);
+  const cancelFounding = useGameStore((s) => s.cancelFounding);
   const introSeen = useAIStore((s) => s.introSeen);
   const markIntroSeen = useAIStore((s) => s.markIntroSeen);
   const turnCount = useAIStore((s) => s.conversation.turns.length);
@@ -121,6 +125,9 @@ export default function Home({ onReturnToMenu }: { onReturnToMenu?: () => void }
         </main>
       </div>
       <BottomStatus />
+
+      {/* 开山立派：舆图上点定一处空地之后，才开这一扇填名号与门风的窗 */}
+      {founding?.open && <SectFoundModal onClose={cancelFounding} onFounded={cancelFounding} />}
 
       <AISettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} allowTestTools />
       <NPCChatModal />

@@ -1168,7 +1168,7 @@ ${buffCatalogBrief()}
 23. 村庄：野外的村庄散在舆图上（见摘要中 village 可选值），未去过的平日与玩家无涉。正文里若玩家动身前往其中某一村、写到抵达，用 modify village 记下，value 写成村名，须与摘要中的村名一字不差；系统据此把这一村解锁，往后玩家才能向村人打听、与村里的营生和人来往。只在城中议论、提起某个村名，不算前往。
 24. 出租：玩家名下若有一处产业（见摘要中产业一行），正文里若把某处租了出去、又说定了租客与月租，用 modify rent.<产业名> 记下，value 写成「租客 月租」，如「王二 80」；产业名须与摘要中对得上，月租为整数下品灵石，且与正文说定的数目相符。租客照正文里真定下的人写，不要另编。只是商议、尚未谈妥的不写这一条。
 25. 宗门修正：本门若有政策、态势一类的时效（广开山门纳新、全门闭关、大兴土木、论道大典、内斗不断……），用 add sect.modifiers 立上一条，payload 写 {"id":"名录里的id","days":持续天数}；id 只能从下面这张名录里挑，自造的名目一律作废，days 可省，省了照名录上的常例。正文里确有这样的门中举措才写，寻常的来往、议论不写。这些修正会牵动宗门产出、声望与门中修炼，写到成效时须与名录上写的相称。
-26. NPC 资料：正文里若某人的名号、身份、性情、形貌、出身、所属、境界，或他与玩家的关系／信任、所在有确实变化，用 modify relations[<id>].<字段> 记下。可改的字段：文本类 name、title、note、persona、memory、gender、origin、personality、appearance、affiliation、realm；数值类 age、relation（-100 到 100）、trust（1 到 5）；枚举类 type（道侣／师父／弟子／好友／仇敌）；地点类 cityId、location、metAt（城池须是 currentPlaceId 可选值里的）。id 须是摘要中已有的人物。memory 是记在他心里的旧事，照写的新话往后添，不覆盖先前的。只改确实变了的，没变的不要重写一遍。
+26. NPC 资料：正文里若某人的名号、身份、性情、形貌、出身、所属、境界，或他与玩家的关系／信任、所在有确实变化，用 modify relations[<id>].<字段> 记下。可改的字段：文本类 name、title、note、persona、memory、gender、origin、personality、appearance、affiliation、realm；数值类 age、relation（-100 到 100）、trust（-100 到 100，与 relation 同尺，0 为泛泛之交）；枚举类 type（道侣／师父／弟子／好友／仇敌）；地点类 cityId、location、metAt（城池须是 currentPlaceId 可选值里的）。id 须是摘要中已有的人物。memory 是记在他心里的旧事，照写的新话往后添，不覆盖先前的。只改确实变了的，没变的不要重写一遍。
 27. 宗门信息：正文里若本门的名号、驻地、掌事者、规模、声望、山门景象、风物有变（扩建、更名、掌门易位、遭劫等），用 modify sect.<字段> 记下。字段取 sect.name、sect.leader、sect.territory、sect.appearance、sect.surroundings、sect.reputationDesc（文本）；sect.level（0 到 8）、sect.reputation、sect.elders、sect.disciples（数值）。只改确实变了的，逐项写。门中若增设了新职、或改了某一职的名目与所需贡献（如「长老之下又添两位护法」「执事一职改名管事，须贡献八百」），增设的用 add sect.positions 记下，payload 写 {"id":"自拟的新号","name":"职名","level":排在第几级,"contributionNeeded":所需贡献,"privilege":"一句特权"}：level 排进现有职级之间或之后、不得与已有重号，contributionNeeded 与 level 相称，愈高愈多；只是改某一职的，用 modify sect.positions[<id>].name、.contributionNeeded、.privilege，id 照摘要抄，不许自拟。只是嘴上议及、尚未定下的不要写；寻常的授职与晋升只改 player.position，不动职位树。
 28. 摧毁建筑：正文里若本门某座建筑确已倾毁（战火、天灾、掌门下令拆毁等），用 modify demolish.<建筑名> 记下，建筑名取自摘要中「本门建筑」那一行。主殿不可毁——主殿有损只写景况（sect.appearance／sect.surroundings），不要写这一条。
 29. 门派：叙事里凡涉门派，先照摘要中「江湖上的门派」那一份写，用它们的名号、驻地与性质，别另造名号，也别把已有的门派挪地方。确需一处本局没有的门派（玩家自述的出身、师承、旧仇，或叙事非提不可的一处），才用 add sectSites 现立一处，payload 写 {"name":"门派名号","culture":"文化圈","seat":"驻地写法，如「朔方以北的荒谷」","nature":"性质，2 到 6 字","level":1 到 8,"reputation":门派声望,"elders":长老人数,"disciples":门人数,"appearance":"山门气象一句","reputationDesc":"江湖风评一句","surroundings":"眼下境况一句"}。name 必写，其余给多少算多少，没给的照那一带的风物自去补；culture 只取 中原、江南、苗疆、西域、漠北、日韩 之一，不写就按玩家眼下的文化圈落点。同一处只立一次，摘要里已有的名号不要再立——立了也会被丢掉。
@@ -1315,7 +1315,7 @@ export const OPENING_DOMAINS: { id: OpeningDomainId; label: string; spec: string
 - type 只取 dao_companion、master、disciple、friend、enemy
 - traveling：叙述里若已写明这位一路随行（同行、同路、随侍、结伴上路），写 true，至多三人；其余人不写这一项
 - relation 为「关系」，-100 到 100 的整数：0 为平交，正为亲近，负为交恶；陌生人约在 0 上下
-- trust 为「信任」，1 到 5 的整数：1 不可信任、2 尚存嫌隙、3 相交莫逆、4 推心置腹、5 同生共死；新结识的人给 2
+- trust 为「信任」，-100 到 100 的整数，与 relation 同一把尺：0 为泛泛之交，正数越大越信得过（约 30 相交莫逆、60 推心置腹、85 以上同生共死），负数越大越信不过（约 -50 以下不可信任）；新结识的人给 0 上下
 - realm 为该人物的修为境界
 - note 不少于 30 字，写明此人与主角的渊源、当前态度与相处方式
 - 人设细目：gender 取「男」或「女」；age 为整数；origin 为出身来历（不超过 20 字）；personality 为性情（不超过 20 字）；appearance 为形貌（不超过 20 字）；affiliation 为所属门派、帮口或家族（散修写「无」）；location 为眼下所在地，写地名或山门名（如「扬州」「云栖山脉」），须与他的身份相合，不在近前的照实写远，同门师长便写玩家所在的那处山门
@@ -1769,14 +1769,14 @@ ${brief.agentName ? `【经手人】${brief.agentName}（${brief.agentTitle ?? "
   ];
 }
 
-/** 尘缘的「关系」「信任」怎么念给模型听；旧档只有情谊时按同一口径折算 */
+/** 尘缘的「关系」「信任」怎么念给模型听；两者同一把尺，都是 -100~100 */
 export function bondLabel(r: { relation?: number; trust?: number; affinity?: number; affinityMax?: number }): string {
-  if (typeof r.relation === "number" && typeof r.trust === "number") {
-    return `关系${r.relation} 信任第${r.trust}档`;
-  }
-  const a = Number(r.affinity) || 0;
-  const trust = a >= 90 ? 5 : a >= 70 ? 4 : a >= 45 ? 3 : a >= 20 ? 2 : 1;
-  return `关系${Math.round(a * 2 - 100)} 信任第${trust}档`;
+  const relation =
+    typeof r.relation === "number"
+      ? Math.round(r.relation)
+      : Math.round((Number(r.affinity) || 0) * 2 - 100);
+  const trust = typeof r.trust === "number" ? Math.round(r.trust) : relation;
+  return `关系${relation} 信任${trust}`;
 }
 
 /** 灵田要种什么：请天道推演这物产在此地成不成 */
@@ -2278,6 +2278,9 @@ export const EVENT_END_MARK = "<<<EVENT_END>>>";
  */
 export const EVENT_QUICK_MARK = "<<<QUICK>>>";
 
+/** 应对选项那一块的收尾；提示词与解析共用这一个常量，改名时只动此处 */
+export const EVENT_QUICK_END = "<<<END>>>";
+
 /** 玩家简要状况：变故的分量以此为尺，写提示词与收场都用得着 */
 export interface EventPlayerBrief {
   name: string;
@@ -2348,7 +2351,7 @@ ${hook ? `\n【牵出的人】${hook}\n这一桩须从此人身上起：他遣�
 5. 正文之后另起一块，只列三到四条他眼下可以采取的应对，每条八到十八字，一条一行，写清要做什么、不必写成败，形如：
 ${EVENT_QUICK_MARK}
 <三到四条应对，一行一条>
-<<<END>>>
+${EVENT_QUICK_END}
 除这一块之外，不要输出任何标记、说明或数据操作。`;
 
   return [
@@ -2389,7 +2392,7 @@ ${args.history || "（还没交手）"}
 3. 正文之后另起一块，只列三到四条他眼下可以采取的应对，每条八到十八字，一条一行，写清要做什么、不必写成败，形如：
 ${EVENT_QUICK_MARK}
 <三到四条应对，一行一条>
-<<<END>>>
+${EVENT_QUICK_END}
 4. 若这一桩到此了结（人走了、事过了、险解了、谈定了），就在全篇最末另起一行只写 ${EVENT_END_MARK}；还没有了结就不要写这一行。
 5. 只写正文与上面这两样；除它们之外，不要输出任何标记、说明或数据操作。`;
 

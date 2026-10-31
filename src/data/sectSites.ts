@@ -12,7 +12,13 @@
  * 玩家自己报过宗门名号的，会在本地的几处里认下一处作本门。
  */
 
-import { WORLD_SCENE_ID, getCityMarkers, getScenePresetPoints, getSectMapTemplates } from "@/data/map";
+import {
+  WORLD_SCENE_ID,
+  getCityMarkers,
+  getScenePresetPoints,
+  getSectMapTemplates,
+  sectTemplateIdForMapType,
+} from "@/data/map";
 import {
   SECT_CULTURES,
   SECT_LEVEL_MAX,
@@ -476,6 +482,7 @@ export function buildFoundingSite(input: FoundingSectInput, existing: SectSite[]
   const taken = new Set(list.map((s) => s?.id));
   let seq = list.length + 1;
   while (taken.has(`sect-${seq}`)) seq += 1;
+  const mapType = rollSectMapType(culture).id;
   return {
     id: `sect-${seq}`,
     sceneId: WORLD_SCENE_ID,
@@ -484,7 +491,9 @@ export function buildFoundingSite(input: FoundingSectInput, existing: SectSite[]
     culture,
     name,
     seat,
-    mapType: rollSectMapType(culture).id,
+    mapType,
+    // 立宗时把挑中的那张模板记下来，往后注册山门图不必再照地势猜
+    templateId: sectTemplateIdForMapType(mapType),
     mine: true,
     nature: { ...input.nature },
     climate: { ...input.climate },

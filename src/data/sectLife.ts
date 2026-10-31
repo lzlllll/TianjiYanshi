@@ -15,7 +15,7 @@ import { getCityMarkers, getDistricts, getMarker } from "@/data/map";
 import { REALM_NAMES } from "@/data/mockData";
 import { normalizeHour } from "@/lib/gameTime";
 import type { BrokerTargets } from "@/data/broker";
-import type { FacilityKindId, ItemGrade, JobCastRole, JobTarget, Relation, SectTask } from "@/data/types";
+import type { FacilityKindId, ItemGrade, JobCastRole, JobTarget, Relation, SectActivity, SectHall, SectTask } from "@/data/types";
 
 // ---------------- 一、主殿开讲 ----------------
 
@@ -489,11 +489,15 @@ export interface SectTaskAdventure {
   cityId?: string;
 }
 
-/** 从本门的建筑里挑一座当去处；限了类别的便只在那一类里挑，没有便退而取任意一座 */
+/**
+ * 从本门的建筑里挑一座当去处。
+ * 限了类别的便只在那一类里挑：门中没这一类的建筑，这桩事便派不下去——
+ * 从前退而取任意一座，「往灵田送一批灵种」会被指到传法大殿，名目与去处两不相干。
+ */
 function pickBuilding(sites: SectTaskBuilding[], kinds?: FacilityKindId[]): SectTaskBuilding | undefined {
   if (sites.length === 0) return undefined;
-  const matched = kinds && kinds.length > 0 ? sites.filter((s) => kinds.includes(s.kindId)) : [];
-  const pool = matched.length > 0 ? matched : sites;
+  const pool = kinds && kinds.length > 0 ? sites.filter((s) => kinds.includes(s.kindId)) : sites;
+  if (pool.length === 0) return undefined;
   return pool[pickIndex(pool.length)];
 }
 
@@ -534,7 +538,13 @@ export function rollSectTasks(
   const tasks: SectTask[] = [];
 
   for (let i = 0; i < want && pool.length > 0; i++) {
-    const [tpl] = pool.splice(pickIndex(pool.length), 1);
+    // 门中既然立着建筑，头一桩便派一桩送到门里某一处去：
+    // 交付点与山门挂钩，要交差的人就在那一座里候着
+    const idx =
+      i === 0 && sites.length > 0
+        ? Math.max(0, pool.findIndex((t) => t.toward === "building"))
+        : pickIndex(pool.length);
+    const [tpl] = pool.splice(idx, 1);
 
     // 奔本门建筑去的：拿一座建筑当去处，人在那一座里等着
     if (tpl.toward === "building") {
@@ -681,4 +691,148 @@ export function nearestCityIdFor(x?: number, y?: number): string | undefined {
     }
   }
   return best.id;
+}
+
+// ---------------- 四、各堂编制 ----------------
+
+/** 这一堂平日做的是什么；写在堂口卡上，也当作 NPC 的差事 */
+const HALL_DUTY: Record<FacilityKindId, string> = {
+  hall: "总领庶务，收发掌门号令",
+  scripture: "整理经卷，督促弟子课业",
+  martial: "领操练，排比试的场次",
+  alchemy: "看炉火，清点药材",
+  forge: "守着炉砧，修补门中兵刃",
+  spirit: "巡灵脉，引灵入渠",
+  farm: "催农时，收灵谷蔬菜",
+  beast: "喂栏中禽兽，调驯坐骑",
+  array: "检阵眼，补符钉",
+  housing: "管宿处与斋堂，迎送来客",
+};
+
+/**
+ * 本门眼下该编出哪几堂。
+ *
+ * 门中立着哪一类的建筑，便编哪一堂；堂主从门中认得的人里挑，
+ * 挑不出来便空着——空着的堂口，它辖下的建筑产出照折，这是实打实的一笔。
+ */
+export function rollSectHalls(args: {
+  kinds: FacilityKindId[];
+  roster: { kindId: FacilityKindId; name: string; desc: string }[];
+  disciples: number;
+  elders?: number;
+  level?: number;
+  /** 门中可当堂主的人，按名与境界给 */
+  peers?: { name: string; realm?: string }[];
+}): SectHall[] {
+  const { kinds, roster, peers } = args;
+  const have = new Set(kinds);
+  const list = roster.filter((h) => have.has(h.kindId));
+  if (list.length === 0) return [];
+
+  const disciples = Math.max(0, Number(args.disciples) || 0);
+  const elders = Math.max(0, Number(args.elders) || 0);
+  const level = Math.max(1, Number(args.level) || 1);
+  // 弟子按堂均分，余下的落在头一堂上；长老各堂分一位坐镇
+  const base = Math.floor(disciples / list.length);
+  const rest = disciples - base * list.length;
+  const elderShare = Math.floor(elders / list.length);
+  const maxMembers = Math.max(4, 8 + level * 4);
+  const pool = Array.isArray(peers) ? peers.filter((p) => p?.name) : [];
+
+  return list.map((h, i) => {
+    const master = pool[i];
+    return {
+      id: `hall-${h.kindId}`,
+      name: h.name,
+      master: master?.name ?? "空缺",
+      masterRealm: master?.realm || (master ? "修为不明" : "—"),
+      currentTask: HALL_DUTY[h.kindId] ?? "料理堂中杂事",
+      memberCount: Math.min(maxMembers, base + elderShare + (i < rest ? 1 : 0) + (master ? 1 : 0)),
+      maxMembers,
+      description: h.desc,
+      kindIds: [h.kindId],
+    };
+  });
+}
+
+// ---------------- 五、宗门活动 ----------------
+
+/** 一场活动要筹备几日，筹备期内可以参与 */
+export const ACTIVITY_DAYS = 3;
+
+/** 发起一场活动从宝库支的灵石；不同名目花销不同 */
+export const ACTIVITY_COST: Record<SectActivity["type"], number> = {
+  大比: 300,
+  试炼: 220,
+  庆典: 400,
+  祭祀: 180,
+  远征: 600,
+};
+
+/** 各活动的名目、彩头与一句说明 */
+export const ACTIVITY_SPECS: Record<
+  SectActivity["type"],
+  { name: string; target: string; desc: string; reward: string }
+> = {
+  大比: {
+    name: "门中大比",
+    target: "门中弟子较技，胜者记功",
+    desc: "设擂台于演武场，门中弟子两两相较，决出名次。",
+    reward: "贡献与修为",
+  },
+  试炼: {
+    name: "后山试炼",
+    target: "入后山历练，活着出来的算过",
+    desc: "开后山禁地，弟子入内历练，各凭本事。",
+    reward: "修为与悟性",
+  },
+  庆典: {
+    name: "开山庆典",
+    target: "宴请四方同道，广结善缘",
+    desc: "大开山门设宴，遍请左近同道与士绅。",
+    reward: "声望与贡献",
+  },
+  祭祀: {
+    name: "山门祭祀",
+    target: "祭山川先祖，安定门中人心",
+    desc: "设案于阵前，祭山川与历代先人。",
+    reward: "声望与心安",
+  },
+  远征: {
+    name: "外出远征",
+    target: "领队出山，扫荡左近祸患",
+    desc: "点齐门人出山，清剿左近的山匪与水匪。",
+    reward: "灵石与贡献",
+  },
+};
+
+/** 一场活动在今日是否还能参与 */
+export function activityOpen(act: SectActivity | undefined, today: number): boolean {
+  if (!act || act.status !== "进行中") return false;
+  if (typeof act.endDay === "number" && today > act.endDay) return false;
+  if (act.lastJoinDay === today) return false;
+  return true;
+}
+
+/** 参与一场活动所得的彩头：照身份与宗门品级折算 */
+export function activityPayout(
+  type: SectActivity["type"],
+  args: { positionLv: number; sectLevel: number },
+): { contribution: number; cultivation: number; reputation: number; stones: number } {
+  const lv = Math.max(1, Number(args.positionLv) || 1);
+  const sectLv = Math.max(1, Number(args.sectLevel) || 1);
+  switch (type) {
+    case "大比":
+      return { contribution: 10 + lv * 6 + sectLv * 2, cultivation: 6 + lv * 3, reputation: 1, stones: 0 };
+    case "试炼":
+      return { contribution: 6 + lv * 4 + sectLv * 2, cultivation: 12 + lv * 5, reputation: 0, stones: 0 };
+    case "庆典":
+      return { contribution: 8 + lv * 4, cultivation: 0, reputation: 4 + sectLv * 2, stones: 0 };
+    case "祭祀":
+      return { contribution: 5 + lv * 3, cultivation: 0, reputation: 6 + sectLv * 2, stones: 0 };
+    case "远征":
+      return { contribution: 12 + lv * 8 + sectLv * 3, cultivation: 4 + lv * 2, reputation: 1, stones: 40 + sectLv * 30 };
+    default:
+      return { contribution: 5, cultivation: 0, reputation: 0, stones: 0 };
+  }
 }

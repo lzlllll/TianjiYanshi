@@ -7,7 +7,7 @@ import { Settings, FolderOpen, RotateCcw, Clock, ChevronDown, MoreHorizontal, Co
 import { formatGameTime } from "@/lib/gameTime";
 import { GAME_SIGNATURE } from "@/lib/gameInfo";
 import { cn } from "@/lib/utils";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 
 interface TopBannerProps {
   onOpenSettings: () => void;
@@ -19,7 +19,7 @@ export function TopBanner({ onOpenSettings, onReturnToMenu }: TopBannerProps) {
   const currentTime = useGameStore((s) => s.currentTime);
   const realm = REALMS[player.realmIndex];
   const nextRealm = REALMS[player.realmIndex + 1];
-  const hasApiKey = AI_BACKEND_READY;
+  const hasApiKey = useAIStore((s) => aiReady(s.settings));
   const stage = useAIStore((s) => s.conversation.stage);
 
   // 宗门、体魄、气运这类次要信息默认展开，玩家不必先点一下才看得到

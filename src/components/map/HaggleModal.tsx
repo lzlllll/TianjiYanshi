@@ -6,6 +6,7 @@ import { itemSalePriceFor, type SaleCtx } from "@/data/goods";
 import { migrateRelation } from "@/data/npcGen";
 import type { Relation } from "@/data/types";
 import type { HaggleSubject } from "@/components/map/GeneralStoreModal";
+import { useElapsedSeconds } from "@/lib/useElapsedSeconds";
 import { Loader2, Send, X } from "lucide-react";
 
 /** 仪表圆心；刻度弧画在半径 100 处，指针比它再短一截 */
@@ -72,6 +73,8 @@ export function HaggleModal({
   const [words, setWords] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 等掌柜开口的秒数：干转着圈，人便以为卡住了
+  const waitSeconds = useElapsedSeconds(busy);
   /** 刚成交的那一笔；卖出后留在此窗，接着卖别的 */
   const [dealt, setDealt] = useState("");
 
@@ -418,8 +421,13 @@ export function HaggleModal({
               {busy && !streamText && (
                 <div className="flex items-center gap-2 font-serif text-xs text-paper-400/60">
                   <Loader2 size={13} className="animate-spin text-gold-400" />
-                  {keeper.name}正打算盘……
+                  {keeper.name}正打算盘……已候 {waitSeconds} 秒
                 </div>
+              )}
+              {busy && streamText && (
+                <p className="font-serif text-[11px] text-paper-400/45">
+                  {keeper.name}还在说，话正一句句写出来……
+                </p>
               )}
               {busted && (
                 <p className="font-serif text-xs text-cinnabar-400 leading-relaxed pt-1">

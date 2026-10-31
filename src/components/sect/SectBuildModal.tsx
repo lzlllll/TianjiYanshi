@@ -8,7 +8,7 @@ import { getSectTileKind, sectTileCode } from "@/data/map/sectTiles";
 import type { CustomFacility, FacilityKindId } from "@/data/types";
 import { cn } from "@/lib/utils";
 import { Hammer, Loader2, Sparkles, X } from "lucide-react";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 
 /** 建筑类别摆开的次序：按职能从重到轻 */
 const KIND_ORDER: FacilityKindId[] = [
@@ -35,7 +35,7 @@ export function SectBuildModal({ cellIndex, onClose }: { cellIndex: number; onCl
   const designSectBuilding = useAIStore((s) => s.designSectBuilding);
 
   const scene = getScene(mapSceneId);
-  const hasModel = AI_BACKEND_READY;
+  const hasModel = useAIStore((s) => aiReady(s.settings));
 
   const [mode, setMode] = useState<"list" | "custom">("list");
   const [picked, setPicked] = useState("");

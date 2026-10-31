@@ -613,7 +613,12 @@ export interface QuestLedgerTarget {
   player: { cultivation: number; karma: number; buffs?: Buff[] };
   spiritStones: { low: number };
   reputation: Reputation;
-  sect?: { reputation?: number; contribution?: number };
+  sect?: {
+    reputation?: number;
+    contribution?: number;
+    /** 门中宝库：门派的赏钱从这里出，不从天上掉 */
+    management?: { treasury?: { spiritStones: number } };
+  };
   relations?: { name: string; relation?: number; trust?: number; affinity?: number; affinityMax?: number }[];
   /** 眼下是什么时辰：赏罚是一条状态时，要照它算顶到几时 */
   now?: GameTime;
@@ -636,18 +641,31 @@ export function applyQuestLedger(
   const head = status === "done" ? "交差了" : "误了期";
   const parts: string[] = [];
 
-  // 门派任务的赏不走牙行：交差记贡献与下品灵石，误期倒扣一半贡献，当场落在宗门上
+  // 门派任务的赏不走牙行：交差记贡献，灵石从宗门宝库里支；误期倒扣一半贡献
   if (quest.sectTask && target.sect) {
     if (status === "done") {
       const gainContribution = Math.max(0, Math.round(quest.sectTask.contribution));
-      const gainStone = Math.max(0, Math.round(quest.sectTask.spiritStone));
+      const wantStone = Math.max(0, Math.round(quest.sectTask.spiritStone));
       if (gainContribution) {
         target.sect.contribution = (Number(target.sect.contribution) || 0) + gainContribution;
         parts.push(`为宗门立下一功，得贡献 ${gainContribution}`);
       }
-      if (gainStone) {
-        target.spiritStones.low = (Number(target.spiritStones.low) || 0) + gainStone;
-        parts.push(`另赏下品灵石 ${gainStone}`);
+      if (wantStone) {
+        // 赏钱是门中的公账：宝库里有多少便支多少，支不出的只记在话里
+        const treasury = target.sect.management?.treasury;
+        if (treasury) {
+          const have = Math.max(0, Math.round(Number(treasury.spiritStones) || 0));
+          const paid = Math.min(have, wantStone);
+          treasury.spiritStones = have - paid;
+          if (paid > 0) target.spiritStones.low = (Number(target.spiritStones.low) || 0) + paid;
+          parts.push(
+            paid >= wantStone
+              ? `自宗门宝库支得下品灵石 ${paid}`
+              : `宗门宝库只支得出下品灵石 ${paid}，余下的${wantStone - paid}记在账上`,
+          );
+        } else {
+          parts.push(`宗门宝库一时无从支取，应赏的下品灵石 ${wantStone} 只记在账上`);
+        }
       }
     } else {
       const lost = Math.max(1, Math.round(quest.sectTask.contribution / 2));

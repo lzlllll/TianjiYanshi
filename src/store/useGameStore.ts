@@ -32,6 +32,10 @@ import type {
   SectSite,
   SectRelation,
   SectStance,
+  SectActivity,
+  SectHall,
+  SectTreasury,
+  SectTreasuryItem,
   Occupation,
   ManorActArgs,
   ManorActResult,
@@ -92,22 +96,34 @@ import {
   nearestCityIdFor,
   positionLevel,
   preachReward,
+  rollSectHalls,
   rollSectTasks,
+  ACTIVITY_COST,
+  ACTIVITY_DAYS,
+  ACTIVITY_SPECS,
+  activityOpen,
+  activityPayout,
   type SectTaskBuilding,
 } from "@/data/sectLife";
 import {
   FACILITY_LEVEL_CAP,
+  HALL_ROSTER,
   MATERIAL_SURPLUS_KEEP,
   buildOptions,
   facilityActions,
   facilityDecision,
+  facilityLedger,
   facilityRoster,
   facilityStateOf,
   facilitySteward,
   facilityUpkeep,
   facilityYield,
+  hallNameForKind,
   initialEndowment,
   materialPrice,
+  monthlyDiscipleTribute,
+  takeFromTreasury,
+  treasuryStockOf,
   clampCustomFacility,
   upgradeCost,
 } from "@/data/sectFacilities";
@@ -153,11 +169,13 @@ import {
   REALMS,
   initialPlayer,
 } from "@/data/mockData";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 
 interface GameStore extends GameState {
   setPanel: (panel: PanelId | null) => void;
   setCraftingTab: (tab: CraftingTab) => void;
+  /** 开山立派正在舆图上选点、已选定的那处空地、名号那一扇窗开着没有 */
+  founding?: { picking: boolean; spot?: { x: number; y: number }; open: boolean };
   /** 终局：气血耗尽或寿元用尽时立起，弹出结局页；null 为未终局 */
   ending: { reason: string } | null;
   /** 立终局 */
@@ -338,8 +356,12 @@ interface GameStore extends GameState {
   drawTalisman: (recipe: TalismanRecipe) => { success: boolean; message: string };
   brewAlchemy: (selectedHerbs: { name: string; count: number }[], fire: number, duration: number) => Promise<BrewResult>;
   acceptTask: (id: string) => void;
-  /** 照本门附近真有的城池现掷一批门派任务；手头还有在办的便不换，除非 force */
-  refreshSectTasks: (force?: boolean) => void;
+  /**
+   * 照本门附近真有的城池现掷一批门派任务。
+   * 手头还有在办的便不换；force 是玩家点了「另张一批」，
+   * 要另付一点灵石，且同样不能把在办的事一并冲掉。
+   */
+  refreshSectTasks: (force?: boolean) => { ok: boolean; message?: string };
   /**
    * 在山门里听掌门开讲，或自己登坛：记考勤、涨修为，另给一句交给叙事去写。
    * topic 是这一场讲什么，由玩家先挑定。
@@ -449,6 +471,27 @@ interface GameStore extends GameState {
    * 花一笔灵石，落成后只有一座主殿、门下无人，玩家自此为掌门。
    */
   foundSect: (input: FoundingSectInput) => { ok: boolean; message: string };
+  /**
+   * 开山立派的三步：在舆图上选点、点定一处开窗、收起这一套。
+   * 选点在主屏舆图上做，窗里只填名号与门风。
+   */
+  beginFoundingPick: () => void;
+  pickFoundingSpot: (spot: { x: number; y: number }) => void;
+  cancelFounding: () => void;
+  /** 按本门实有的建筑编出各堂；缺堂主便留着空位，辖下产出照折 */
+  ensureSectHalls: () => void;
+  /** 任免一堂之主；空名即撤下，交回空缺 */
+  appointHallMaster: (hallId: string, masterName: string) => { ok: boolean; message?: string };
+  /** 停用或复工一座建筑；停用则产出归零，维护费照旧 */
+  toggleFacilityStatus: (name: string, kindId: FacilityKindId) => { ok: boolean; message?: string };
+  /** 发起一场宗门活动：从宝库支一笔灵石，办三日 */
+  startSectActivity: (type: SectActivity["type"]) => { ok: boolean; message?: string };
+  /** 参与一场进行中的活动：一日一回，彩头照身份与宗门品级折算 */
+  joinSectActivity: (id: string) => { ok: boolean; message?: string; decision?: string };
+  /** 过了止日的活动自行收场 */
+  settleActivities: () => void;
+  /** 按月结算：弟子按人数上交物品入宝库 */
+  settleSectWarehouse: () => void;
   /**
    * 宗门战收场：攻破的一处宗门，照玩家所择发落——掠夺、纳附庸，或一举摧毁。
    */
@@ -732,6 +775,7 @@ const initialState: GameState = {
   relations: [],
   currentPanel: null,
   craftingTab: "talisman",
+  founding: { picking: false, open: false },
   currentPlaceId: getDefaultPlaceId(),
   mapSceneId: WORLD_SCENE_ID,
   currentLocation: "home",
@@ -865,12 +909,20 @@ function sectTaskBuildings(state: GameState, site: SectSite | undefined): SectTa
   const scene = getScene(sectSceneId(site.id));
   if (!scene) return [];
   const label = state.sect?.name || "本门";
-  return sectBuildingRoster(scene).map((b) => ({
+  const list = sectBuildingRoster(scene).map((b) => ({
     name: b.name,
     kindId: b.kindId,
     sectId: site.id,
     label: `${label}·${b.name}`,
   }));
+  // 玩家自己营造的那几座也能当去处：门中真有这一处，人才在那里等着
+  Object.values(site.built ?? {}).forEach((name) => {
+    if (!name || list.some((b) => b.name === name)) return;
+    const spec = sectBuildingSpec(name, site.custom?.[name]?.kindId);
+    if (!spec) return;
+    list.push({ name, kindId: spec.kind, sectId: site.id, label: `${label}·${name}` });
+  });
+  return list;
 }
 
 /**
@@ -969,6 +1021,10 @@ export const useGameStore = create<GameStore>()(
         if (scene.kind === "sect") {
           get().refreshSectTasks();
           get().settleLecture();
+          // 门中立着哪几类建筑，便该有哪几堂；旧档里头一回进来时补上
+          get().ensureSectHalls();
+          // 这个月的纳献若还没入账，进了山门便顺手清点一遍
+          get().settleSectWarehouse();
         }
       },
 
@@ -1351,7 +1407,7 @@ export const useGameStore = create<GameStore>()(
               const { useAIStore } = await import("@/store/useAIStore");
               const aiSettings = useAIStore.getState().settings;
 
-              if (AI_BACKEND_READY) {
+              if (aiReady(aiSettings)) {
                 const herbsText = selectedHerbs.map((h) => `${h.name}×${h.count}`).join(",");
                 const elementsText = ELEMENTS.map((e) => `${e}:${finalElements[e]}`).join(",");
 
@@ -1600,7 +1656,7 @@ EFFECT: [效果描述]`,
           dueDay,
           giver: s.sect.name || "宗门",
           condition: task.condition || "照宗门所托办妥",
-          reward: `记宗门贡献 ${task.contribution}，另赏下品灵石 ${task.spiritStone}`,
+          reward: `记宗门贡献 ${task.contribution}，另自宗门宝库支下品灵石 ${task.spiritStone}`,
           penalty: `误了期，倒扣宗门贡献 ${Math.max(1, Math.round(task.contribution / 2))}`,
           status: "open",
           day: today,
@@ -1634,12 +1690,31 @@ EFFECT: [效果描述]`,
       refreshSectTasks: (force) => {
         const st = get();
         const tasks = Array.isArray(st.sect?.tasks) ? st.sect.tasks : [];
-        // 手头还有未了结的门派事务就不换，除非明说要重掷
-        if (!force && tasks.some((t) => t.target && !t.settled)) return;
+        // 手头还有在办的事，一换便把进度冲没了——无论是自动张榜还是玩家点了「另张一批」
+        if (tasks.some((t) => t.accepted && t.target && !t.settled)) {
+          const message = "手头还有在办的门派事务，办妥或误期之后才好另张一批。";
+          if (force) set({ log: [message, ...st.log].slice(0, 30) });
+          return { ok: false, message };
+        }
+        // 未接的旧榜可以照旧换掉
+        if (!force && tasks.some((t) => t.target && !t.settled)) return { ok: false };
+
+        // 「另张一批」要花一点灵石：从前白换，玩家可以一直刷到全是「易」的差事
+        const cost = 20;
+        let paid = st.spiritStones;
+        if (force) {
+          const left = spendLowStones(st.spiritStones, cost);
+          if (!left) {
+            const message = `另张一批须下品灵石 ${cost}，眼下的灵石兑尽了也不够。`;
+            set({ log: [message, ...st.log].slice(0, 30) });
+            return { ok: false, message };
+          }
+          paid = left;
+        }
 
         const site = st.sectSites.find((s) => s.mine);
         const cityId = nearestCityIdFor(site?.x, site?.y) ?? getCityMarkers()[0]?.id;
-        if (!cityId) return;
+        if (!cityId) return { ok: false };
 
         const targets = brokerTargetsFor(cityId, st.districtNames, st.relations);
         const buildings = sectTaskBuildings(st, site);
@@ -1652,12 +1727,19 @@ EFFECT: [效果描述]`,
             .filter((a) => a && a.id && a.name)
             .map((a) => ({ id: a.id, name: a.name, kind: a.kind, cityId: a.cityId })),
         );
-        if (next.length === 0) return;
+        if (next.length === 0) return { ok: false };
 
         set({
+          spiritStones: force ? paid : st.spiritStones,
           sect: { ...st.sect, tasks: next },
-          log: [`宗门新张出一批事务，共 ${next.length} 桩。`, ...st.log].slice(0, 30),
+          log: [
+            force
+              ? `你托人另张了一批事务，费下品灵石 ${cost}，得 ${next.length} 桩。`
+              : `宗门新张出一批事务，共 ${next.length} 桩。`,
+            ...st.log,
+          ].slice(0, 30),
         });
+        return { ok: true };
       },
 
       attendLecture: (topic) => {
@@ -1802,8 +1884,9 @@ EFFECT: [效果描述]`,
         const st = get();
         // 只给一回；门号还没立起来便再等等
         if (st.sect?.endowed) return;
+        // 「散修」不是门户：这一名号下不该凭空多出一座宝库
         const bare =
-          !st.sect?.name &&
+          !playerSectName(st.sect?.name) &&
           !st.sect?.leader &&
           !(Number(st.sect?.disciples) || 0) &&
           !(Number(st.sect?.elders) || 0) &&
@@ -2095,25 +2178,20 @@ EFFECT: [效果描述]`,
         const today = daySerial(st.currentTime);
         if ((st.sect.facilitySettledDay ?? 0) >= today) return;
 
-        const roster = facilityRoster(scene);
-        // 本门自己营造的那几座也一并入账：自拟的照它自己的账，辨认时借同类的贴图
-        const mineSite = st.sectSites.find((s) => s.mine);
-        const customBook = mineSite?.custom ?? {};
-        Object.entries(mineSite?.built ?? {}).forEach(([key, name]) => {
-          const spec = sectBuildingSpec(name, customBook[name]?.kindId);
-          const cellIndex = Number(key);
-          if (!spec || !Number.isInteger(cellIndex)) return;
-          roster.push({
-            cellIndex,
-            kindId: spec.kind,
-            kindName: getSectTileKind(sectTileCode(spec.kind)).name,
-            name,
-          });
+        // 门中有哪几类建筑，便先编出哪几堂：缺堂主的堂口，辖下产出照折
+        get().ensureSectHalls();
+        const cur = get();
+        const mineSite = cur.sectSites.find((s) => s.mine);
+        const ledger = facilityLedger({
+          scene,
+          facilities: cur.sect.facilities,
+          custom: mineSite?.custom,
+          built: mineSite?.built,
+          halls: cur.sect.management?.halls,
         });
-        if (roster.length === 0) return;
+        if (ledger.length === 0) return;
 
-        const halls = st.sect.management?.halls;
-        const treasury = st.sect.management?.treasury;
+        const treasury = cur.sect.management?.treasury;
         // 宝库里现有的东西，按名目归拢
         const materials = new Map<string, number>();
         (Array.isArray(treasury?.materials) ? treasury!.materials : []).forEach((m) => {
@@ -2122,33 +2200,21 @@ EFFECT: [效果描述]`,
         });
 
         let stones = Number(treasury?.spiritStones) || 0;
-        let reputation = Number(st.sect.reputation) || 0;
+        let reputation = Number(cur.sect.reputation) || 0;
         let upkeepTotal = 0;
 
         // 门中眼下生效的修正（政策、态势一类的时效）：产出按倍率折算，到期的顺手抹去
-        const liveMods = (st.sect.modifiers ?? []).filter((m) => Number(m.until) >= today);
-        const expiredMods = (st.sect.modifiers ?? []).filter((m) => Number(m.until) < today);
+        const liveMods = (cur.sect.modifiers ?? []).filter((m) => Number(m.until) >= today);
+        const expiredMods = (cur.sect.modifiers ?? []).filter((m) => Number(m.until) < today);
         const modEff = activeModifierEffects(liveMods);
 
-        for (const item of roster) {
-          const state = facilityStateOf(st.sect.facilities, item.name);
-          const custom = customBook[item.name];
-          const y = facilityYield({
-            name: item.name,
-            kindId: item.kindId,
-            level: state.level,
-            status: state.status,
-            hasSteward: !!facilitySteward(halls, item.kindId),
-            nature: scene.sectNature,
-            isFeature: scene.sectFeature === item.name,
-            custom,
-          });
-          y.materials.forEach((m) =>
+        for (const item of ledger) {
+          item.yieldNow.materials.forEach((m) =>
             materials.set(m.name, (materials.get(m.name) ?? 0) + Math.round(m.amount * modEff.resourceMul)),
           );
-          stones += Math.round(y.stone * modEff.resourceMul);
-          reputation += y.reputation;
-          upkeepTotal += facilityUpkeep(item.name, item.kindId, state.level, custom);
+          stones += Math.round(item.yieldNow.stone * modEff.resourceMul);
+          reputation += item.yieldNow.reputation;
+          upkeepTotal += item.upkeep;
         }
         // 修正带来的声望增减，按这一日算一笔
         reputation += modEff.reputationPerDay;
@@ -2156,7 +2222,7 @@ EFFECT: [效果描述]`,
         stones = Math.max(0, stones - upkeepTotal);
 
         // 门中弟子每日耗灵谷与蔬菜；不够吃，人心就要散
-        const disciples = Math.max(0, Number(st.sect.disciples) || 0);
+        const disciples = Math.max(0, Number(cur.sect.disciples) || 0);
         const grainNeed = Math.ceil(disciples * 0.2);
         const vegNeed = Math.ceil(disciples * 0.1);
         const grain = materials.get("灵谷") ?? 0;
@@ -2177,14 +2243,14 @@ EFFECT: [效果描述]`,
 
         // 门中光景不好，落在弟子头上的两条：银钱不继、庖厨断绝
         const broke = stones < upkeepTotal * 3;
-        const until = shiftGameTime(st.currentTime, SECT_HARDSHIP_HOURS);
-        let buffs = Array.isArray(st.player.buffs) ? st.player.buffs : [];
+        const until = shiftGameTime(cur.currentTime, SECT_HARDSHIP_HOURS);
+        let buffs = Array.isArray(cur.player.buffs) ? cur.player.buffs : [];
         buffs = broke ? withSectDebuff(buffs, "debuff-sect-broke", until) : withoutSectDebuff(buffs, "debuff-sect-broke");
         buffs = hungry ? withSectDebuff(buffs, "debuff-hunger", until) : withoutSectDebuff(buffs, "debuff-hunger");
 
-        // 年久失修：旧的一处或自行修好，或又添一处待修
-        const facilities = { ...(st.sect.facilities ?? {}) };
-        for (const item of roster) {
+        // 年久失修：旧的一处或自行修好，或又添一处待修；停了工的便不再添
+        const facilities = { ...(cur.sect.facilities ?? {}) };
+        for (const item of ledger) {
           const state = facilityStateOf(facilities, item.name);
           if (state.status === "修缮中" && Math.random() < 0.6) {
             facilities[item.name] = { ...state, status: "正常" };
@@ -2195,10 +2261,10 @@ EFFECT: [效果描述]`,
 
         const nextMaterials = [...materials.entries()].map(([name, amount]) => ({ name, amount }));
         const recent = [
-          ...(Array.isArray(st.sect.management?.consumption?.recentConsumption)
-            ? st.sect.management!.consumption.recentConsumption
+          ...(Array.isArray(cur.sect.management?.consumption?.recentConsumption)
+            ? cur.sect.management!.consumption.recentConsumption
             : []),
-          { date: `${st.currentTime.month}/${st.currentTime.day}`, cost: upkeepTotal },
+          { date: `${cur.currentTime.month}/${cur.currentTime.day}`, cost: upkeepTotal },
         ].slice(-7);
 
         const settleLines = [
@@ -2211,20 +2277,20 @@ EFFECT: [效果描述]`,
         if (expiredMods.length > 0) settleLines.push(`「${expiredMods.map((m) => m.name).join("、")}」的势已过。`);
 
         set({
-          player: buffs === st.player.buffs ? st.player : { ...st.player, buffs },
+          player: buffs === cur.player.buffs ? cur.player : { ...cur.player, buffs },
           sect: {
-            ...st.sect,
+            ...cur.sect,
             reputation,
             facilities,
             modifiers: liveMods,
             facilitySettledDay: today,
             management: {
-              ...st.sect.management,
-              treasury: { spiritStones: stones, materials: nextMaterials },
+              ...cur.sect.management,
+              treasury: { ...(cur.sect.management?.treasury ?? {}), spiritStones: stones, materials: nextMaterials },
               consumption: { dailyCost: upkeepTotal, recentConsumption: recent },
             },
           },
-          log: [...settleLines, ...st.log].slice(0, 30),
+          log: [...settleLines, ...cur.log].slice(0, 30),
         });
       },
 
@@ -2819,8 +2885,18 @@ EFFECT: [效果描述]`,
           return;
         }
 
-        // 商店条目只有名称与类型，入库时补足物品系统需要的字段
+        // 货从宝库里出：库里没有这一样，柜上便兑不出来
         const name = item.name || "无名之物";
+        const treasury = s.sect.management?.treasury;
+        const left = treasury && treasuryStockOf(treasury, name) > 0 ? takeFromTreasury(treasury, name, 1) : null;
+        if (!left) {
+          set((st) => ({
+            log: [`宝库里已无「${name}」，这一样兑不出来，须等门中弟子按月上交。`, ...st.log].slice(0, 30),
+          }));
+          return;
+        }
+
+        // 商店条目只有名称与类型，入库时补足物品系统需要的字段
         const typeText = `${item.type || ""}${name}`;
         const invType: InventoryItem["type"] =
           /内丹|药引|药材|灵草|朱砂|符纸/.test(typeText) ? "材料"
@@ -2841,16 +2917,20 @@ EFFECT: [效果描述]`,
                 id: `shop-${Date.now()}`,
                 name,
                 type: invType,
-                grade: "凡品" as const,
+                grade: item.grade || ("凡品" as const),
                 count: 1,
                 icon: name.charAt(0) || "宝",
                 desc: item.desc || `以 ${item.cost} 贡献自宗门兑换所得。`,
               }),
             ];
           return {
-            sect: { ...st.sect, contribution: st.sect.contribution - item.cost },
+            sect: {
+              ...st.sect,
+              contribution: st.sect.contribution - item.cost,
+              management: { ...st.sect.management, treasury: left },
+            },
             inventory: nextInventory,
-            log: [`以 ${item.cost} 贡献兑换得「${name}」×1。`, ...st.log].slice(0, 30),
+            log: [`以 ${item.cost} 贡献自宗门宝库兑换得「${name}」×1。`, ...st.log].slice(0, 30),
           };
         });
       },
@@ -2879,13 +2959,26 @@ EFFECT: [效果描述]`,
         const n = Math.max(1, Math.min(Math.trunc(Number(count) || 1), Math.trunc(Number(item.count) || 0)));
         if (n <= 0) return 0;
         const gain = contributionForItem(item.grade) * n;
-        set((s) => ({
-          inventory: (s.inventory ?? [])
-            .map((i) => (i.name === itemName ? { ...i, count: (Number(i.count) || 0) - n } : i))
-            .filter((i) => (Number(i.count) || 0) > 0),
-          sect: { ...s.sect, contribution: (Number(s.sect.contribution) || 0) + gain },
-          log: [`你向门中上交「${itemName}」×${n}，记贡献 ${gain} 点。`, ...s.log].slice(0, 30),
-        }));
+        set((s) => {
+          // 交上来的东西入库：宝库里按名目码好，贡献商店便从这里支取
+          const treasury = s.sect.management?.treasury ?? { spiritStones: 0, materials: [] };
+          const items = (Array.isArray(treasury.items) ? treasury.items : []).map((i) => ({ ...i }));
+          const at = items.findIndex((i) => i.name === itemName);
+          if (at >= 0) items[at] = { ...items[at], count: items[at].count + n };
+          else items.push({ name: itemName, type: item.type || "杂物", grade: item.grade, count: n });
+
+          return {
+            inventory: (s.inventory ?? [])
+              .map((i) => (i.name === itemName ? { ...i, count: (Number(i.count) || 0) - n } : i))
+              .filter((i) => (Number(i.count) || 0) > 0),
+            sect: {
+              ...s.sect,
+              contribution: (Number(s.sect.contribution) || 0) + gain,
+              management: { ...s.sect.management, treasury: { ...treasury, items } },
+            },
+            log: [`你向门中上交「${itemName}」×${n}，记贡献 ${gain} 点，东西入了宝库。`, ...s.log].slice(0, 30),
+          };
+        });
         return gain;
       },
 
@@ -3012,7 +3105,14 @@ EFFECT: [效果描述]`,
         const player = { ...st.player };
         const spiritStones = { ...st.spiritStones };
         const reputation = { ...st.reputation };
-        const sect = { ...st.sect };
+        // 门派任务的赏要从宝库里支，这一份得是副本，不能改到原对象上
+        const sect = {
+          ...st.sect,
+          management: {
+            ...st.sect.management,
+            treasury: { ...(st.sect.management?.treasury ?? { spiritStones: 0, materials: [] }) },
+          },
+        };
         const relations = st.relations.map((r) => ({ ...r }));
         const outcome = applyQuestLedger({ player, spiritStones, reputation, sect, relations, now: st.currentTime }, target, status);
 
@@ -3441,22 +3541,342 @@ EFFECT: [效果描述]`,
             shop: [],
             heritage: [],
             resources: [],
-            management: {
-              ...st.sect.management,
-              treasury: { spiritStones: 0, materials: [] },
-              consumption: { dailyCost: 0, recentConsumption: [] },
-            },
             // 新立之门只有主殿一处，尚未动土兴建，日结也还没算过
             facilities: {},
             facilityDaily: {},
             facilitySettledDay: 0,
             modifiers: [],
+            // 各堂、产业与活动都照新门户重新编，不承旧账
+            management: {
+              ...st.sect.management,
+              halls: [],
+              industries: [],
+              activities: [],
+              treasury: { spiritStones: 0, materials: [], items: [] },
+              consumption: { dailyCost: 0, recentConsumption: [] },
+            },
+            // 先前那一份家底属于旧门户（或空门），新开之山门另算一份
+            endowed: false,
           },
           player: { ...st.player, sectName: site.name, position: "掌门" },
+          // 开山那一套窗与选点就此收起
+          founding: { picking: false, open: false },
           log: [`你在${site.seat}立起「${site.name}」，自此自成一派。`, ...st.log].slice(0, 30),
         });
+        // 新门户也照品级与人数备一份家底，免得一开门便无钱可用
+        get().ensureSectEndowment();
         get().alignPlayerPosition();
+        // 门中立着哪几类建筑，便编出哪几堂；缺堂主的堂口产出照折
+        get().ensureSectHalls();
+        // 立完便站在自家山门前：山门图注册过的，直接把所在场景切过去，
+        // 免得玩家在舆图上找不着入口、进不去，门中的事全无着落
+        const newSceneId = sectSceneId(site.id);
+        if (getScene(newSceneId)) {
+          set({ currentSectId: site.id });
+          get().enterScene(newSceneId);
+        }
         return { ok: true, message: `「${site.name}」已在${site.seat}立起，你便是开山掌门。` };
+      },
+
+      beginFoundingPick: () => {
+        const st = get();
+        // 选点要在九州舆图上做：人若在城里或别处，先把地图退回到舆图
+        set({
+          founding: { picking: true, spot: st.founding?.spot, open: false },
+          currentPanel: null,
+          ...(st.mapSceneId !== WORLD_SCENE_ID ? { mapSceneId: WORLD_SCENE_ID } : {}),
+        });
+      },
+
+      pickFoundingSpot: (spot) => {
+        const x = Math.round(Number(spot?.x));
+        const y = Math.round(Number(spot?.y));
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        set({ founding: { picking: false, spot: { x, y }, open: true } });
+      },
+
+      cancelFounding: () => set({ founding: { picking: false, open: false } }),
+
+      ensureSectHalls: () => {
+        const st = get();
+        const site = st.sectSites.find((s) => s.mine);
+        if (!site) return;
+        const scene = getScene(sectSceneId(site.id));
+        if (!scene) return;
+
+        const existing = Array.isArray(st.sect.management?.halls) ? st.sect.management.halls : [];
+        const ledger = facilityLedger({
+          scene,
+          facilities: st.sect.facilities,
+          custom: site.custom,
+          built: site.built,
+          halls: existing,
+        });
+        const kinds = [...new Set(ledger.map((e) => e.kindId))];
+        if (kinds.length === 0) return;
+
+        // 堂主从本门认得的人里挑：报得出境界的照境界写，报不出便记一句
+        const peers = (Array.isArray(st.relations) ? st.relations : [])
+          .filter((r) => !!r?.name && !r.traveling && r.affiliation && r.affiliation.includes(st.sect.name))
+          .map((r) => ({ name: r.name, realm: r.realm }));
+        const rolled = rollSectHalls({
+          kinds,
+          roster: HALL_ROSTER,
+          disciples: Number(st.sect.disciples) || 0,
+          elders: Number(st.sect.elders) || 0,
+          level: Number(st.sect.level) || 1,
+          peers,
+        });
+
+        // 已编过的堂口原样留着：任免过的堂主不能被这一趟又抹回去
+        const byId = new Map(existing.map((h) => [h.id, h]));
+        const next = rolled.map((h) => byId.get(h.id) ?? h);
+        if (next.length === existing.length && next.every((h, i) => h === existing[i])) return;
+        set({
+          sect: { ...st.sect, management: { ...st.sect.management, halls: next } },
+        });
+      },
+
+      appointHallMaster: (hallId, masterName) => {
+        const st = get();
+        if (!isElderOrAbove(st.sect.positions)) {
+          return { ok: false, message: "任免堂主须长老以上，你的身份还差着一层。" };
+        }
+        const halls = Array.isArray(st.sect.management?.halls) ? st.sect.management.halls : [];
+        const hall = halls.find((h) => h.id === hallId);
+        if (!hall) return { ok: false, message: "门中没有这一堂。" };
+
+        const name = (masterName || "").trim();
+        // 自己也可以领一堂：门中一时无人，掌门亲自看顾也是常事
+        const self = !!name && name === (st.player?.name || "").trim();
+        const person = name && !self ? (Array.isArray(st.relations) ? st.relations : []).find((r) => r.name === name) : undefined;
+        if (name && !self && !person) return { ok: false, message: "尘缘里没有这个人，叫不来。" };
+
+        const next = halls.map((h) =>
+          h.id === hallId
+            ? {
+                ...h,
+                master: name || "空缺",
+                masterRealm: name ? (self ? "本门掌门" : person?.realm || "修为不明") : "—",
+              }
+            : h,
+        );
+        set({
+          sect: { ...st.sect, management: { ...st.sect.management, halls: next } },
+          log: [
+            name ? `你点「${name}」执掌${hall.name}。` : `你撤了${hall.name}的堂主，堂中暂由执事代管。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return {
+          ok: true,
+          message: name ? `「${name}」自此执掌${hall.name}。` : `${hall.name}暂缺堂主，辖下产出照折。`,
+        };
+      },
+
+      toggleFacilityStatus: (name, kindId) => {
+        const st = get();
+        if (positionLevel(st.sect.positions) < 2) {
+          return { ok: false, message: "此事须执事以上的人做主，你的身份还差着一层。" };
+        }
+        const state = facilityStateOf(st.sect.facilities, name);
+        const status = state.status === "停用" ? "正常" : "停用";
+        set({
+          sect: {
+            ...st.sect,
+            facilities: { ...(st.sect.facilities ?? {}), [name]: { ...state, status } },
+          },
+          log: [
+            status === "停用"
+              ? `你下令停了「${name}」的营生，产出自此归零，维护仍照旧。`
+              : `你下令让「${name}」复工。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        return { ok: true, message: status === "停用" ? `「${name}」已停工。` : `「${name}」已复工。` };
+      },
+
+      startSectActivity: (type) => {
+        const st = get();
+        if (!isElderOrAbove(st.sect.positions)) {
+          return { ok: false, message: "发起门中大事须长老以上。" };
+        }
+        const spec = ACTIVITY_SPECS[type];
+        if (!spec) return { ok: false, message: "门中没有这一桩。" };
+        const today = daySerial(st.currentTime);
+        const list = Array.isArray(st.sect.management?.activities) ? st.sect.management.activities : [];
+        const live = list.find((a) => a.status === "进行中" && (a.endDay ?? 0) >= today);
+        if (live) return { ok: false, message: `「${live.name}」还在办，一场未了不另起一场。` };
+
+        const cost = ACTIVITY_COST[type] ?? 200;
+        const treasury = st.sect.management?.treasury ?? { spiritStones: 0, materials: [] };
+        const stones = Number(treasury.spiritStones) || 0;
+        if (stones < cost) {
+          return { ok: false, message: `办这一场须从宝库支 ${cost} 灵石，眼下只有 ${stones}。` };
+        }
+
+        const act: SectActivity = {
+          id: `act-${type}-${today}-${Math.floor(Math.random() * 1000)}`,
+          name: spec.name,
+          type,
+          status: "进行中",
+          target: spec.target,
+          description: spec.desc,
+          startDay: today,
+          endDay: today + ACTIVITY_DAYS,
+          cost,
+        };
+        set({
+          sect: {
+            ...st.sect,
+            management: {
+              ...st.sect.management,
+              activities: [...list.filter((a) => a.status !== "已结束").slice(-4), act],
+              treasury: { ...treasury, spiritStones: stones - cost },
+            },
+          },
+          log: [`你发下话来，办一场${spec.name}，自宝库支灵石 ${cost}。`, ...st.log].slice(0, 30),
+        });
+        return { ok: true, message: `${spec.name}已张罗起来，三日之内皆可参与。` };
+      },
+
+      joinSectActivity: (id) => {
+        const st = get();
+        const list = Array.isArray(st.sect.management?.activities) ? st.sect.management.activities : [];
+        const act = list.find((a) => a.id === id);
+        if (!act) return { ok: false, message: "门中没有这一场。" };
+        const today = daySerial(st.currentTime);
+        if (!activityOpen(act, today)) {
+          return {
+            ok: false,
+            message: act.lastJoinDay === today ? "今日已参与过这一场，明日再来。" : "这一场已收场了。",
+          };
+        }
+
+        const payout = activityPayout(act.type, {
+          positionLv: positionLevel(st.sect.positions),
+          sectLevel: Number(st.sect.level) || 1,
+        });
+        set({
+          player: {
+            ...st.player,
+            cultivation: (Number(st.player.cultivation) || 0) + payout.cultivation,
+          },
+          // 远征所得是外头掠来的，直接入袋；其余彩头记在宗门账上
+          spiritStones:
+            payout.stones > 0
+              ? { ...st.spiritStones, low: (Number(st.spiritStones.low) || 0) + payout.stones }
+              : st.spiritStones,
+          sect: {
+            ...st.sect,
+            contribution: (Number(st.sect.contribution) || 0) + payout.contribution,
+            reputation: (Number(st.sect.reputation) || 0) + payout.reputation,
+            management: {
+              ...st.sect.management,
+              activities: list.map((a) => (a.id === id ? { ...a, lastJoinDay: today } : a)),
+            },
+          },
+          log: [
+            `你参与「${act.name}」：贡献 +${payout.contribution}${
+              payout.cultivation > 0 ? `，修为 +${payout.cultivation}` : ""
+            }${payout.reputation > 0 ? `，宗门声望 +${payout.reputation}` : ""}${
+              payout.stones > 0 ? `，得灵石 ${payout.stones}` : ""
+            }。`,
+            ...st.log,
+          ].slice(0, 30),
+        });
+        const decision = `我在本门「${act.name}」（${act.type}）上出了一份力，${act.target}。`;
+        return { ok: true, message: `你参与「${act.name}」。`, decision };
+      },
+
+      settleActivities: () => {
+        const st = get();
+        const list = Array.isArray(st.sect.management?.activities) ? st.sect.management.activities : [];
+        if (list.length === 0) return;
+        const today = daySerial(st.currentTime);
+        let changed = false;
+        const next = list.map((a) => {
+          if (a.status === "进行中" && typeof a.endDay === "number" && today > a.endDay) {
+            changed = true;
+            return { ...a, status: "已结束" as const };
+          }
+          return a;
+        });
+        if (!changed) return;
+        set({ sect: { ...st.sect, management: { ...st.sect.management, activities: next } } });
+      },
+
+      settleSectWarehouse: () => {
+        const st = get();
+        const mine = st.sectSites.find((s) => s.mine);
+        const treasury = st.sect.management?.treasury;
+        if (!mine || !treasury) return;
+        const monthKey = gameMonthKey(st.currentTime);
+        if (treasury.settledMonth === monthKey) return;
+
+        const disciples = Number(st.sect.disciples) || 0;
+        const elders = Number(st.sect.elders) || 0;
+        // 掌门自己也是一双手：门中尚无弟子时，货单上的东西好歹有人去采办
+        const hands = disciples + elders * 3 + 1;
+
+        const items: SectTreasuryItem[] = (Array.isArray(treasury.items) ? treasury.items : []).map((i) => ({
+          ...i,
+        }));
+        const materials = (Array.isArray(treasury.materials) ? treasury.materials : []).map((m) => ({ ...m }));
+
+        const addItem = (name: string, type: string, grade: SectTreasuryItem["grade"], count: number) => {
+          if (!name || count <= 0) return;
+          const at = items.findIndex((i) => i.name === name);
+          if (at >= 0) items[at] = { ...items[at], count: items[at].count + count };
+          else items.push({ name, type, grade, count });
+        };
+        const addMaterial = (name: string, amount: number) => {
+          if (!name || amount <= 0) return;
+          const at = materials.findIndex((m) => m.name === name);
+          if (at >= 0) materials[at] = { ...materials[at], amount: materials[at].amount + amount };
+          else materials.push({ name, amount });
+        };
+
+        const tribute = monthlyDiscipleTribute({
+          // 掌门那一双手也算在里头，门中尚无弟子时也有一点进项
+          disciples: disciples + 1,
+          elders,
+          level: Number(st.sect.level) || 1,
+        });
+        tribute.items.forEach((t) => addItem(t.name, t.type, t.grade, t.count));
+        tribute.materials.forEach((m) => addMaterial(m.name, m.amount));
+
+        // 贡献商店的货底也在宝库里：照货单缺哪一样，门中弟子便采办几件备着
+        const shelf = Math.max(1, Math.min(4, Math.ceil(hands / 8)));
+        const shop = (Array.isArray(st.sect.shop) ? st.sect.shop : []).map((s) => ({ ...s }));
+        if (hands > 0) {
+          shop.forEach((entry) => {
+            if (!entry?.name) return;
+            const have =
+              (items.find((i) => i.name === entry.name)?.count ?? 0) +
+              (materials.find((m) => m.name === entry.name)?.amount ?? 0);
+            if (have > 0) return;
+            addItem(entry.name, entry.type || "杂物", entry.grade || "凡品", shelf);
+          });
+        }
+
+        const lines = [
+          hands > 0
+            ? `门中弟子按月上交，宝库添了${tribute.items.length > 0 ? tribute.items.map((i) => `${i.name}×${i.count}`).join("、") : "些零碎杂物"}。`
+            : "门中无人，这个月宝库里没添什么。",
+        ];
+
+        set({
+          sect: {
+            ...st.sect,
+            shop,
+            management: {
+              ...st.sect.management,
+              treasury: { ...treasury, items, materials, settledMonth: monthKey },
+            },
+          },
+          log: [...lines, ...st.log].slice(0, 30),
+        });
       },
 
       resolveSectWar: ({ targetId, targetKind = "sect", choice }) => {
@@ -5767,6 +6187,10 @@ EFFECT: [效果描述]`,
         get().settleEstates();
         // 坊市里的铺面按月结一次账
         get().settlePlayerShops();
+        // 门中弟子按月上交，宝库据此备货
+        get().settleSectWarehouse();
+        // 过了止日的宗门活动自行收场
+        get().settleActivities();
         // 名下城村按月来贡
         get().settleOccupations();
         // 灵田按季度结一次收获
@@ -6540,10 +6964,20 @@ EFFECT: [效果描述]`,
         lastSectWarDay: s.lastSectWarDay,
         adventures: s.adventures,
       }),
-      onRehydrateStorage: () => (state) => {
-        if (!state) return state;
-        console.warn("[useGameStore] Validating and fixing rehydrated state");
-        return validateAndFixState(state);
+      /**
+       * 读回本机进度时真正把校验结果用上。
+       * 旧写法把 validateAndFixState 的返回值塞在 onRehydrateStorage 里，而 zustand
+       * 只取该回调的副作用、不认返回值，于是校验一直空转；旧版本残留的畸形数据
+       * 便原样进了渲染，能把界面卡成空白。这里改走 merge，校验失败时回退当前状态。
+       */
+      merge: (persisted, current) => {
+        try {
+          const merged = { ...current, ...((persisted as Partial<GameStore>) || {}) };
+          return validateAndFixState(merged) as GameStore;
+        } catch (e) {
+          console.error("[useGameStore] 本机进度读回失败，已回退到初始状态：", e);
+          return current;
+        }
       },
     },
   ),

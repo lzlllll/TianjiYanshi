@@ -14,9 +14,12 @@ import { Footprints, LogIn, X } from "lucide-react";
  */
 export function SectSiteCard({ site, onClose }: { site: SectSite; onClose: () => void }) {
   const mapType = findSectMapType(site.mapType);
-  const template = site.templateId
-    ? getSectMapTemplates().find((t) => t.id === site.templateId)
-    : undefined;
+  // 先认记下的那张；旧档没记的，照地势再认一次，免得明明有图却说「尚未配」
+  const templates = getSectMapTemplates();
+  const template =
+    (site.templateId ? templates.find((t) => t.id === site.templateId) : undefined) ??
+    templates.find((t) => t.mapType && t.mapType === site.mapType) ??
+    templates[0];
   const terms = sectSiteTerms(site);
 
   const enterScene = useGameStore((s) => s.enterScene);
@@ -157,7 +160,11 @@ export function SectSiteCard({ site, onClose }: { site: SectSite; onClose: () =>
       </div>
 
       <div className="mt-2 font-serif text-[11px] text-paper-400/50">
-        {template ? `山门依着「${template.name}」这一张地势图` : "尚未配宗门图，山门只立在舆图上"}
+        {hasMap
+          ? template
+            ? `山门依着「${template.name}」这一张地势图`
+            : "山门图已就绪，可入内行走"
+          : "尚未配宗门图，山门只立在舆图上"}
       </div>
     </div>
   );

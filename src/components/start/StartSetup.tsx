@@ -16,7 +16,7 @@ import {
   X,
   ArrowLeft,
 } from "lucide-react";
-import { AI_BACKEND_READY, hasCustomApi } from "@/data/backend";
+import { AI_BACKEND_READY, aiReady, hasCustomApi } from "@/data/backend";
 import { FREE_MODEL } from "@/data/aiQuota";
 import { QuotaShopPanel } from "@/components/ai/QuotaShopPanel";
 import { CustomApiModal } from "@/components/ai/CustomApiModal";
@@ -90,15 +90,22 @@ const QUICK_BACKGROUND = [
 
 const pickOne = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
-/** 随手掷一个人物：姓名、称号、宗门、境界、简介都从池子里现取 */
+/**
+ * 随手掷一个人物：姓名、称号、宗门、境界、简介都从池子里现取。
+ * 境界只取引气、炼气两档，身份只取门中低阶——从前境界与职位各自乱掷，
+ * 会掷出「大乘初期」配「外门弟子」、散修配掌门这类对不上的开局，
+ * 成长曲线与身份自洽一并被冲坏。
+ */
 function rollQuickPlayer(): PlayerSetup {
+  const sectName = pickOne(QUICK_SECTS);
+  const isLoose = sectName === "散修";
   return {
     name: pickOne(QUICK_SURNAMES) + pickOne(QUICK_GIVEN),
     title: pickOne(QUICK_TITLES),
     gender: Math.random() < 0.5 ? "male" : "female",
-    sectName: pickOne(QUICK_SECTS),
-    position: pickOne(SECT_POSITIONS),
-    realm: pickOne(REALMS),
+    sectName,
+    position: isLoose ? "散修" : pickOne(["外门弟子", "内门弟子"]),
+    realm: pickOne(["引气", "炼气"]),
     description: pickOne(QUICK_DESC),
     personality: pickOne(QUICK_PERSONALITY),
     background: pickOne(QUICK_BACKGROUND),
@@ -351,7 +358,14 @@ function OpeningLoading() {
   );
 }
 
-export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) {
+export function StartSetup({
+  onReturnToMenu,
+  onGameReady,
+}: {
+  onReturnToMenu?: () => void;
+  /** 开篇已经落笔、可以进主界面了：由开局页直接通知，免得外层靠回合数猜时机 */
+  onGameReady?: () => void;
+}) {
   const [setup, setSetup] = useState<PlayerSetup>({
     name: "",
     title: "",
@@ -365,8 +379,8 @@ export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) 
   });
 
   const settings = useAIStore((s) => s.settings);
-  // 上游与密钥都由后端持有，本机只挑模型名；有后端即算已配置
-  const configured = AI_BACKEND_READY;
+  // 默认后端已停用，自备接口也算已配置：两条路有一条通即放行
+  const configured = aiReady(settings);
 
   const [stepId, setStepId] = useState<StepId>(() => (configured ? "name" : "api"));
   const [reached, setReached] = useState(0);
@@ -406,8 +420,8 @@ export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) 
   const isLast = activeIndex === steps.length - 1;
 
   const stepValid = (id: StepId): boolean => {
-    // 「通灵」这一步不再要人填密钥，只要后端接通即可放行
-    if (id === "api") return AI_BACKEND_READY;
+    // 「通灵」这一步：内置后端或自备接口，通一条即放行
+    if (id === "api") return aiReady(apiDraft);
     if (id === "name") return setup.name.trim() !== "";
     if (id === "self") return setup.description.trim() !== "";
     return true;
@@ -469,6 +483,11 @@ export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) 
     }));
 
   const saveApiSettings = () => {
+    // 默认后端已停用：没填自备接口便放行，开局只会撞在「接口未接通」上
+    if (!aiReady(apiDraft)) {
+      setError("推演接口尚未接通：内置免费模型已停用，请点「自定义接口」填齐 Base URL 与 API Key。");
+      return;
+    }
     updateSettings(apiDraft);
     setError("");
     // 由后头几步折回来改配置的，存过送回原处；余下情形顺着往下走一步，
@@ -490,6 +509,11 @@ export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) 
    * 角色便一直停在默认的引气初期。
    */
   const beginGame = async (firstInput: string, config?: PlayerSetup, seedRealm?: string | null) => {
+    // 接口没通就不开这一局：免得先清空旧档、再卡在推演上
+    if (!aiReady(useAIStore.getState().settings)) {
+      setError("推演接口尚未接通：请先到「通灵」一步填好自备接口，再落印开局。");
+      return;
+    }
     setIsGenerating(true);
     setError("");
 
@@ -537,6 +561,11 @@ export function StartSetup({ onReturnToMenu }: { onReturnToMenu?: () => void }) 
       }
       // 开局另赠一处奇遇：落在这一带的空位上，往后可自行前往
       void useAIStore.getState().spawnAdventure("开局奇遇");
+      // 开篇落定便收起等待遮罩，并由本页直接叫外层切进主界面：
+      // 从前外层要等「先见到零回合、再见到新回合」，模型快时这一步会被并成一次渲染而错过，
+      // 遮罩便一直留在屏上
+      setIsGenerating(false);
+      onGameReady?.();
     } catch (e) {
       setError(`开局失败：${(e as Error).message}`);
       setIsGenerating(false);
@@ -990,11 +1019,19 @@ ${OPENING_BRIEF}`,
     return (
       <div className="space-y-4">
         <p className="font-serif text-sm ps-body leading-relaxed">
-          本作的推演由大语言模型担纲。默认走游戏后端，接口与密钥都由后端操持，本机不必填写；
-          免费预设模型的名目固定，不能另改。若你有自己的接口，可在「自定义接口」里填齐后自行指定模型。
+          本作的推演由大语言模型担纲。内置的免费后端暂时停用，须自备接口：
+          请在「自定义接口」里填齐 Base URL 与 API Key，两项填好后本机便直连你自己的服务商。
         </p>
 
-        <QuotaShopPanel freeActive={freeActive} onSelectFree={applyFreeModel} />
+        {!AI_BACKEND_READY && (
+          <div className="rounded border border-[#a83232]/40 bg-[rgba(168,50,50,0.08)] px-3 py-2 font-serif text-xs ps-accent leading-relaxed">
+            内置免费模型已停用。到下面点「自定义接口」，填齐地址与密钥，测试连通之后再保存。
+          </div>
+        )}
+
+        {AI_BACKEND_READY && (
+          <QuotaShopPanel freeActive={freeActive} onSelectFree={applyFreeModel} />
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="block">
@@ -1037,7 +1074,11 @@ ${OPENING_BRIEF}`,
             <Plug size={12} /> 自定义接口
           </button>
           <span className="font-serif text-xs ps-muted">
-            {customActive ? "已启用：推演走你自己的接口" : "默认走后端，无需填写"}
+            {customActive
+              ? "已启用：推演走你自己的接口"
+              : AI_BACKEND_READY
+                ? "默认走后端，无需填写"
+                : "尚未接通：请填自备接口"}
           </span>
         </div>
 

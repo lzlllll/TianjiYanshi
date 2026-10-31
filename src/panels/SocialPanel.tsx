@@ -295,7 +295,7 @@ function RelationCard({ relation }: { relation: Relation }) {
             <div className="flex items-center justify-between">
               <span className="font-serif text-xs text-paper-400/60">信任</span>
               <span className="font-serif text-xs text-paper-300">
-                第 {migrateRelation(relation).trust} 档 · {trustName(migrateRelation(relation).trust)}
+                {migrateRelation(relation).trust} · {trustName(migrateRelation(relation).trust)}
               </span>
             </div>
           </div>

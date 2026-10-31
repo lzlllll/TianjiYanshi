@@ -9,6 +9,7 @@ import { useAIStore } from "@/store/useAIStore";
 import { useGameStore } from "@/store/useGameStore";
 import {
   // getBackgroundImage,
+  WORLD_SCENE_ID,
   addPresetPoint,
   getCityMarkers,
   getMarker,
@@ -46,7 +47,8 @@ import { PresetPointModal } from "./PresetPointModal";
 import { SectSiteCard } from "./SectSiteCard";
 import { VillagePanel } from "./VillagePanel";
 import { presetKey } from "@/data/map/presets";
-import { adventureEnterable, adventureWhere, dangerLabel, isPresetFree } from "@/data/adventures";
+import { adventureEnterable, adventureWhere, dangerLabel, freeAdventurePoints, isPresetFree } from "@/data/adventures";
+import { describeFoundingSpot } from "@/data/sectSites";
 import { MANOR_PLOT_PRICE } from "@/data/manors";
 import type { ManorPlot, MapMarker, MapMarkerKind, PresetPoint } from "@/data/types";
 
@@ -209,6 +211,17 @@ export function WorldMap({
   // 坐标系以场景声明的尺寸为准，图片按它铺满，新增地图只改 scenes.json
   const base = { w: scene.width, h: scene.height };
   const place = getMarker(currentPlaceId);
+
+  // 开山立派：散修在主舆图上点一处空地作山门，比窗里那幅小图好认得多
+  const founding = useGameStore((s) => s.founding);
+  const pickFoundingSpot = useGameStore((s) => s.pickFoundingSpot);
+  const cancelFounding = useGameStore((s) => s.cancelFounding);
+  /** 眼下是不是在舆图上给开山选地：只认九州舆图，别的图上没有这些点位 */
+  const foundingPicking = !!founding?.picking && scene.id === WORLD_SCENE_ID;
+  const foundingSpots = useMemo(
+    () => (foundingPicking ? freeAdventurePoints({ sectSites, adventures }, WORLD_SCENE_ID) : []),
+    [foundingPicking, sectSites, adventures],
+  );
 
   // 立了门户的各家：各取一色，本门另用一色
   const sectFaction = useMemo(() => {
@@ -563,6 +576,12 @@ export function WorldMap({
     const index =
       Math.floor((point.ny / base.h) * TILE_GRID_SIZE) * TILE_GRID_SIZE +
       Math.floor((point.nx / base.w) * TILE_GRID_SIZE);
+    openDistrictAt(index);
+  };
+
+  /** 照格子编号进街区：点地块与点地名都走这一处，免得两套逻辑各认各的 */
+  const openDistrictAt = (index: number) => {
+    if (!place || !tiles) return;
     // 名下的宅邸就落在这一格：点它直接进门，不必再绕「地产」页
     const ownedPlot = ownedManorCells.get(index);
     if (ownedPlot) {
@@ -920,8 +939,18 @@ export function WorldMap({
         {showDistrictLabels && districtLabels.map((label) => (
           <span
             key={`district-${label.index}`}
+            role="button"
+            tabIndex={0}
+            title={`前往${label.name ?? label.nature}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => openDistrictAt(label.index)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              openDistrictAt(label.index);
+            }}
             className={cn(
-              "absolute whitespace-nowrap rounded-sm border bg-ink-900/80 px-1.5 py-0.5 font-kai text-[14px] font-bold leading-none",
+              "pointer-events-auto cursor-pointer absolute whitespace-nowrap rounded-sm border bg-ink-900/80 px-1.5 py-0.5 font-kai text-[14px] font-bold leading-none hover:bg-ink-900 hover:border-gold-400 focus:outline-none focus:border-gold-300",
               // 事要办到这一处去的挂星标：边框与字都换成星色，一眼便认得出
               label.starred
                 ? "border-cinnabar-400/80 bg-ink-900/95 text-cinnabar-300"
@@ -1284,6 +1313,40 @@ export function WorldMap({
           </div>
         )}
 
+        {/* 开山选地：空地点亮成虚线「山」印，点一处便定作山门所在 */}
+        {foundingPicking &&
+          foundingSpots.map((spot) => {
+            const point = projectToScreen(spot.x, spot.y);
+            if (!point) return null;
+            const info = describeFoundingSpot(spot);
+            const chosen = founding?.spot?.x === spot.x && founding?.spot?.y === spot.y;
+            return (
+              <button
+                key={`founding-${spot.x}-${spot.y}`}
+                type="button"
+                title={`${info.seat} · 属${info.culture}一带 —— 点此处立山门`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => pickFoundingSpot({ x: spot.x, y: spot.y })}
+                className="pointer-events-auto absolute flex h-[28px] w-[28px] items-center justify-center"
+                style={{ left: point.x - 14, top: point.y - 14 }}
+              >
+                <span
+                  className={cn(
+                    "flex h-[22px] w-[22px] animate-mapPulse items-center justify-center rounded-sm border-2 font-brush text-[12px] leading-none motion-reduce:animate-none",
+                    chosen
+                      ? "border-gold-300 bg-gold-500 text-ink-darkest ring-2 ring-gold-300"
+                      : "border-dashed border-cinnabar-400 bg-ink-900/85 text-cinnabar-200",
+                  )}
+                >
+                  山
+                </span>
+                <span className="absolute left-1/2 top-full mt-0.5 -translate-x-1/2 whitespace-nowrap rounded border border-cinnabar-500/50 bg-ink-900/90 px-1 py-0.5 font-serif text-[10px] leading-none text-cinnabar-200">
+                  {info.seat}
+                </span>
+              </button>
+            );
+          })}
+
         {canProbe && probePoint && (
           <span
             className="absolute rounded-full border-2 border-cinnabar-400 bg-cinnabar-500/40"
@@ -1449,6 +1512,35 @@ export function WorldMap({
               </p>
             </>
           )}
+        </div>
+      )}
+
+      {/* 开山选地：顶上一条说明，免得人不知眼下该做什么 */}
+      {foundingPicking && (
+        <div
+          className="absolute left-1/2 top-3 z-20 w-[22rem] -translate-x-1/2 rounded-lg border border-gold-500/45 bg-ink-900/92 p-3 backdrop-blur-sm"
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 font-brush text-sm text-gold-300">
+                <Flag size={13} /> 开宗立派 · 择一处山门
+              </div>
+              <p className="mt-1 font-serif text-[11px] leading-relaxed text-paper-300/85">
+                图上虚线「山」印是没主的空地，点一处便是山门所在；滚轮缩放、按住拖动可平移。
+                {foundingSpots.length > 0 ? `眼下还有 ${foundingSpots.length} 处可择。` : "舆图上已无空位。"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={cancelFounding}
+              className="shrink-0 text-paper-400/60 transition hover:text-paper-100"
+              aria-label="取消选地"
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
       )}
 

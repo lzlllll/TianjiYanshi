@@ -18,7 +18,7 @@ import {
   Check,
   X,
 } from "lucide-react";
-import { AI_BACKEND_READY } from "@/data/backend";
+import { aiReady } from "@/data/backend";
 import { REALM_NAMES } from "@/data/mockData";
 import { effectiveHpMax } from "@/lib/buffUtils";
 import type { BattleEntity, BattleFoeBrief } from "@/data/types";
@@ -269,7 +269,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
       : Math.max(0, Math.min(viewIndex, turns.length - 1));
   const shownTurn = shownIndex >= 0 ? turns[shownIndex] : undefined;
   const reviewing = turns.length > 0 && shownIndex !== turns.length - 1;
-  const hasApiKey = AI_BACKEND_READY;
+  const hasApiKey = useAIStore((s) => aiReady(s.settings));
   const streamingNarrative = conversation.streamingNarrative ?? "";
   // Pro 阶段流式输出时，实时显示未完成的叙事（尚未解析 OPS 块）
   const streaming = stage === "pro" && !!streamingNarrative;
@@ -334,7 +334,7 @@ export function StoryPanel({ onOpenSettings, onClose }: StoryPanelProps) {
         <div className="mb-4 rounded-lg border border-cinnabar-500/40 bg-cinnabar-500/10 px-4 py-3 flex items-center gap-3">
           <SettingsIcon size={18} className="text-cinnabar-400 shrink-0" />
           <div className="flex-1 font-serif text-sm text-cinnabar-300">
-            推演接口尚未接通。请确认后端服务已启动，且已在后端配好模型密钥。
+            推演接口尚未接通。内置免费后端已停用，请到设置里填齐自备接口的地址与密钥。
           </div>
           <SealButton variant="ghost" onClick={onOpenSettings} className="shrink-0">
             前往设置
